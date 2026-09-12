@@ -30,6 +30,13 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 ## Hecho
 
+### 12-sep-2026 — que nada venza en el viaje
+- **Conectores de 50 días** (`NYX5_REMOTE_DAYS`, eran 30) y **reconectar conserva los contactos**:
+  la pantalla viene marcada en «sólo tú» y reconectar reemplazaba la lista; a Basti le habría
+  cortado las respuestas del agente de Sigo al vencer su conector el 11-oct.
+- Agente de Sigo vigente hasta el 31-oct; buzón de ideas (`code.nicholas`) hasta el 30-nov.
+- Suite: 224 -> 225.
+
 ### 11-sep-2026 (noche) — pagar directo, y la invitación de la Pauli
 - **`pay {to, amount, concept}`**: tokens de una persona a otra sin cotización ni contrato. Lo firma
   el que paga; el que recibe no hace nada y los dos reciben el recibo. Sólo dentro de la casa, sólo a

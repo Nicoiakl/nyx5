@@ -40,6 +40,9 @@ NYX5_EMAIL_SENDERS = "nicholas@nyx5.com"
 # Conector MCP remoto en https://nyx5.com/mcp (OAuth + subagentes claude.<dueño>@nyx5.com). Sólo en
 # esta casa. Necesita además el secret NYX5_VAULT_KEY (32 bytes en base64): sin él, /mcp no existe.
 NYX5_MCP_REMOTE = "on"
+# Días que dura un Claude conectado antes de pedir reconectar. Eran 30 (uno de los tres límites que
+# aprobó Nicholas el 10-sep); el 12-sep pidió que su Claude cubriera el viaje entero, hasta el 31-oct.
+NYX5_REMOTE_DAYS = "50"
 
 # Casa oficial en el D1 "nyx5" (limpio). El D1 viejo "chsq" (ca773156…) queda abandonado a propósito.
 [[d1_databases]]

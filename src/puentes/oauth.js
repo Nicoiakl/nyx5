@@ -256,6 +256,11 @@ export async function aprobar(est, rx) {
     return { status: 400, body: { reason: `valid_until must be in the future and at most ${est.remoto.dias} days away` } };
   }
   let allowlist = listaDeEscritura(b.allowlist, who.address, address);
+  // Reconectar no borra contactos (12-sep-2026). La pantalla viene marcada en "sólo tú", y quien
+  // reconectaba su Claude perdía a quienes podían escribirle: a Basti le habría cortado las respuestas
+  // del agente de Sigo. Si ya había una lista viva, se suma a la nueva; "cualquiera" sigue abierto.
+  const previo = await est.store.getAgent(sub);
+  if (allowlist && previo?.inbox?.policy === 'allowlist' && !previo.revoked) allowlist = [...new Set([...allowlist, ...(previo.inbox.allowlist || [])])];
   // Invitación: se toma en UN paso (dos aprobaciones simultáneas no la usan las dos) y sus contactos
   // entran a la lista. Quién invitó lo dice la casa, no el navegador.
   let inv = v.pedido.invitacion ? await est.store.kvTake('invitacion', v.pedido.invitacion.code) : null;

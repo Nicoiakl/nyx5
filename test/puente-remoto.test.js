@@ -406,3 +406,18 @@ test('la casa conecta dos Claude en los dos sentidos, se escriben de verdad, y n
   const w = await herramienta(c2.access_token, 'nyx5_wait', { from: c1.sub, seconds: 10 });
   assert.equal(w.datos.content.body, 'hola segundo');
 });
+
+// Defecto real (12-sep-2026): la pantalla de conectar viene marcada en "sólo tú", así que reconectar
+// un Claude reemplazaba su lista por la del dueño y borraba a sus contactos. A Basti, al vencer su
+// conector, le habría cortado las respuestas del agente de Sigo.
+test('reconectar un Claude conserva sus contactos', async () => {
+  const tercero = Agent.create(`tercero@${H}`, URL_CASA, { hosts });
+  await tercero.register({ adminToken: 't' });
+  const antes = await conectar(tercero, { allowlist: [`amiga@${H}`] });
+  assert.ok((await casa.store.getAgent('claude.tercero')).inbox.allowlist.includes(`amiga@${H}`));
+  const despues = await conectar(tercero); // "sólo tú", como viene marcada la pantalla
+  assert.equal(despues.sub, antes.sub, 'es la misma dirección');
+  const lista = (await casa.store.getAgent('claude.tercero')).inbox.allowlist;
+  assert.ok(lista.includes(`amiga@${H}`), `reconectar borró el contacto: ${JSON.stringify(lista)}`);
+  assert.ok(lista.includes(tercero.address), 'y el dueño sigue');
+});

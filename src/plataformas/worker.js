@@ -70,7 +70,7 @@ function estafetaDesde(env) {
     tareas: cfg('SEED') === 'on' ? NYX5_TAREAS : {},
     // Conector MCP remoto (OAuth + subagentes delegados). Se enciende por casa y exige la llave de
     // la bóveda (secret NYX5_VAULT_KEY): sin ella no hay dónde guardar una llave, y /mcp no existe.
-    remoto: { enabled: cfg('MCP_REMOTE') === 'on', vaultKey: env.NYX5_VAULT_KEY },
+    remoto: { enabled: cfg('MCP_REMOTE') === 'on', vaultKey: env.NYX5_VAULT_KEY, dias: Number(cfg('REMOTE_DAYS')) || 30 },
     // Asistentes que contestan solos (src/correo/asistente.js). Sin clave de la API, no existen.
     asistente: { apiKey: env.ANTHROPIC_API_KEY },
     log: (...a) => console.log(...a),
