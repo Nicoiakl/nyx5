@@ -46,7 +46,7 @@ src/puentes/x402.js      adaptador x402 v2: PAYMENT-REQUIRED / PAYMENT-SIGNATURE
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil -> `npm test` (238)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad -> `npm test` (248)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
 ```
@@ -54,7 +54,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 238 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 248 pruebas, todas deben pasar antes de cualquier commit
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
 npm run demo             # correo: tarea cifrada, respuesta, acuse
@@ -403,6 +403,26 @@ tras responder). `/admin/assistants` para alta, conocimiento, pausa y estado. La
 conocimiento y su armador viven FUERA de este repo (`../asistente-sigo/`): son contenido privado de
 Sigo, sin datos clínicos de Nicholas (decisión suya: "lo técnico y que eres paciente"). Sin el
 secret `ANTHROPIC_API_KEY` el asistente queda instalado y no llama a nada.
+
+**La noche del 13-sep-2026 (Nicholas de viaje desde el 14):** grupos `g.<nombre>@casa` con
+consentimiento en dos capas, proyecto/rol firmados en el sobre, acuse de lectura y presencia
+(opt-in), ficha pública, límites de tasa DURABLES, visibilidad `secret`, y escrow que vence.
+Cada pieza pasó pruebas y una revisión adversarial con scripts antes de desplegarse. Tres cosas
+que hay que saber para no romperlas:
+- **El límite de tasa cuenta en el almacén** (`RateLimiterDurable`, ns `tasa*` de `nyx5_kv`): una
+  fila por clave y minuto. Cada agente de la casa cuenta por su DIRECCIÓN, no por dominio; los
+  ajenos por dominio; registro y `/resolve` por IP. Si D1 falla, deja pasar y lo anota. `allow()`
+  se espera con `await` en todos los llamados; el 429 lleva `Retry-After`.
+- **Un secreto se ve como inexistente**: cualquier ruta nueva que confirme que una dirección
+  existe tiene que pasar por `_visibleA(rec, quien)` y contestar lo MISMO que a un nombre que no
+  existe (`test/visibilidad.test.js` compara cuerpo y cabeceras byte a byte). Entre casas, la que
+  pregunta firma `x-nyx5-for` con su llave de dominio, sólo para agentes de su dominio.
+- **La casa se opera a sí misma por `inbound`** (`expire` de un escrow, como `verifica@`): un sobre
+  firmado de `libro@` a `libro@`. Nada toca el Libro por dentro (invariante 2).
+- **Texto invisible en la fuente**: `limpio` quita ancho cero y bidi. Se escribe con escapes
+  (barra, u, cuatro hexadecimales), nunca el carácter literal: un carácter invisible en un archivo
+  se corrompe en silencio y las herramientas de edición lo pierden al reescribir (pasó esta
+  noche, dos veces). Antes de commitear, `grep -P` por los rangos U+200B-200F, 202A-202E, 2060-2064.
 
 **Trampa: los contadores de puertos (11-sep-2026).** Cuatro suites levantan casas con
 `let puerto = N` + `puerto++`. El guard sólo veía constantes, y una suite nueva en 4231 chocaba con

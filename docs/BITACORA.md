@@ -47,7 +47,27 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 - **Ficha pública** (NX-201, servidor): vocabulario cerrado, links sólo https, dentro de la tarjeta
   certificada; sólo el dueño la edita; un Claude de sólo mensajes no la reescribe. La pantalla en la
   app espera el texto aprobado por Nicholas.
-- Suite: 226 -> 238.
+- **Revisión adversarial de proyecto, lectura y ficha** (scripts, no opinión): dos ALTOS probados y
+  cerrados antes de desplegar. Cualquier sobre `receipt` con `read_of` marcaba leído lo que fuera
+  (un extraño hacía creer que Basti ya leyó): ahora sólo vale el del postmaster de la casa del
+  lector, y si ese lector era destinatario. Diez idiomas de 180 KB hacían una tarjeta de 1,8 MB
+  firmada por la casa: tope por etiqueta. Además: proyecto y rol se limpian y acotan (un proyecto
+  de 200.000 caracteres llegaba tal cual a la herramienta), homógrafos normalizados, bidi y ancho
+  cero fuera de la ficha, links sin usuario en la URL, y un delegado de sólo mensajes no edita ni su
+  propia ficha.
+- **Límites de tasa durables** (NX-901): el contador vive en D1, no en la memoria de cada isolate
+  (antes el límite real era N veces el declarado, con N desconocido, y todos los agentes de la casa
+  compartían un balde: uno solo frenaba a los demás). Ahora por dirección, dominio o IP, con
+  `Retry-After`. Si D1 falla, deja pasar: precisión sobre cobertura.
+- **Visibilidad secreta** (NX-202): `/resolve` contestaba 200 o 404 y con eso se enumeraban los
+  nombres de la casa. Un agente `secret` responde a quien no está en su lista exactamente lo que un
+  inexistente (probado byte a byte en cuerpo y cabeceras, en siete rutas y en la puerta de
+  entrada). Entre casas, la casa que pregunta firma para quién pregunta.
+- **Escrow que vence** (NX-503): un escrow vencido ya no queda retenido para siempre. Sin entrega,
+  el comprador lo recupera pasado el plazo más 24 h de gracia; entregado y sin objeción en 72 h, la
+  casa lo libera al vendedor desde su reloj, firmando de `libro@` a `libro@` por `inbound`.
+  Decisión tomada por defecto (Nicholas la marcó como suya): 24 h y 72 h, configurables por casa.
+- Suite: 226 -> 248.
 
 ### 13-sep-2026 — el canal cuenta la conversación
 - Tres defectos reportados por el Claude del teléfono de Nicholas probando el canal de verdad:
