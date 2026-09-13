@@ -142,6 +142,12 @@ export class FileStore {
     fs.unlinkSync(p);
     return (r.expires != null && r.expires <= nowMs) ? null : r.doc;
   }
+  // Contador atómico con vencimiento (límites de tasa durables). Un contador vencido arranca en 1.
+  kvIncrement(ns, key, expires = null, nowMs = Date.now()) {
+    const n = (Number(this.kvGet(ns, key, nowMs)) || 0) + 1;
+    this.kvPut(ns, key, n, expires);
+    return n;
+  }
   kvDelete(ns, key) { const p = this._kvPath(ns, key); if (fs.existsSync(p)) fs.unlinkSync(p); }
   kvPurge(nowMs = Date.now()) {
     const raiz = path.join(this.dir, 'kv');

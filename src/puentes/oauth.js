@@ -100,7 +100,7 @@ export function recursoValido(est, r) {
 
 // ---------- registro dinámico de clientes (RFC 7591) ----------
 export async function registrar(est, body, ip) {
-  if (!est.remotoRate.allow(`dcr:${ip || 'x'}`)) return err(429, 'invalid_client_metadata', 'too many client registrations from this address; try again in a minute');
+  if (!await est.remotoRate.allow(`dcr:${ip || 'x'}`)) return err(429, 'invalid_client_metadata', 'too many client registrations from this address; try again in a minute');
   const b = body && typeof body === 'object' ? body : {};
   const uris = b.redirect_uris;
   if (!Array.isArray(uris) || !uris.length || uris.length > 5 || !uris.every((u) => typeof u === 'string' && u.length <= 512 && redirectValida(u))) {

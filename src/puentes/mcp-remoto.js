@@ -32,7 +32,7 @@ export async function atenderMcp(est, rx) {
   const pv = rx.headers['mcp-protocol-version'];
   if (pv && !VERSIONES.includes(pv)) return { status: 400, body: { jsonrpc: '2.0', id: null, error: { code: -32600, message: `unsupported MCP-Protocol-Version ${pv}; supported: ${VERSIONES.join(', ')}` } } };
   const sub = acceso.token.sub;
-  if (!est.remotoRate.allow(`mcp:${sub}`)) return { status: 429, body: { jsonrpc: '2.0', id: null, error: { code: -32000, message: 'too many requests; slow down' } } };
+  if (!await est.remotoRate.allow(`mcp:${sub}`)) return { status: 429, headers: est._retryAfter(), body: { jsonrpc: '2.0', id: null, error: { code: -32000, message: 'too many requests; slow down' } } };
 
   const msg = rx.body;
   if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return { status: 400, body: { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'send exactly one JSON-RPC message per POST' } } };

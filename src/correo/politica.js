@@ -133,6 +133,31 @@ export class RateLimiter {
     if (arr.length >= this.perMinute) { this.hits.set(key, arr); return false; }
     arr.push(now); this.hits.set(key, arr); return true;
   }
+  retryAfter() { return 60; }
+}
+
+// Límite de tasa DURABLE (13-sep-2026, NX-901): el contador vive en el almacén, no en la memoria del
+// proceso. En el edge cada isolate contaba por su lado, así que el límite real era N veces el
+// declarado y nadie sabía cuánto era N. Ventana fija de un minuto por clave: una fila por clave y
+// minuto, que vence sola dos minutos después. La misma interfaz que el de memoria (`allow` se
+// espera con await en los dos: en el de memoria el await no cuesta nada).
+// Si el almacén falla, DEJA PASAR y lo anota: un límite de tasa caído no puede tumbar el correo de
+// todos. Precisión sobre cobertura: retener trabajo bueno es peor que dejar pasar un minuto.
+export class RateLimiterDurable {
+  constructor({ store, perMinute = 120, ns = 'tasa', log = () => {} } = {}) {
+    if (!store?.kvIncrement) throw new Error('RateLimiterDurable needs a store with kvIncrement');
+    this.store = store; this.perMinute = perMinute; this.ns = ns; this.log = log;
+  }
+  static ventana(nowMs = Date.now()) { return Math.floor(nowMs / 60_000); }
+  async allow(key, nowMs = Date.now()) {
+    const v = RateLimiterDurable.ventana(nowMs);
+    try {
+      const n = await this.store.kvIncrement(this.ns, `${key}:${v}`, (v + 2) * 60_000, nowMs);
+      return n <= this.perMinute;
+    } catch (e) { this.log(`tasa: el almacén no contó (${e.message}); se deja pasar`); return true; }
+  }
+  // Segundos hasta que abra la ventana siguiente: es lo que va en Retry-After.
+  retryAfter(nowMs = Date.now()) { return Math.max(1, 60 - Math.floor((nowMs % 60_000) / 1000)); }
 }
 
 // Política del agente destino sobre un sobre ya verificado criptográficamente.

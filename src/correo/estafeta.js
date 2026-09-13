@@ -20,7 +20,7 @@
 
 import { FileStore } from '../nucleo/almacen.js';
 import { Resolver, parseAddress } from './resolver.js';
-import { validateEnvelope, applyInboxPolicy, applyEmailPolicy, RateLimiter, proyectoDe, validarPerfil } from './politica.js';
+import { validateEnvelope, applyInboxPolicy, applyEmailPolicy, RateLimiter, RateLimiterDurable, proyectoDe, validarPerfil } from './politica.js';
 import { generateSigningKeys, signObject, verifyObject, signBytes, verifyBytes, canonical, uuid, unb64u, sha256hex } from '../nucleo/crypto.js';
 import { Libro, MEDIA, LibroError } from '../libro/libro.js';
 import { veredicto, pruebasDe, pruebasDisponibles } from '../libro/verifica.js';
@@ -115,15 +115,18 @@ export class Estafeta {
     this.hostsOverride = hosts;
 
     this.store = store || new FileStore(dataDir);
-    this.rate = new RateLimiter({ perMinute: this.policy.rate_per_minute });
-    this.regRate = new RateLimiter({ perMinute: this.policy.registrations_per_minute });
+    // Límites de tasa durables (NX-901): cuentan en el almacén, así que valen para toda la casa y
+    // no por isolate. Un almacén sin contador (uno ajeno, mínimo) cae al de memoria.
+    const limitador = (perMinute, ns) => (this.store.kvIncrement ? new RateLimiterDurable({ store: this.store, perMinute, ns, log: (m) => this.log(m) }) : new RateLimiter({ perMinute }));
+    this.rate = limitador(this.policy.rate_per_minute, 'tasa');
+    this.regRate = limitador(this.policy.registrations_per_minute, 'tasa-alta');
     // Conector MCP remoto (src/puentes/oauth.js + mcp-remoto.js). Existe sólo si la casa lo enciende
     // Y tiene llave de bóveda: sin un lugar cifrado donde guardar la llave de un subagente, no hay
     // conector. La llave de la bóveda no se guarda en `this.remoto`: sólo la bóveda la conoce.
     const { vaultKey, ...remotoSinLlave } = remoto;
     this.boveda = abrirBoveda(vaultKey || null);
     this.remoto = { dias: 30, accesoS: 3600, refrescoMs: 30 * 24 * 3600 * 1000, ...remotoSinLlave, enabled: !!(remoto.enabled && this.boveda) };
-    this.remotoRate = new RateLimiter({ perMinute: 240 });
+    this.remotoRate = limitador(240, 'tasa-remoto');
     // Asistentes (src/correo/asistente.js): existen sólo si la casa tiene una clave de la API de
     // Anthropic. La clave no se guarda aparte: sólo el asistente la usa, al llamar.
     this.asistente = asistente.apiKey ? { apiKey: asistente.apiKey, fetch: (...a) => (asistente.fetchImpl || this.fetch)(...a) } : null;
@@ -440,7 +443,7 @@ export class Estafeta {
     if (!Estafeta.NOMBRE_GRUPO.test(nombre)) return { status: 400, body: { reason: 'a group name has 3 to 41 characters: letters, digits, . _ -' } };
     const local = `g.${nombre}`;
     if (await this.store.getAgent(local)) return { status: 409, body: { reason: `${local}@${this.domain} already exists` } };
-    if (!this.remotoRate.allow(`grupo:${who.address}`)) return { status: 429, body: { reason: 'too many groups; try again in a minute' } };
+    if (!await this.remotoRate.allow(`grupo:${who.address}`)) return { status: 429, body: { reason: 'too many groups; try again in a minute' }, headers: this._retryAfter() };
     const v = await this._miembrosValidos([who.address, ...(Array.isArray(b.members) ? b.members : [])], { agregadoPor: who.address });
     if (v.error) return { status: 400, body: { reason: v.error } };
     const group = { admins: [who.address], members: v.lista, post: b.post === 'admins' ? 'admins' : 'members', max: Estafeta.MAX_MIEMBROS, created: iso() };
@@ -477,6 +480,7 @@ export class Estafeta {
   // El nombre local viaja como clave al almacenamiento: se valida SIEMPRE aquí, no se confía en
   // que el store lo sanee. Sin esto, `GET /agents/..%2Fdomain` leía el archivo del dominio y
   // devolvía la clave PRIVADA de la casa (compromiso total).
+  _retryAfter() { return { 'retry-after': String(this.rate.retryAfter()) }; }
   static LOCAL = /^[a-z0-9][a-z0-9._-]{0,63}$/;
   static validLocal(local) { return typeof local === 'string' && Estafeta.LOCAL.test(local); }
   async agentCard(local) {
@@ -601,7 +605,7 @@ export class Estafeta {
       if (who.record.delegation) return { status: 403, body: { reason: 'a delegated address cannot invite; use your own address' } };
       inviter = who.address;
     }
-    if (!this.remotoRate.allow(`invitar:${inviter}`)) return { status: 429, body: { reason: 'too many invitations; try again in a minute' } };
+    if (!await this.remotoRate.allow(`invitar:${inviter}`)) return { status: 429, body: { reason: 'too many invitations; try again in a minute' }, headers: this._retryAfter() };
     const suClaude = await this.store.getAgent(`claude.${parseAddress(inviter).local}`);
     const viva = suClaude && !suClaude.revoked && suClaude.delegation?.by === inviter && (!suClaude.valid_until || Date.parse(suClaude.valid_until) > now());
     const hint = typeof b.name === 'string' ? b.name.toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 30) : '';
@@ -1057,7 +1061,10 @@ export class Estafeta {
       relayVerified = r.domain === fromDomain && senderCard._domain.keys.some((k) => k.sig === r.kid) && verifyBytes(`relay:${env.id}:${this.domain}`, r.sig, r.kid);
     }
     if (this.policy.require_relay && !relayVerified) return { ok: false, code: 403, reason: 'this domain requires a valid relay signature' };
-    if (!this.rate.allow(fromDomain)) return { ok: false, code: 429, reason: 'rate limit for the sending domain' };
+    // La clave del límite: cada agente de ESTA casa cuenta por su cuenta (uno solo no frena a los
+    // demás); los de otra casa cuentan por dominio, que es lo único verificado de ellos aquí.
+    const claveTasa = fromDomain === this.domain ? env.from : fromDomain;
+    if (!await this.rate.allow(claveTasa)) return { ok: false, code: 429, reason: fromDomain === this.domain ? 'rate limit for this sender' : 'rate limit for the sending domain' };
 
     const accepted = [], rejected = [], results = {};
     const mails = [], libroBundles = [];
@@ -1107,7 +1114,7 @@ export class Estafeta {
             if (dir === env.from) continue;
             const recM = await this.store.getAgent(parseAddress(dir).local);
             if (!recM || recM.revoked || !this._aceptaDe(recM, env.from)) { omitidos++; continue; }
-            if (mails.length && !this.rate.allow(fromDomain)) { rejected.push({ to, code: 429, reason: 'rate limit for the sending domain (group delivery)' }); break; }
+            if (mails.length && !await this.rate.allow(claveTasa)) { rejected.push({ to, code: 429, reason: 'rate limit for the sender (group delivery)' }); break; }
             mails.push({ local: parseAddress(dir).local, envelope: env, meta });
           }
           mails.push({ local, envelope: env, meta });
@@ -1297,7 +1304,7 @@ export class Estafeta {
     const pol = applyEmailPolicy(rec, from);
     if (!pol.ok) return { ok: false, code: pol.code, reason: pol.reason };
     // Y un buzón abierto tampoco es un embudo infinito: se limita por dominio del remitente.
-    if (!this.rate.allow(`email:${String(from).slice(String(from).lastIndexOf('@') + 1).toLowerCase()}`)) {
+    if (!await this.rate.allow(`email:${String(from).slice(String(from).lastIndexOf('@') + 1).toLowerCase()}`)) {
       return { ok: false, code: 429, reason: 'rate limit for the sending domain' };
     }
     const env = inboundEnvelope({ from, to: `${local}@${this.domain}`, subject, text, messageId });
@@ -1335,7 +1342,9 @@ export class Estafeta {
   async handleRequest(rx) {
     await this.init();
     const path = rx.path;
-    const send = (status, body) => ({ status, body });
+    const send = (status, body, headers = null) => (headers ? { status, body, headers } : { status, body });
+    // Un 429 dice cuándo volver: Retry-After en segundos hasta la ventana siguiente.
+    const tarde = (body) => send(429, body, this._retryAfter());
     let m;
     try {
       if (rx.method === 'GET' && path === '/health') return send(200, { ok: true, domain: this.domain, agents: (await this.store.listAgents()).length, queue: (await this.store.listQueue()).length });
@@ -1375,7 +1384,7 @@ export class Estafeta {
       }
       // ----- Presencia: «visto por última vez», sólo con opt-in del dueño -----
       if (rx.method === 'GET' && (m = /^\/agents\/([^/]+)\/presence$/.exec(path))) {
-        if (!this.rate.allow(`resolve:${rx.ip || 'x'}`)) return send(429, { reason: 'too many requests' });
+        if (!await this.rate.allow(`resolve:${rx.ip || 'x'}`)) return tarde({ reason: 'too many requests' });
         const l = decodeURIComponent(m[1]).toLowerCase();
         if (!Estafeta.validLocal(l)) return send(400, { reason: 'invalid agent name' });
         return send(200, { address: `${l}@${this.domain}`, last_seen: await this.presenciaDe(l) });
@@ -1549,7 +1558,7 @@ export class Estafeta {
           if (exists) return send(409, { reason: 'that name is taken; only its owner or the house can update it' });
           if (!body.signature || body.signature.kid !== body.sig || !verifyObject(body, body.sig)) return send(401, { reason: 'to self-register, sign the body with the same sig key you are enrolling (proof of possession)' });
           if (Math.abs(now() - Date.parse(body.ts || 0)) > 300_000) return send(401, { reason: 'the signed request needs a ts (ISO) within 5 minutes' });
-          if (!this.regRate.allow(rx.ip || 'x')) return send(429, { reason: 'too many registrations from this address' });
+          if (!await this.regRate.allow(rx.ip || 'x')) return tarde({ reason: 'too many registrations from this address' });
           if (this.policy.registration === 'open') via = 'open';
           else if (this.policy.registration === 'invite') { const inv = await this._consumeInvite(body.invite); via = `invite:${inv.code}`; if (inv.welcome != null) body._welcome = inv.welcome; }
           else return send(403, { reason: `this house does not accept self-registration (registration=${this.policy.registration}); ask for an invitation` });
@@ -1590,7 +1599,7 @@ export class Estafeta {
         const r = await this.inbound(rx.body, rx.headers['x-nyx5-relay']);
         // pending: los avisos por webhook que nacieron aquí. El adaptador los pasa a waitUntil;
         // sin eso el runtime cancela el fetch al cerrar la respuesta y el aviso nunca sale.
-        return { ...send(r.code || 400, r), ...this._cabecerasX402(r), kick: true, pending: this.flushPushes() };
+        return { ...send(r.code || 400, r, r.code === 429 ? this._retryAfter() : null), ...this._cabecerasX402(r), kick: true, pending: this.flushPushes() };
       }
       if (rx.method === 'GET' && (m = /^\/mailbox\/([^/]+)$/.exec(path))) {
         const who = await this._authenticate(rx, path);
@@ -1654,7 +1663,7 @@ export class Estafeta {
       // puede pedirle la tarjeta a otra casa (CSP y CORS lo impiden, y está bien), y sin la llave de
       // cifrado del destinatario tendría que mandar en claro.
       if (rx.method === 'GET' && (m = /^\/resolve\/([^/]+)$/.exec(path))) {
-        if (!this.rate.allow(`resolve:${rx.ip || 'x'}`)) return send(429, { reason: 'too many requests' });
+        if (!await this.rate.allow(`resolve:${rx.ip || 'x'}`)) return tarde({ reason: 'too many requests' });
         let addr; try { addr = decodeURIComponent(m[1]).toLowerCase(); parseAddress(addr); } catch { return send(400, { reason: 'invalid address' }); }
         try {
           const { _estafeta, _domain, delegation, ...card } = await this.resolver.agentCard(addr);
@@ -1723,7 +1732,7 @@ export class Estafeta {
       }
       // ----- Índice federado -----
       if (this.index.enabled && rx.method === 'POST' && path === '/index/houses') {
-        if (!this.rate.allow(`index:${rx.ip || 'x'}`)) return send(429, { reason: 'demasiadas solicitudes' });
+        if (!await this.rate.allow(`index:${rx.ip || 'x'}`)) return tarde({ reason: 'too many requests' });
         const h = await this.indexAddHouse((rx.body || {}).domain);
         return send(201, h);
       }

@@ -138,6 +138,16 @@ export class D1Store {
     if (!row || (row.expires != null && row.expires <= nowMs)) return null;
     return JSON.parse(row.doc);
   }
+  // Contador atómico con vencimiento en UNA sentencia: dos isolates que suman a la vez no pierden
+  // ninguna. Un contador ya vencido arranca de nuevo en 1 (la purga puede no haber pasado aún).
+  async kvIncrement(ns, key, expires = null, nowMs = Date.now()) {
+    const r = await this.db.prepare(`INSERT INTO nyx5_kv (ns, key, doc, expires, created) VALUES (?, ?, '1', ?, ?)
+      ON CONFLICT(ns, key) DO UPDATE SET
+        doc = CASE WHEN nyx5_kv.expires IS NOT NULL AND nyx5_kv.expires <= ? THEN '1' ELSE CAST(CAST(nyx5_kv.doc AS INTEGER) + 1 AS TEXT) END,
+        expires = excluded.expires
+      RETURNING doc`).bind(ns, key, expires, iso(), nowMs).all();
+    return Number(r.results[0].doc);
+  }
   async kvDelete(ns, key) { await this.db.prepare('DELETE FROM nyx5_kv WHERE ns = ? AND key = ?').bind(ns, key).run(); }
   async kvPurge(nowMs = Date.now()) { await this.db.prepare('DELETE FROM nyx5_kv WHERE expires IS NOT NULL AND expires <= ?').bind(nowMs).run(); }
 
