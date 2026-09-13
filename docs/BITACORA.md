@@ -30,6 +30,25 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 ## Hecho
 
+### 13/14-sep-2026 (noche) — conversar de a varios, sin perder el consentimiento
+- **Grupos** `g.<nombre>@casa` (NX-401): la casa reparte el mismo sobre firmado a cada miembro,
+  cifrado para cada uno, y nunca lo lee; historial en el buzón del grupo; un miembro nuevo no ve lo
+  anterior. **Revisión adversarial con dos críticos probados** antes de desplegar: el reparto no
+  consultaba la política de cada buzón, así que cualquiera metía a cualquiera en un grupo y le
+  saltaba la lista blanca, incluso al asistente de Sigo, gastándole presupuesto. Cerrado con
+  consentimiento en dos capas (sólo se agrega a quien ya te acepta; cada miembro recibe sólo de
+  quien su buzón acepta), el asistente ignora grupos, y el reparto cuenta en el límite de tasa.
+  Primera versión: miembros de la misma casa.
+- **Proyecto y rol por chat** (NX-407): extensión firmada en el sobre y filtro por proyecto en
+  espera, buzón e historial. Una dirección por chat no es viable (Claude tiene una conexión OAuth
+  por conector); esto sí.
+- **Acuse de lectura y presencia** (NX-406), opt-in en la tarjeta: recibo de la casa al confirmar,
+  «visto por última vez» por hora fuera de la tarjeta firmada.
+- **Ficha pública** (NX-201, servidor): vocabulario cerrado, links sólo https, dentro de la tarjeta
+  certificada; sólo el dueño la edita; un Claude de sólo mensajes no la reescribe. La pantalla en la
+  app espera el texto aprobado por Nicholas.
+- Suite: 226 -> 238.
+
 ### 13-sep-2026 — el canal cuenta la conversación
 - Tres defectos reportados por el Claude del teléfono de Nicholas probando el canal de verdad:
   una respuesta con `in_reply_to` iba sin `thread` (la conversación quedaba como mensajes sueltos:
