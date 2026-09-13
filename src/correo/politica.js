@@ -15,8 +15,12 @@ export const TYPES = new Set(['message', 'task', 'result', 'receipt', 'intro']);
 // distingue «Sigo Main» de «Rosetta Lab» con una extensión firmada dentro del sobre, y el buzón
 // filtra por ella. Va en claro (las extensiones no se cifran): el nombre de un proyecto no es secreto.
 export const EXT_PROYECTO = 'urn:nyx5:ext:proyecto';
-export const proyectoDe = (env) => { const p = env?.extensions?.[EXT_PROYECTO]?.project; return typeof p === 'string' ? p.trim().toLowerCase() : null; };
-export const rolDe = (env) => { const r = env?.extensions?.[EXT_PROYECTO]?.role; return typeof r === 'string' ? r.trim().slice(0, 40) : null; };
+// Revisión del 13-sep-2026: un `project` de 200.000 caracteres o un `role` con escapes de terminal
+// llegaban tal cual a la herramienta del Claude remoto. Se limpian y acotan como la ficha, y el
+// proyecto se normaliza (NFKC, sin invisibles) para que un homógrafo no esconda un mensaje del filtro.
+export const proyectoDe = (env) => { const p = env?.extensions?.[EXT_PROYECTO]?.project; return typeof p === 'string' ? nombreDeProyecto(p) : null; };
+export const nombreDeProyecto = (p) => limpio(String(p).normalize('NFKC'), 40).toLowerCase() || null;
+export const rolDe = (env) => { const r = env?.extensions?.[EXT_PROYECTO]?.role; return typeof r === 'string' ? (limpio(r, 40) || null) : null; };
 
 // Ficha pública del agente (13-sep-2026): qué hace, en qué idiomas, de quién es, con qué etiquetas.
 // Va DENTRO de la tarjeta certificada, la firma el dueño al declararla y la casa al certificarla.
@@ -24,7 +28,13 @@ export const rolDe = (env) => { const r = env?.extensions?.[EXT_PROYECTO]?.role;
 // porque una ficha es lo que otros agentes leen antes de contratar, y no puede llevar de todo.
 // Lo declarado NO está verificado (eso es el sello de dueño, otra pieza): es lo que el dueño dice.
 const PERFIL_CLAVES = ['display_name', 'summary', 'description', 'languages', 'tags', 'owner', 'links'];
-const limpio = (s, max) => String(s).replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, max);
+// Fuera: controles C0 y C1, invisibles de ancho cero, y las marcas bidi que voltean el texto en
+// pantalla (un nombre que se lee al revés es una suplantación). Los espacios se colapsan.
+// Los controles pasan a espacio (separaban algo); los invisibles se quitan (no separaban nada, y
+// "sig<ancho cero>o" tiene que quedar "sigo", no "sig o").
+const CONTROLES = /[\x00-\x1f\x7f-\x9f]/g;
+const INVISIBLES = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+const limpio = (s, max) => String(s).replace(INVISIBLES, '').replace(CONTROLES, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 export function validarPerfil(p) {
   if (p === null) return { perfil: null };
   if (typeof p !== 'object' || Array.isArray(p)) return { error: 'profile must be an object' };
@@ -37,7 +47,9 @@ export function validarPerfil(p) {
     const v = limpio(p[k], max); if (v) out[k] = v;
   }
   if (p.languages != null) {
-    if (!Array.isArray(p.languages) || p.languages.length > 10 || !p.languages.every((l) => typeof l === 'string' && /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(l))) return { error: 'profile.languages must be up to 10 language tags like "es", "en-US"' };
+    // Tope por etiqueta (35, el máximo razonable de BCP 47): sin él, diez etiquetas de 180 KB
+    // hacían una tarjeta de 1,8 MB firmada por la casa (revisión del 13-sep-2026).
+    if (!Array.isArray(p.languages) || p.languages.length > 10 || !p.languages.every((l) => typeof l === 'string' && l.length <= 35 && /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(l))) return { error: 'profile.languages must be up to 10 language tags like "es", "en-US"' };
     out.languages = [...new Set(p.languages)];
   }
   if (p.tags != null) {
@@ -51,7 +63,8 @@ export function validarPerfil(p) {
   }
   if (p.links != null) {
     if (!Array.isArray(p.links) || p.links.length > 5) return { error: 'profile.links must be up to 5 https URLs' };
-    for (const l of p.links) { let u; try { u = new URL(String(l)); } catch { u = null; } if (!u || u.protocol !== 'https:' || String(l).length > 200) return { error: `profile.links: not an https URL: ${String(l).slice(0, 60)}` }; }
+    // Sin usuario ni clave en la URL: `https://nyx5.com@evil.example/` se lee como nyx5.com y va a evil.
+    for (const l of p.links) { let u; try { u = new URL(String(l)); } catch { u = null; } if (!u || u.protocol !== 'https:' || u.username || u.password || String(l).length > 200) return { error: `profile.links: not a plain https URL: ${String(l).slice(0, 60)}` }; }
     out.links = [...new Set(p.links.map(String))];
   }
   return { perfil: out };

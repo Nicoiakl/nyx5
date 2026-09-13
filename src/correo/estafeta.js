@@ -20,7 +20,7 @@
 
 import { FileStore } from '../nucleo/almacen.js';
 import { Resolver, parseAddress } from './resolver.js';
-import { validateEnvelope, applyInboxPolicy, applyEmailPolicy, RateLimiter, RateLimiterDurable, proyectoDe, validarPerfil } from './politica.js';
+import { validateEnvelope, applyInboxPolicy, applyEmailPolicy, RateLimiter, RateLimiterDurable, proyectoDe, nombreDeProyecto, validarPerfil } from './politica.js';
 import { generateSigningKeys, signObject, verifyObject, signBytes, verifyBytes, canonical, uuid, unb64u, sha256hex } from '../nucleo/crypto.js';
 import { Libro, MEDIA, LibroError } from '../libro/libro.js';
 import { veredicto, pruebasDe, pruebasDisponibles } from '../libro/verifica.js';
@@ -542,9 +542,23 @@ export class Estafeta {
       enviados.push({ id: e.envelope.id, dir: 'out', at: e.envelope.created, status: e.status, envelope: e.envelope });
     }
     // Lo enviado sabe si fue leído: el acuse de lectura llegó como recibo de postmaster@ con read_of.
+    // Sólo vale si lo firmó el postmaster de la casa de quien leyó (revisión del 13-sep-2026: antes
+    // cualquier sobre `receipt` con read_of marcaba leído lo que fuera) y si ese lector era
+    // destinatario del sobre, o miembro de su casa cuando el sobre iba a un grupo.
     const leidos = new Map();
-    for (const r of recibidos) { const b = r.envelope?.content?.body; if (r.envelope?.type === 'receipt' && b?.read_of) leidos.set(b.read_of, { by: b.read_by, at: b.read_at }); }
-    for (const e of enviados) { const l = leidos.get(e.id); if (l) e.read = l; }
+    for (const r of recibidos) {
+      const b = r.envelope?.content?.body;
+      if (r.envelope?.type !== 'receipt' || typeof b?.read_of !== 'string' || typeof b?.read_by !== 'string') continue;
+      let lector; try { lector = parseAddress(b.read_by); } catch { continue; }
+      if (r.envelope.from !== `postmaster@${lector.domain}`) continue;
+      leidos.set(b.read_of, { by: b.read_by, at: b.read_at });
+    }
+    for (const e of enviados) {
+      const l = leidos.get(e.id); if (!l) continue;
+      const destinos = e.envelope.to.map((t) => String(t).toLowerCase());
+      const lectorDom = parseAddress(l.by).domain;
+      if (destinos.includes(l.by) || destinos.some((t) => t.startsWith('g.') && parseAddress(t).domain === lectorDom)) e.read = l;
+    }
     const todos = [...recibidos, ...enviados].filter(delProyecto);
     // Un mensaje de grupo se conversa con el GRUPO, no con quien lo escribió.
     const grupo = (x) => x.envelope.to.find((t) => { try { const p = parseAddress(t); return p.domain === this.domain && p.local.startsWith('g.'); } catch { return false; } });
@@ -1371,7 +1385,9 @@ export class Estafeta {
         const l = decodeURIComponent(m[1]).toLowerCase();
         const rec = Estafeta.validLocal(l) ? await this.store.getAgent(l) : null;
         if (!rec || rec.revoked) return send(404, { reason: 'no such agent' });
-        if (who.record.delegation?.scope?.messages_only && who.local !== l) return send(403, { reason: 'a messages-only address cannot edit another profile' });
+        // Una dirección de sólo mensajes no edita ficha alguna, ni la suya: lo que se publica en
+        // nombre del dueño lo escribe el dueño (revisión del 13-sep-2026).
+        if (who.record.delegation?.scope?.messages_only) return send(403, { reason: 'a messages-only address cannot edit a profile' });
         if (who.local !== l && who.address !== rec.delegation?.by) return send(403, { reason: 'only the owner of an address (or of its delegation) edits its profile' });
         const v = validarPerfil(rx.body?.profile === undefined ? null : rx.body.profile);
         if (v.error) return send(400, { reason: v.error });
@@ -1626,7 +1642,7 @@ export class Estafeta {
         if (who.local !== decodeURIComponent(m[1]).toLowerCase()) return send(403, { reason: 'not your mailbox' });
         const q = Object.fromEntries(rx.query);
         const segundos = Math.max(0, Math.min(Number(q.timeout ?? 25) || 0, 90));
-        const msg = await this.esperarCorreo(who.local, { from: q.from || null, thread: q.thread || null, since: q.since || null, project: q.project ? String(q.project).trim().toLowerCase() : null, timeoutMs: segundos * 1000 });
+        const msg = await this.esperarCorreo(who.local, { from: q.from || null, thread: q.thread || null, since: q.since || null, project: q.project ? nombreDeProyecto(q.project) : null, timeoutMs: segundos * 1000 });
         return send(200, { message: msg });
       }
       if (rx.method === 'GET' && (m = /^\/conversations\/([^/]+)$/.exec(path))) {
@@ -1634,7 +1650,7 @@ export class Estafeta {
         if (who.local !== decodeURIComponent(m[1]).toLowerCase()) return send(403, { reason: 'not your conversations' });
         const con = rx.query.get('with');
         const limit = Math.max(1, Math.min(Number(rx.query.get('limit') || 50) || 50, 500));
-        const project = rx.query.get('project') ? String(rx.query.get('project')).trim().toLowerCase() : null;
+        const project = rx.query.get("project") ? nombreDeProyecto(rx.query.get("project")) : null;
         if (con) return send(200, { with: con.toLowerCase(), messages: await this.conversacion(who.local, { con: con.toLowerCase(), limit, project }) });
         return send(200, { conversations: await this.conversacion(who.local, { project }) });
       }

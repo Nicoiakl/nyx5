@@ -15,7 +15,7 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { Estafeta } from '../src/correo/estafeta.js';
 import { Agent } from '../src/correo/agente.js';
-import { signObject, b64u } from '../src/nucleo/crypto.js';
+import { signObject, b64u, uuid } from '../src/nucleo/crypto.js';
 
 // Puerto propio de esta suite (npm test corre los archivos en paralelo). Lo cuida test/puertos.test.js.
 const P = 4241;
@@ -478,6 +478,17 @@ test('proyecto: dos chats del mismo conector se hablan por proyectos distintos y
   const llego = await amiga.waitFor((e) => e.id === r2.datos.id, { timeoutMs: 5000 });
   assert.equal((await amiga.open(llego.envelope)).project, 'rosetta');
   assert.deepEqual((await amiga.conversations({ project: 'rosetta' })).map((x) => x.with), [c.sub]);
+  // Revisión del 13-sep-2026: un proyecto de 200.000 caracteres o un rol con escapes de terminal
+  // llegaban tal cual a la herramienta; y un homógrafo (ancho cero) escondía un mensaje del filtro.
+  const crudo = signObject({ nyx5: '1', id: uuid(), from: amiga.address, to: [c.sub], created: new Date().toISOString(), expires: null, thread: null, in_reply_to: null, type: 'message', content: { media: 'text/plain', body: 'crudo' }, extensions: { 'urn:nyx5:ext:proyecto': { project: 'X'.repeat(200_000), role: 'admin\x00\x1b[31mROJO' } } }, amiga.keys);
+  assert.equal((await casa.inbound(crudo)).code, 202);
+  const visto = (await herramienta(c.access_token, 'nyx5_inbox', {})).datos.find((m) => m.id === crudo.id);
+  assert.equal(visto.project.length, 40); assert.equal(visto.role, 'admin [31mROJO');
+  await amiga.send({ to: c.sub, body: 'homógrafo', project: 'Sig\u200bo' });
+  // La entrega va por la cola: se espera a que llegue, y sólo entonces se mira el filtro.
+  let filtrado = [];
+  for (let i = 0; i < 25 && !filtrado.some((m) => m.content.body === 'homógrafo'); i++) { await pausa(200); filtrado = (await herramienta(c.access_token, 'nyx5_inbox', { project: 'sigo' })).datos; }
+  assert.ok(filtrado.some((m) => m.content.body === 'homógrafo'), `el ancho cero escondió el mensaje del filtro: ${JSON.stringify(filtrado.map((m) => [m.content.body, m.project]))}`);
 });
 
 // Defecto real (12-sep-2026): la pantalla de conectar viene marcada en "sólo tú", así que reconectar

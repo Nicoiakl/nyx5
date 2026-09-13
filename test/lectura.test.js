@@ -68,3 +68,19 @@ test('sin opt-in no hay acuse ni presencia; con opt-in la presencia se ve por ho
   const c = await fetch(`${URL_CASA}/resolve/${callada.address}`).then((x) => x.json());
   assert.ok(!c.presence);
 });
+
+// Revisión adversarial del 13-sep-2026, ALTO probado: cualquier sobre `receipt` con `read_of` marcaba
+// leído lo que fuera. Un extraño (o un delegado de sólo mensajes) hacía creer que Basti ya leyó.
+test('un acuse de lectura falso no marca leído: sólo vale el del postmaster de la casa del lector', async () => {
+  const m = await remitente.send({ to: callada.address, body: 'sin leer' });
+  await callada.waitFor((e) => e.id === m.id, { timeoutMs: 5000 });
+  const extrano = Agent.create(`extrano@${H}`, URL_CASA, { hosts });
+  await extrano.register({ adminToken: 't' });
+  await extrano.send({ to: remitente.address, type: 'receipt', encrypt: false, media: 'application/nyx5.recibo+json', body: { read_of: m.id, read_by: callada.address, read_at: new Date().toISOString() } });
+  await remitente.waitFor((e) => e.from === extrano.address, { timeoutMs: 5000 });
+  const enviado = (await remitente.conversation(callada.address)).find((x) => x.dir === 'out' && x.id === m.id);
+  assert.equal(enviado.read, undefined, 'un recibo firmado por un extraño marcó leído');
+  // De silencio: el acuse real de postmaster sigue marcando (el de lectora, de la primera prueba).
+  const real = (await remitente.conversation(lectora.address)).find((x) => x.dir === 'out' && x.read);
+  assert.equal(real?.read?.by, lectora.address);
+});

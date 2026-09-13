@@ -3,7 +3,7 @@
 // Las operaciones del Libro son sobres firmados a libro@<casa>; las respuestas vuelven como recibos al buzón.
 
 import { Resolver, parseAddress } from './resolver.js';
-import { EXT_PROYECTO, proyectoDe, rolDe } from './politica.js';
+import { EXT_PROYECTO, proyectoDe, rolDe, nombreDeProyecto } from './politica.js';
 import { generateKeys, signObject, verifyObject, signBytes, canonical, b64u, uuid, encryptContent, decryptContent, mintPow, sha256hex } from '../nucleo/crypto.js';
 import { Libro, MEDIA } from '../libro/libro.js';
 
@@ -83,7 +83,7 @@ export class Agent {
     const recipients = Array.isArray(to) ? to : [to];
     const id = uuid();
     // Proyecto y rol viajan como extensión firmada: el buzón del otro lado filtra por proyecto.
-    if (project || role) extensions = { ...(extensions || {}), [EXT_PROYECTO]: { ...(project ? { project: String(project).trim().toLowerCase().slice(0, 40) } : {}), ...(role ? { role: String(role).trim().slice(0, 40) } : {}) } };
+    if (project || role) extensions = { ...(extensions || {}), [EXT_PROYECTO]: { ...(project ? { project: nombreDeProyecto(project) } : {}), ...(role ? { role: String(role).trim().slice(0, 40) } : {}) } };
     // Un sobre que responde a otro hereda su hilo. Defecto real (12-sep-2026): las respuestas iban con
     // in_reply_to y thread null, y la conversación quedaba como mensajes sueltos; el historial firmado
     // es el producto, y sin hilo no es historial. La casa no puede rellenarlo: el sobre va firmado.
