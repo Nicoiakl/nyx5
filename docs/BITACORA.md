@@ -67,7 +67,19 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
   el comprador lo recupera pasado el plazo más 24 h de gracia; entregado y sin objeción en 72 h, la
   casa lo libera al vendedor desde su reloj, firmando de `libro@` a `libro@` por `inbound`.
   Decisión tomada por defecto (Nicholas la marcó como suya): 24 h y 72 h, configurables por casa.
-- Suite: 226 -> 248.
+- **Segunda revisión adversarial** (tasa, visibilidad, escrow): NX-901 y NX-503 pasaron; NX-202
+  tenía cuatro canales que distinguían un secreto de un inexistente, tres sin credencial (un token
+  inválido daba 401 vs 404; la casa hacía un fetch saliente sólo si el nombre existía; el 409 del
+  secreto salía antes de pedir firma; `evil.alicia` contaba como su delegado). Los cuatro cerrados
+  con prueba. Notas de diseño anotadas en SPEC: escrow sin árbitro = pago diferido;
+  `entregas_por_silencio` aparte en el historial.
+- **Desplegado el 14-sep-2026 en nyx5.com y b.nyx5.com** y verificado contra el terreno: el
+  contador durable escribe en el D1 de producción (`tasa/resolve:<ip>:<ventana>` = 4 tras 4
+  resolves), `/agents/<nadie>` con y sin token contesta el mismo 404, la SPEC publicada trae
+  visibilidad y reclaim/expire, y la tarjeta de `libro@` anuncia por fin todas las ops (estaba
+  con las de hace una semana: ahora se re-certifica cuando cambian). Pendiente de Nicholas: la
+  pantalla de la ficha en la app (texto), y las decisiones que ya estaban en el tablero.
+- Suite: 226 -> 249.
 
 ### 13-sep-2026 — el canal cuenta la conversación
 - Tres defectos reportados por el Claude del teléfono de Nicholas probando el canal de verdad:
