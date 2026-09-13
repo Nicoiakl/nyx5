@@ -16,7 +16,9 @@ export class Agent {
     this.keys = keys;
     this.estafeta = estafeta.replace(/\/$/, '');
     this.fetch = (...a) => fetchImpl(...a); // envuelto: workerd exige fetch con this=globalThis
-    this.resolver = resolver || new Resolver({ hosts: { [domain]: { url: this.estafeta }, ...hosts }, fetchImpl });
+    // El cliente firma ante su propia casa cuando una tarjeta no aparece sin autenticar (NX-202):
+    // así un contacto de un agente secreto lo resuelve, y un extraño ve lo mismo que si no existiera.
+    this.resolver = resolver || new Resolver({ hosts: { [domain]: { url: this.estafeta }, ...hosts }, fetchImpl, auth: { domain, url: this.estafeta, header: (method, path) => this._auth(method, path) } });
   }
 
   static create(address, estafeta, opts = {}) { return new Agent({ address, estafeta, keys: generateKeys(), ...opts }); }
@@ -46,12 +48,12 @@ export class Agent {
   // ---------- registro ----------
   // Tres caminos: adminToken (la casa inscribe), invite (código de la casa) o abierto si la casa lo permite.
   // Sin adminToken y sin estar registrado, el cuerpo va firmado con la propia clave (prueba de posesión).
-  async register({ adminToken, invite, capabilities, inbox, wallet, wallets, webhook, notify_email, valid_until, source } = {}) {
+  async register({ adminToken, invite, capabilities, inbox, wallet, wallets, webhook, notify_email, valid_until, source, visibility } = {}) {
     // `source` es atribución de distribución: viaja al alta, se registra en el evento `join`
     // y NO entra en la tarjeta. Nadie puede leer de dónde vino un agente mirando su tarjeta.
     // `wallet` es la dirección a la que este agente quiere que le paguen en dinero real. Es
     // PÚBLICA y va en la tarjeta: la casa no la controla ni puede mover nada de ella.
-    const body = { local: this.local, sig: this.keys.sig, enc: this.keys.enc, capabilities, inbox, wallet, wallets, webhook, notify_email, valid_until, source };
+    const body = { local: this.local, sig: this.keys.sig, enc: this.keys.enc, capabilities, inbox, wallet, wallets, webhook, notify_email, valid_until, source, visibility };
     if (adminToken) this.card = await this._call('POST', '/agents', body, { admin: adminToken });
     else if (this.card) this.card = await this._call('POST', '/agents', body);
     else this.card = await this._call('POST', '/agents', signObject({ ...body, invite: invite || undefined, ts: iso() }, this.keys), { noAuth: true });
@@ -100,7 +102,7 @@ export class Agent {
     // Defecto real de la primera prueba: con la tarjeta en caché, el miembro nuevo recibía un sobre
     // que no podía abrir.
     for (const r of recipients) { try { if (parseAddress(r).local.startsWith('g.')) this.resolver.invalidate(`agent:${r}`); } catch { /* dirección inválida: la resolución lo dirá */ } }
-    const cards = await Promise.all(recipients.map((r) => this.resolver.agentCard(r).catch((e) => ({ address: r, _error: e.message }))));
+    const cards = await Promise.all(recipients.map((r) => this.resolver.agentCard(r, { onBehalfOf: this.address }).catch((e) => ({ address: r, _error: e.message }))));
     const missing = cards.filter((c) => c._error);
     if (missing.length) throw new Error(`could not resolve: ${missing.map((c) => `${c.address} (${c._error})`).join(', ')}`);
 
@@ -111,7 +113,7 @@ export class Agent {
       if (!c.group) { lectores.push({ address: c.address, enc: c.enc }); continue; }
       for (const dir of c.group.members) {
         if (dir === this.address) continue;
-        const mc = await this.resolver.agentCard(dir).catch(() => null);
+        const mc = await this.resolver.agentCard(dir, { onBehalfOf: this.address }).catch(() => null);
         lectores.push({ address: dir, enc: mc?.enc || null });
       }
     }
@@ -196,6 +198,7 @@ export class Agent {
   deliver(house, contract, { evidence_sha256, note } = {}) { return this.libroOp(house, { op: 'deliver', contract, evidence_sha256, note }); }
   release(house, contract) { return this.libroOp(house, { op: 'release', contract }); }
   refund(house, contract, note) { return this.libroOp(house, { op: 'refund', contract, note }); }
+  reclaim(house, contract) { return this.libroOp(house, { op: 'reclaim', contract }); }
   bond(house, { amount, claim, verifier, beneficiary, arbiter, evidence_sha256, expires, vouchee }) { return this.libroOp(house, { op: 'bond', amount, claim, verifier, beneficiary, arbiter, evidence_sha256, expires, vouchee }); }
   // Avalar a un desconocido para que entre a un buzón con lista blanca: una fianza en la casa del
   // receptor, con el receptor como verificador y beneficiario. Si la presentación es basura, la ejecuta.
@@ -261,7 +264,7 @@ export class Agent {
   async conversations({ project = null } = {}) { const q = project ? `?${new URLSearchParams({ project })}` : ''; return (await this._call('GET', `/conversations/${this.local}${q}`)).conversations; }
   // Ficha pública: la propia (o la de un delegado propio) se declara; la de cualquiera se lee de su tarjeta.
   setProfile(profile, { of = null } = {}) { const l = of ? parseAddress(of).local : this.local; return this._call('POST', `/agents/${encodeURIComponent(l)}/profile`, { profile }); }
-  async profile(address) { this.resolver.invalidate(`agent:${String(address).toLowerCase()}`); const c = await this.resolver.agentCard(address); return { address: c.address, profile: c.profile || null, capabilities: c.capabilities || {} }; }
+  async profile(address) { this.resolver.invalidate(`agent:${String(address).toLowerCase()}`); const c = await this.resolver.agentCard(address, { onBehalfOf: this.address }); return { address: c.address, profile: c.profile || null, capabilities: c.capabilities || {} }; }
   // «Visto por última vez» de una dirección de una casa (null si el dueño no lo activó).
   async presence(address) {
     const { local, domain } = parseAddress(address);
@@ -295,7 +298,7 @@ export class Agent {
     if (em && !envelope.signature) {
       return { id: envelope.id, from: em.from, to: envelope.to, type: envelope.type, created: envelope.created, verified: false, via: 'email', subject: em.subject || null, content: envelope.content };
     }
-    const card = await this.resolver.agentCardForKid(envelope.from, envelope.signature?.kid);
+    const card = await this.resolver.agentCardForKid(envelope.from, envelope.signature?.kid, { onBehalfOf: this.address });
     const verified = Resolver.acceptedKids(card).includes(envelope.signature?.kid) && verifyObject(envelope, envelope.signature.kid);
     if (!verified) throw new Error(`invalid signature on envelope ${envelope.id} from ${envelope.from}`);
     if (envelope.expires && Date.parse(envelope.expires) < Date.now()) throw new Error(`sobre vencido: ${envelope.id}`);

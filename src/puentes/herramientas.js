@@ -42,7 +42,7 @@ export const TOOLS = [
       referrer: { type: 'object', description: 'comisión de referido: { address, share } en basis points; la paga el vendedor de su parte, el comprador paga igual', properties: { address: { type: 'string' }, share: { type: 'integer' } } } } } },
   { name: 'nyx5_accept', description: 'Accept an offer and commit the payment. In escrow the money is held: the seller does not get paid until they deliver and meet the condition. You receive a signed receipt that no party can deny later.',
     inputSchema: { type: 'object', required: ['quote'], properties: { quote: { type: 'object' } } } },
-  { name: 'nyx5_libro', description: 'Move a deal forward in the ledger, leaving a signed and irreversible entry at every step: deliver, release the payment if the proof passed, refund if it failed, back a claim with money (you lose it if you lied), or delegate spending with a cap. ops: pay {to, amount, concept}, deliver {contract, evidence_sha256}, release {contract}, refund {contract}, bond {amount, claim, verifier}, forfeit {contract, reason}, mandate {grantee, cap, scope, expires, parent}, charge {mandate, amount, concept}, revoke {mandate}, balance, statement {limit}, contract {contract}. The answer arrives as a signed receipt in your mailbox.',
+  { name: 'nyx5_libro', description: 'Move a deal forward in the ledger, leaving a signed and irreversible entry at every step: deliver, release the payment if the proof passed, refund if it failed, back a claim with money (you lose it if you lied), or delegate spending with a cap. ops: pay {to, amount, concept}, deliver {contract, evidence_sha256}, release {contract}, refund {contract}, reclaim {contract}, bond {amount, claim, verifier}, forfeit {contract, reason}, mandate {grantee, cap, scope, expires, parent}, charge {mandate, amount, concept}, revoke {mandate}, balance, statement {limit}, contract {contract}. The answer arrives as a signed receipt in your mailbox.',
     inputSchema: { type: 'object', required: ['op'], properties: { house: { type: 'string', description: 'dominio de la casa; por defecto el propio' }, op: { type: 'string' }, args: { type: 'object' } } } },
   { name: 'nyx5_balance', description: 'How much you hold, which contracts and which spending permissions are active. Check it before committing a payment. A direct read authenticated with your signature, without going through the mail.',
     inputSchema: { type: 'object', properties: { house: { type: 'string' } } } },
@@ -111,7 +111,7 @@ export async function llamar(agent, name, args = {}, { permitidas = null, espera
       return text(opened);
     }
     case 'nyx5_ack': return text({ acked: await agent.ack(args.ids) });
-    case 'nyx5_resolve': { const { _domain, ...card } = await agent.resolver.agentCard(args.address); const last_seen = await agent.presence(args.address); return text({ ...card, ...(last_seen ? { presence: { last_seen } } : {}) }); }
+    case 'nyx5_resolve': { const { _domain, ...card } = await agent.resolver.agentCard(args.address, { onBehalfOf: agent.address }); const last_seen = await agent.presence(args.address); return text({ ...card, ...(last_seen ? { presence: { last_seen } } : {}) }); }
     case 'nyx5_outbox': return text(await agent.outbox());
     case 'nyx5_directory': return text(await agent.directory(args.house, args));
     case 'nyx5_search': return text(await agent.search(args.index, args));

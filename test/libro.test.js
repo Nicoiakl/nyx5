@@ -20,7 +20,7 @@ const receiveQuote = async (buyer, q) => (await buyer.open((await buyer.waitFor(
 
 before(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nyx5-libro-test-'));
-  alfa = await mk(H, P1, 'a', { feePct: 0.10, welcome: 0 }).start();
+  alfa = await mk(H, P1, 'a', { feePct: 0.10, welcome: 0, reviewWindowMs: 300 }).start();
   beta = await mk('beta.test', P2, 'b').start();
   nicolas = Agent.create(`nicolas@${H}`, hosts[H].url, { hosts });
   vendedor = Agent.create(`vendedor@${H}`, hosts[H].url, { hosts });
@@ -96,6 +96,57 @@ test('escrow: retener, entregar, liberar con fee; devolver sin fee; partes incor
   const nb = await bal(nicolas.address);
   const rf = await verifica.awaitReceipt((await verifica.refund(H, c2, 'no cumplió')).id);
   assert.equal(rf.receipt.contract.state, 'refunded'); assert.equal(await bal(nicolas.address), nb + 100);
+});
+
+// NX-503 (13-sep-2026): antes un escrow vencido sólo mandaba un aviso y la plata quedaba retenida
+// para siempre. Ahora el comprador recupera lo no entregado (pasado el plazo y la gracia), y una
+// entrega sin objeción se libera sola al cerrar la ventana de revisión. El reloj se simula con
+// plazos en el pasado; la ventana de la casa de prueba es de 300 ms.
+test('escrow que vence: sin entrega el comprador recupera; entregado y sin objeción se libera solo', async () => {
+  const hace2dias = new Date(Date.now() - 2 * 86_400_000).toISOString();
+  const en1hora = new Date(Date.now() + 3600_000).toISOString();
+  const abrir = async (deadline) => {
+    const q = await vendedor.quote({ to: nicolas.address, contract: 'escrow', price: 100, concept: 'con plazo', arbiter: verifica.address, terms: { deadline } });
+    return (await nicolas.awaitReceipt((await nicolas.accept(await receiveQuote(nicolas, q))).id)).receipt.contract.id;
+  };
+  // 1. Plazo vencido hace dos días, sin entrega: el comprador recupera (sin fee). El vendedor no puede.
+  const c1 = await abrir(hace2dias);
+  const nb = await bal(nicolas.address);
+  assert.match((await bounce(vendedor, (await vendedor.reclaim(H, c1)).id)).reason, /only the buyer/);
+  const r1 = await nicolas.awaitReceipt((await nicolas.reclaim(H, c1)).id);
+  assert.equal(r1.receipt.contract.state, 'refunded'); assert.equal(await bal(nicolas.address), nb + 100); assert.equal(await bal(`escrow:${c1}`), 0);
+  // 2. Plazo en una hora: todavía no.
+  const c2 = await abrir(en1hora);
+  assert.match((await bounce(nicolas, (await nicolas.reclaim(H, c2)).id)).reason, /has not passed yet/);
+  // 3. Sin plazo: reclaim no aplica (sólo vendedor o árbitro devuelven).
+  const q3 = await vendedor.quote({ to: nicolas.address, contract: 'escrow', price: 100, concept: 'sin plazo', arbiter: verifica.address });
+  const c3 = (await nicolas.awaitReceipt((await nicolas.accept(await receiveQuote(nicolas, q3))).id)).receipt.contract.id;
+  assert.match((await bounce(nicolas, (await nicolas.reclaim(H, c3)).id)).reason, /no deadline/);
+  // 4. Vencido y ENTREGADO: el comprador ya no recupera por su cuenta; pasada la ventana de revisión
+  //    (300 ms en esta casa) sin objeción, el reloj de la casa libera al vendedor, con fee.
+  const c4 = await abrir(hace2dias);
+  await vendedor.awaitReceipt((await vendedor.deliver(H, c4, { evidence_sha256: sha256hex('ok') })).id);
+  assert.match((await bounce(nicolas, (await nicolas.reclaim(H, c4)).id)).reason, /already delivered/);
+  const vb = await bal(vendedor.address);
+  const t0 = new Date().toISOString();
+  await alfa.tick();
+  assert.equal((await alfa.store.libroGetContract(c4)).state, 'delivered', 'liberó antes de cerrar la ventana');
+  await new Promise((r) => setTimeout(r, 400));
+  await alfa.tick();
+  const c4final = await alfa.store.libroGetContract(c4);
+  assert.equal(c4final.state, 'released');
+  assert.equal(c4final.history.at(-1).op, 'expire'); assert.equal(c4final.history.at(-1).by, `libro@${H}`);
+  assert.equal(await bal(vendedor.address), vb + 90); assert.equal(await bal(`escrow:${c4}`), 0);
+  // Las partes reciben el recibo firmado por la casa.
+  const recibo = await vendedor.waitFor((e) => e.from === `libro@${H}` && e.thread === c4 && e.in_reply_to && e.created > t0, { timeoutMs: 5000 });
+  assert.match(JSON.stringify((await vendedor.open(recibo.envelope)).content.body), /review window/);
+  // 5. Nadie más que la casa firma un expire, y un delivered dentro de la ventana no se libera.
+  const c5 = await abrir(hace2dias);
+  await vendedor.awaitReceipt((await vendedor.deliver(H, c5, { evidence_sha256: sha256hex('ok') })).id);
+  assert.match((await bounce(vendedor, (await vendedor.libroOp(H, { op: 'expire', contract: c5 })).id)).reason, /only the house/);
+  assert.equal((await alfa.store.libroGetContract(c5)).state, 'delivered');
+  // Se devuelve lo que quedó retenido para que las pruebas siguientes tengan el saldo de siempre.
+  for (const c of [c2, c3, c5]) await verifica.awaitReceipt((await verifica.refund(H, c, 'fin de prueba')).id);
 });
 
 test('fianza: deposita el que afirma; el verificador ejecuta o libera; el afianzado no puede liberarla antes de vencer', async () => {

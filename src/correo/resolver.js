@@ -27,7 +27,10 @@ export function parseTxtRecord(txt) {
 }
 
 export class Resolver {
-  constructor({ hosts = {}, fetchImpl = globalThis.fetch, cacheTtlMs = 5 * 60 * 1000, pins = {}, timeoutMs = 5000, onPin = null, self = null } = {}) {
+  constructor({ hosts = {}, fetchImpl = globalThis.fetch, cacheTtlMs = 5 * 60 * 1000, pins = {}, timeoutMs = 5000, onPin = null, self = null, auth = null } = {}) {
+    // auth = { domain, header(method, path) }: un CLIENTE (Agent) firma la petición a su propia casa
+    // cuando una tarjeta no aparece sin autenticar; así un contacto resuelve a un agente secreto.
+    this.auth = auth;
     this.hosts = { ...hosts };          // { "beta.local": { url: "http://localhost:4002", sig?: "<pub>" } }
     this.fetch = (...a) => fetchImpl(...a); // envuelto: workerd exige fetch con this=globalThis
     this.cacheTtlMs = cacheTtlMs;
@@ -42,7 +45,8 @@ export class Resolver {
   }
 
   setHost(domain, entry) { this.hosts[domain] = entry; this.cache.clear(); }
-  invalidate(key) { if (key) this.cache.delete(key); else this.cache.clear(); }
+  // Invalidar `agent:x@casa` borra también lo recordado «para» alguien de esa misma tarjeta.
+  invalidate(key) { if (!key) { this.cache.clear(); return; } for (const k of this.cache.keys()) if (k === key || k.startsWith(`${key}|for:`)) this.cache.delete(k); }
 
   _cached(key) {
     const hit = this.cache.get(key);
@@ -51,8 +55,8 @@ export class Resolver {
   }
   _remember(key, value) { this.cache.set(key, { value, until: Date.now() + this.cacheTtlMs }); }
 
-  async _get(url) {
-    const res = await this.fetch(url, { signal: AbortSignal.timeout(this.timeoutMs) });
+  async _get(url, headers = {}) {
+    const res = await this.fetch(url, { headers, signal: AbortSignal.timeout(this.timeoutMs) });
     if (!res.ok) throw Object.assign(new Error(`GET ${url} -> ${res.status}`), { permanent: res.status === 404 || res.status === 410 });
     return res.json();
   }
@@ -111,7 +115,10 @@ export class Resolver {
   }
 
   // Tarjeta del agente, certificada por la clave del dominio.
-  async agentCard(address) {
+  // `onBehalfOf` (NX-202): para quién se pide. Un agente SECRETO sólo se sirve a quien está en su
+  // lista, así que la casa que pregunta firma «lo pido para bob@mi-casa» con su llave de dominio, y
+  // un cliente firma con la suya ante su propia casa. Sin eso, un secreto se ve como inexistente.
+  async agentCard(address, { onBehalfOf = null } = {}) {
     const { local, domain } = parseAddress(address);
     // La propia casa sirve la tarjeta sin red, pero pasa por la MISMA verificación que una ajena:
     // venir de casa no la exime de estar certificada por el dominio y firmada por su padre.
@@ -122,13 +129,29 @@ export class Resolver {
       return this._verifyAgentCard(card, dc, address, local, domain);
     }
     const key = `agent:${local}@${domain}`;
-    const cached = this._cached(key);
+    // Una tarjeta secreta se recuerda SÓLO para quien la pidió: servida a otro, sería una fuga.
+    const keyPara = onBehalfOf ? `${key}|for:${String(onBehalfOf).toLowerCase()}` : null;
+    const cached = this._cached(key) || (keyPara && this._cached(keyPara));
     if (cached) return cached;
 
     const dc = await this.domainCard(domain);
-    const card = await this._get(`${dc._estafeta}/agents/${encodeURIComponent(local)}`);
+    const url = `${dc._estafeta}/agents/${encodeURIComponent(local)}`;
+    const headers = {};
+    let paraDom = null; try { paraDom = onBehalfOf ? parseAddress(onBehalfOf).domain : null; } catch { paraDom = null; }
+    if (onBehalfOf && this.self?.firmarPara && paraDom === this.self.domain) headers['x-nyx5-for'] = this.self.firmarPara(String(onBehalfOf).toLowerCase(), domain);
+    let card;
+    try { card = await this._get(url, headers); }
+    catch (e) {
+      // Un cliente que no la ve sin autenticar la vuelve a pedir firmando: a su propia casa si el
+      // agente es de ahí; si es de otra casa, le pide a la suya que resuelva «para» él (la casa
+      // firma con su llave de dominio y la otra decide). La tarjeta se verifica igual al llegar.
+      if (!(e.permanent && this.auth)) throw e;
+      if (domain === this.auth.domain) card = await this._get(url, { authorization: this.auth.header('GET', `/agents/${encodeURIComponent(local)}`) });
+      else if (this.auth.url) { const p = `/resolve/${encodeURIComponent(`${local}@${domain}`)}`; const { presence: _p, ...c } = await this._get(`${this.auth.url}${p}`, { authorization: this.auth.header('GET', p) }); card = c; }
+      else throw e;
+    }
     const value = await this._verifyAgentCard(card, dc, address, local, domain);
-    this._remember(key, value);
+    this._remember(value.visibility === 'secret' ? (keyPara || `${key}|for:${this.auth?.domain || 'self'}`) : key, value);
     return value;
   }
 
@@ -161,12 +184,13 @@ export class Resolver {
 
   // Igual que agentCard, pero si el sobre viene firmado con una clave que la tarjeta en caché no
   // reconoce (rotación reciente), refresca la tarjeta una vez antes de rechazar.
-  async agentCardForKid(address, kid) {
-    let card = await this.agentCard(address);
+  async agentCardForKid(address, kid, opts = {}) {
+    let card = await this.agentCard(address, opts);
     if (!Resolver.acceptedKids(card).includes(kid)) {
       const { local, domain } = parseAddress(address);
       this.invalidate(`agent:${local}@${domain}`);
-      card = await this.agentCard(address);
+      if (opts.onBehalfOf) this.invalidate(`agent:${local}@${domain}|for:${String(opts.onBehalfOf).toLowerCase()}`);
+      card = await this.agentCard(address, opts);
     }
     return card;
   }

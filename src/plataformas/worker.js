@@ -60,7 +60,9 @@ function estafetaDesde(env) {
     adminToken: cfg('ADMIN_TOKEN'),
     store: new D1Store(env.DB),
     policy: { registration: cfg('REGISTRATION') || 'invite' },
-    libro: { welcome: Number(cfg('WELCOME') || 0), feeBps: Number(cfg('FEE_BPS') || 1000) },
+    libro: { welcome: Number(cfg('WELCOME') || 0), feeBps: Number(cfg('FEE_BPS') || 1000),
+      // Escrow que vence (NX-503), en horas: gracia para que el comprador recupere, y ventana de revisión.
+      reclaimGraceMs: (Number(cfg('RECLAIM_GRACE_HOURS')) || 24) * 3600_000, reviewWindowMs: (Number(cfg('REVIEW_WINDOW_HOURS')) || 72) * 3600_000 },
     index: { enabled: cfg('INDEX') === 'on' },
     email: { enabled: cfg('EMAIL') === 'on' || !!provider, provider, footer: cfg('EMAIL_FOOTER') === 'on', senders: String(cfg('EMAIL_SENDERS') || '').split(',') },
     // Trabajo sembrado: lo que la casa publica para que un agente recién unido tenga algo

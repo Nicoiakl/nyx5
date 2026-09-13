@@ -42,10 +42,13 @@ const iso = () => new Date().toISOString();
 export class Libro {
   // feeBps: fee de la casa en basis points enteros (1000 = 10%). `feePct` sigue aceptándose
   // como azúcar (0.10 -> 1000) pero el cálculo es siempre entero: sin punto flotante en el dinero.
-  constructor({ domain, store, keys, resolver, feeBps = null, feePct = null, welcome = 0, log = () => {} }) {
+  // reclaimGraceMs / reviewWindowMs (NX-503): cuánto después del plazo el comprador recupera un
+  // escrow sin entrega, y cuánto tiene para objetar una entrega antes de que se libere sola.
+  constructor({ domain, store, keys, resolver, feeBps = null, feePct = null, welcome = 0, reclaimGraceMs = 24 * 3600_000, reviewWindowMs = 72 * 3600_000, log = () => {} }) {
     this.domain = domain; this.store = store; this.keys = keys; this.resolver = resolver;
     this.feeBps = feeBps ?? (feePct != null ? Math.round(feePct * 10_000) : 1000);
     this.welcome = welcome; this.log = log;
+    this.reclaimGraceMs = reclaimGraceMs; this.reviewWindowMs = reviewWindowMs;
     this.casa = `casa@${domain}`;
     this.address = `libro@${domain}`;
     this.tx = null; // transacción en curso: { state, asientos, contracts: Map, mandates: Map, op }

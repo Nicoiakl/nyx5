@@ -143,6 +143,43 @@ const ops = {
     return { result: { contract: c, asiento }, recibos: [{ to: parties(c), thread: c.id, body: { contract: c, asiento } }] };
   },
 
+  // --- escrow que vence (NX-503): el comprador recupera; una entrega sin objeción se libera ---
+  // Antes un contrato vencido sólo mandaba un aviso y la plata quedaba retenida para siempre.
+  // reclaim: sólo el comprador, sólo sin entrega, y sólo pasado el plazo más la gracia de la casa.
+  async reclaim(ctx) {
+    const { libro, from, body } = ctx;
+    const c = await getContract(libro, body.contract);
+    must(c.kind === 'escrow', 409, 'reclaim only applies to escrow');
+    must(from === c.buyer, 403, 'only the buyer reclaims an expired escrow');
+    must(c.state === 'held', 409, c.state === 'delivered' ? 'the seller already delivered: refund needs the seller or the arbiter, or the review window' : `state ${c.state}`);
+    const plazo = Date.parse(c.terms?.deadline || '');
+    must(!Number.isNaN(plazo), 409, 'this escrow has no deadline: only the seller or the arbiter can refund it');
+    const desde = plazo + libro.reclaimGraceMs;
+    must(Date.now() >= desde, 409, `the deadline plus the grace period has not passed yet (reclaimable from ${new Date(desde).toISOString()})`);
+    const asiento = await libro.refund(c.id, c.buyer, c.amount, `escrow vencido ${c.id}: ${c.concept}`, { contract: c.id, kind: 'reclaim' }, { op: ctx.env.id, op_sha256: ctx.opHash });
+    c.state = 'refunded';
+    record(libro, c, 'reclaim', from, { asiento: asiento.id, deadline: c.terms.deadline });
+    return { result: { contract: c, asiento }, recibos: [{ to: parties(c), thread: c.id, body: { contract: c, asiento } }] };
+  },
+  // expire: lo firma la CASA (libro@) desde el reloj, nunca una parte. Entregado, con plazo vencido,
+  // y pasada la ventana de revisión sin que nadie devolviera ni liberara: se libera al vendedor.
+  // «Sin disputa» quiere decir que ni el comprador ni el árbitro hicieron refund en la ventana.
+  async expire(ctx) {
+    const { libro, from, body } = ctx;
+    must(from === libro.address, 403, 'only the house settles an expired escrow');
+    const c = await getContract(libro, body.contract);
+    must(c.kind === 'escrow' && c.state === 'delivered', 409, `state ${c.state}, expected a delivered escrow`);
+    const plazo = Date.parse(c.terms?.deadline || '');
+    must(!Number.isNaN(plazo), 409, 'no deadline: a delivery without a deadline waits for the buyer or the arbiter');
+    const entregado = Date.parse(c.history.findLast?.((h) => h.op === 'deliver')?.at || c.history.filter((h) => h.op === 'deliver').at(-1)?.at || '');
+    const desde = Math.max(plazo, entregado || 0) + libro.reviewWindowMs;
+    must(Date.now() >= desde, 409, `the review window is still open (until ${new Date(desde).toISOString()})`);
+    const asiento = await libro.release(c.id, c.seller, c.amount, `liberación por ventana vencida ${c.id}: ${c.concept}`, { contract: c.id, kind: 'expire' }, { op: ctx.env.id, op_sha256: ctx.opHash }, c.referrer);
+    c.state = 'released';
+    record(libro, c, 'expire', from, { asiento: asiento.id, review_until: new Date(desde).toISOString() });
+    return { result: { contract: c, asiento }, recibos: [{ to: parties(c), thread: c.id, body: { contract: c, asiento, note: 'delivered, deadline passed, no objection within the review window' } }] };
+  },
+
   // --- fianza: el que afirma deposita; si la verificación lo derriba, la pierde ---
   async bond(ctx) {
     const { libro, from, body } = ctx;
