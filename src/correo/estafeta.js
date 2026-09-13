@@ -174,7 +174,11 @@ export class Estafeta {
     // Agentes de sistema, firman con la clave del dominio:
     //   postmaster@ -> avisos de entrega y rebotes    libro@ -> operaciones y recibos del Libro
     if (!await this.store.getAgent('postmaster')) await this.registerAgent({ local: 'postmaster', sig: this.keys.sig, capabilities: { accepts: [] }, inbox: { policy: 'allowlist', allowlist: [] } });
-    if (!await this.store.getAgent('libro')) await this.registerAgent({ local: 'libro', sig: this.keys.sig, capabilities: { accepts: [MEDIA.op], libro: { fee_bps: this.libro.feeBps, ops: this.libro.ops } }, inbox: { policy: 'open' } });
+    // La tarjeta de libro@ anuncia las operaciones y el fee: se re-certifica cuando cambian (en
+    // producción decía las ops de hace una semana: ni pay, ni reclaim, ni expire).
+    const libroRec = await this.store.getAgent('libro');
+    const libroCaps = { accepts: [MEDIA.op], libro: { fee_bps: this.libro.feeBps, ops: this.libro.ops } };
+    if (!libroRec || canonical(libroRec.capabilities?.libro || {}) !== canonical(libroCaps.libro)) await this.registerAgent({ local: 'libro', sig: this.keys.sig, capabilities: libroCaps, inbox: { policy: 'open' } });
     // verifica@ — el evaluador de referencia de la casa. Pruebas deterministas y nada más: un
     // verificador que se equivoca castiga a un inocente. Su tarjeta declara cuáles puede correr
     // en ESTE runtime (en el edge no hay shell) y se REESCRIBE si eso cambia: al añadir una
