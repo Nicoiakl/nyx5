@@ -451,6 +451,35 @@ test('el canal cuenta la conversación: la respuesta hereda el hilo, wait no con
   assert.equal(nada.datos.message, null, 'since = received del último no debe devolverlo de nuevo');
 });
 
+// Idea de Nicholas (13-sep-2026): sus chats «Sigo Main» y «Rosetta Lab» comparten un conector (el
+// cliente de Claude tiene UNA conexión OAuth por conector), así que una dirección por chat no es
+// viable. Lo viable: proyecto y rol firmados dentro del sobre, y filtro por proyecto en el buzón.
+test('proyecto: dos chats del mismo conector se hablan por proyectos distintos y cada uno espera sólo lo suyo', async () => {
+  const dueno = Agent.create(`multi@${H}`, URL_CASA, { hosts });
+  await dueno.register({ adminToken: 't' });
+  const c = await conectar(dueno, { allowlist: [amiga.address] });
+  const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
+  // La amiga escribe a la misma dirección con dos proyectos; el chat de rosetta sólo ve lo de rosetta.
+  const esperaRosetta = herramienta(c.access_token, 'nyx5_wait', { from: amiga.address, project: 'Rosetta', seconds: 10 });
+  await pausa(300);
+  await amiga.send({ to: c.sub, body: 'para sigo', project: 'sigo', role: 'main' });
+  const ros = await amiga.send({ to: c.sub, body: 'para rosetta', project: 'rosetta', role: 'lab' });
+  const r = await esperaRosetta;
+  assert.equal(r.datos.id, ros.id, 'la espera de rosetta recibió el mensaje de sigo');
+  assert.equal(r.datos.project, 'rosetta'); assert.equal(r.datos.role, 'lab');
+  // El buzón y el historial filtran igual, y el proyecto viaja FIRMADO en el sobre.
+  const bandeja = await herramienta(c.access_token, 'nyx5_inbox', { project: 'sigo' });
+  assert.deepEqual(bandeja.datos.map((m) => m.content.body), ['para sigo']);
+  const hist = await herramienta(c.access_token, 'nyx5_conversation', { with: amiga.address, project: 'rosetta' });
+  assert.deepEqual(hist.datos.map((m) => m.content.body), ['para rosetta']);
+  assert.equal(ros.envelope.extensions['urn:nyx5:ext:proyecto'].project, 'rosetta');
+  // Y el Claude contesta con su proyecto: la amiga puede distinguir de qué chat le hablan.
+  const r2 = await herramienta(c.access_token, 'nyx5_send', { to: amiga.address, body: 'desde rosetta', project: 'rosetta', in_reply_to: ros.id });
+  const llego = await amiga.waitFor((e) => e.id === r2.datos.id, { timeoutMs: 5000 });
+  assert.equal((await amiga.open(llego.envelope)).project, 'rosetta');
+  assert.deepEqual((await amiga.conversations({ project: 'rosetta' })).map((x) => x.with), [c.sub]);
+});
+
 // Defecto real (12-sep-2026): la pantalla de conectar viene marcada en "sólo tú", así que reconectar
 // un Claude reemplazaba su lista por la del dueño y borraba a sus contactos. A Basti, al vencer su
 // conector, le habría cortado las respuestas del agente de Sigo.

@@ -20,7 +20,7 @@
 
 import { FileStore } from '../nucleo/almacen.js';
 import { Resolver, parseAddress } from './resolver.js';
-import { validateEnvelope, applyInboxPolicy, applyEmailPolicy, RateLimiter } from './politica.js';
+import { validateEnvelope, applyInboxPolicy, applyEmailPolicy, RateLimiter, proyectoDe, validarPerfil } from './politica.js';
 import { generateSigningKeys, signObject, verifyObject, signBytes, verifyBytes, canonical, uuid, unb64u, sha256hex } from '../nucleo/crypto.js';
 import { Libro, MEDIA, LibroError } from '../libro/libro.js';
 import { veredicto, pruebasDe, pruebasDisponibles } from '../libro/verifica.js';
@@ -274,7 +274,15 @@ export class Estafeta {
   }
 
   // ---------- agentes ----------
-  async registerAgent({ local, sig, enc = null, capabilities = {}, inbox = { policy: 'open' }, wallet = null, wallets = null, webhook = null, notify_email = null, valid_until = null, delegation = null, welcome = null, custody = null }) {
+  async registerAgent({ local, sig, enc = null, capabilities = {}, inbox = { policy: 'open' }, wallet = null, wallets = null, webhook = null, notify_email = null, valid_until = null, delegation = null, welcome = null, custody = null, group = null, profile = undefined }) {
+    // La ficha viaja validada o no viaja: una clave ajena o un link que no es https la rechazan.
+    let perfil;
+    if (profile !== undefined) { const v = validarPerfil(profile); if (v.error) throw Object.assign(new Error(v.error), { status: 400 }); perfil = v.perfil ? { ...v.perfil, updated: iso() } : null; }
+    // Grupos (13-sep-2026): g.<nombre> es una dirección de grupo. La firma la casa, no tiene llave
+    // de cifrado (los miembros publican las suyas) y sólo nace por crearGrupo. Nadie registra un
+    // nombre g.* por la puerta normal, así que un grupo nunca puede ser suplantado por un agente.
+    if (String(local).startsWith('g.') && !group) throw Object.assign(new Error('names starting with g. are groups: create one with POST /groups'), { status: 409 });
+    if (group && !String(local).startsWith('g.')) throw Object.assign(new Error('a group name starts with g.'), { status: 400 });
     local = String(local).toLowerCase();
     const address = `${local}@${this.domain}`;
     parseAddress(address);
@@ -330,6 +338,9 @@ export class Estafeta {
       ...(billeteras ? { wallets: billeteras } : {}),
       valid_from: iso(), valid_until, previous: previous.slice(0, 3),
       delegation: delegation || undefined,
+      group: group || undefined,
+      // La ficha se conserva entre re-certificaciones salvo que esta llamada la traiga (o la borre con null).
+      profile: profile === undefined ? (prev?.profile || undefined) : (perfil || undefined),
       // Quién guarda las llaves de esta dirección. Sólo lo pone la casa (el conector remoto) y se
       // publica: quien le escribe a una dirección cuya llave guarda la casa tiene derecho a saber
       // que la casa puede leer lo que le llega. Se conserva mientras la llave no cambie.
@@ -348,8 +359,120 @@ export class Estafeta {
       await this.store.putAgent(local, { ...card, webhook, notify_email });
     }
     const gift = welcome ?? this.libro.welcome;
-    if (creado && !prev && !this.isSystem(local) && !delegation && gift > 0) await this.libro.topup(address, gift, 'regalo de bienvenida', { agent: address });
+    if (creado && !prev && !this.isSystem(local) && !delegation && !group && gift > 0) await this.libro.topup(address, gift, 'regalo de bienvenida', { agent: address });
     return card;
+  }
+
+  // ---------- acuse de lectura y presencia (13-sep-2026), los dos opt-in en la tarjeta ----------
+  async _acusesDeLectura(who, ids) {
+    const historial = await this.store.listMailHistory(who.local, { limit: 1000 });
+    for (const id of ids) {
+      const m = historial.find((x) => x.envelope?.id === id);
+      const e = m?.envelope;
+      if (!e || e.type === 'receipt') continue;
+      let fromLocal = ''; try { fromLocal = parseAddress(e.from).local; } catch { continue; }
+      if (e.from === who.address || this.isSystem(fromLocal)) continue;
+      await this._systemSend('postmaster', [e.from], { type: 'receipt', in_reply_to: e.id, thread: e.thread || e.id, content: { media: 'application/nyx5.recibo+json', body: { read_of: e.id, read_by: who.address, read_at: iso() } } });
+    }
+  }
+  // Presencia: «visto por última vez», redondeado a la hora, sólo si la tarjeta declara presence:true.
+  // Un dato por hora y por dirección, en memoria por isolate: cuesta una escritura por hora, no una
+  // por petición. Sin opt-in no se anota nada: presencia sin consentimiento sería vigilancia.
+  _presencia = new Map();
+  async _anotarPresencia(who) {
+    if (who.record?.capabilities?.presence !== true) return;
+    const hora = iso().slice(0, 13) + ':00:00.000Z';
+    if (this._presencia.get(who.local) === hora) return;
+    this._presencia.set(who.local, hora);
+    await this.store.kvPut('presencia', who.local, { last_seen: hora }, now() + 90 * 86_400_000);
+  }
+  async presenciaDe(local) {
+    const rec = await this.store.getAgent(local);
+    if (!rec || rec.revoked || rec.capabilities?.presence !== true) return null;
+    return (await this.store.kvGet('presencia', local))?.last_seen || null;
+  }
+
+  // ---------- grupos: una dirección que reparte el mismo sobre a cada miembro ----------
+  // Nació el 13-sep-2026 del pedido de Nicholas de conversar de a varios (una sala de proyecto con
+  // su Claude, el de Basti y el agente de Sigo). Primera versión: miembros de esta casa. Un sobre
+  // firmado lleva la dirección del grupo, y otra casa no sabría a quién entregarlo sin reescribirlo.
+  static NOMBRE_GRUPO = /^[a-z0-9][a-z0-9._-]{2,40}$/;
+  static MAX_MIEMBROS = 50;
+  // ¿El buzón de `rec` acepta un mensaje normal de `de`? Sólo abierto o lista blanca cuentan: una
+  // estampilla o una prueba de trabajo no se pagan por cada miembro, y un `intro` o un aval no abren
+  // un grupo. Es la regla de consentimiento de los grupos (revisión adversarial del 13-sep-2026: sin
+  // ella, cualquiera metía a cualquiera en un grupo y le saltaba la lista blanca, incluso al
+  // asistente de Sigo, gastándole presupuesto).
+  _aceptaDe(rec, de) {
+    const inbox = rec?.inbox || { policy: 'open' };
+    if (inbox.policy === 'open') return true;
+    if (inbox.policy !== 'allowlist') return false;
+    let dominio = ''; try { dominio = parseAddress(de).domain; } catch { return false; }
+    return (inbox.allowlist || []).some((x) => x === de || x === dominio);
+  }
+  // `nuevos` son los que entran ahora: cada uno tiene que aceptar ya a quien lo agrega.
+  async _miembrosValidos(direcciones, { agregadoPor = null, nuevos = null } = {}) {
+    const lista = [];
+    for (const raw of direcciones) {
+      const dir = String(raw || '').toLowerCase();
+      let p; try { p = parseAddress(dir); } catch { return { error: `not an address: ${dir}` }; }
+      if (p.domain !== this.domain) return { error: `${dir} is not in this house: groups hold members of ${this.domain} only, for now` };
+      const rec = await this.store.getAgent(p.local);
+      if (!rec || rec.revoked) return { error: `${dir} does not exist or is revoked` };
+      if (rec.group || this.isSystem(p.local)) return { error: `${dir} cannot be a member (it is a group or a system address)` };
+      if (agregadoPor && dir !== agregadoPor && (!nuevos || nuevos.has(dir)) && !this._aceptaDe(rec, agregadoPor)) return { error: `${dir} does not accept messages from you: only someone who already lists you as a contact can be added to a group` };
+      if (!lista.includes(dir)) lista.push(dir);
+    }
+    if (lista.length > Estafeta.MAX_MIEMBROS) return { error: `a group holds at most ${Estafeta.MAX_MIEMBROS} members` };
+    return { lista };
+  }
+  _tarjetaDeGrupo(local, group) {
+    return this.registerAgent({
+      local, sig: this.keys.sig, group,
+      capabilities: { accepts: ['text/plain', 'application/json'], group: true },
+      // Sólo quien puede publicar entra al buzón: la política del buzón es la primera puerta y el
+      // reparto vuelve a comprobarlo (un `intro` o un aval no abren un grupo).
+      inbox: { policy: 'allowlist', allowlist: group.post === 'admins' ? group.admins : group.members },
+    });
+  }
+  async crearGrupo(who, b) {
+    const nombre = String(b.name || '').toLowerCase();
+    if (!Estafeta.NOMBRE_GRUPO.test(nombre)) return { status: 400, body: { reason: 'a group name has 3 to 41 characters: letters, digits, . _ -' } };
+    const local = `g.${nombre}`;
+    if (await this.store.getAgent(local)) return { status: 409, body: { reason: `${local}@${this.domain} already exists` } };
+    if (!this.remotoRate.allow(`grupo:${who.address}`)) return { status: 429, body: { reason: 'too many groups; try again in a minute' } };
+    const v = await this._miembrosValidos([who.address, ...(Array.isArray(b.members) ? b.members : [])], { agregadoPor: who.address });
+    if (v.error) return { status: 400, body: { reason: v.error } };
+    const group = { admins: [who.address], members: v.lista, post: b.post === 'admins' ? 'admins' : 'members', max: Estafeta.MAX_MIEMBROS, created: iso() };
+    const card = await this._tarjetaDeGrupo(local, group);
+    await this._evento('group_created', who.address, { group: card.address, members: group.members.length });
+    return { status: 201, body: { address: card.address, group } };
+  }
+  async miembrosGrupo(who, local) {
+    const rec = await this.store.getAgent(local);
+    if (!rec?.group || rec.revoked) return { status: 404, body: { reason: 'no such group' } };
+    if (!rec.group.members.includes(who.address)) return { status: 403, body: { reason: 'only members see who is in a group' } };
+    return { status: 200, body: { address: `${local}@${this.domain}`, group: rec.group } };
+  }
+  async editarGrupo(who, local, b) {
+    const rec = await this.store.getAgent(local);
+    if (!rec?.group || rec.revoked) return { status: 404, body: { reason: 'no such group' } };
+    const g = rec.group;
+    const admin = g.admins.includes(who.address);
+    const add = Array.isArray(b.add) ? b.add.map((x) => String(x).toLowerCase()) : [];
+    const remove = Array.isArray(b.remove) ? b.remove.map((x) => String(x).toLowerCase()) : [];
+    const admins = Array.isArray(b.admins) ? b.admins.map((x) => String(x).toLowerCase()) : [];
+    // Un miembro sólo puede irse; agregar, quitar a otros y nombrar admins es de los admins.
+    if (!admin && (add.length || admins.length || remove.some((x) => x !== who.address))) return { status: 403, body: { reason: 'only an admin changes the members of a group; a member can only leave' } };
+    if (!admin && !g.members.includes(who.address)) return { status: 403, body: { reason: 'not a member of this group' } };
+    const v = await this._miembrosValidos([...g.members.filter((m) => !remove.includes(m)), ...add], { agregadoPor: who.address, nuevos: new Set(add.filter((a) => !g.members.includes(a))) });
+    if (v.error) return { status: 400, body: { reason: v.error } };
+    const nuevosAdmins = [...new Set([...g.admins.filter((a) => v.lista.includes(a)), ...admins.filter((a) => v.lista.includes(a))])];
+    if (!nuevosAdmins.length) return { status: 409, body: { reason: 'a group needs at least one admin: name another admin before leaving' } };
+    const group = { ...g, members: v.lista, admins: nuevosAdmins, updated: iso() };
+    const card = await this._tarjetaDeGrupo(local, group);
+    await this._evento('group_changed', who.address, { group: card.address, members: group.members.length });
+    return { status: 200, body: { address: card.address, group } };
   }
   // El nombre local viaja como clave al almacenamiento: se valida SIEMPRE aquí, no se confía en
   // que el store lo sanee. Sin esto, `GET /agents/..%2Fdomain` leía el archivo del dominio y
@@ -384,12 +507,12 @@ export class Estafeta {
   // ---------- tiempo real e historial ----------
   // Espera el primer sobre PENDIENTE que cumpla el filtro, preguntando cada segundo. Pendiente y no
   // "nuevo": si la respuesta llegó entre que uno mandó y empezó a esperar, se entrega igual.
-  async esperarCorreo(local, { from = null, thread = null, since = null, timeoutMs = 25_000, everyMs = 1000 } = {}) {
+  async esperarCorreo(local, { from = null, thread = null, since = null, project = null, timeoutMs = 25_000, everyMs = 1000 } = {}) {
     const hasta = now() + Math.max(0, timeoutMs);
     const cumple = (m) => {
       const e = m.envelope || {};
       const de = e.extensions?.['urn:nyx5:ext:email']?.from || e.from;
-      return (!from || de === from) && (!thread || e.thread === thread || e.id === thread);
+      return (!from || de === from) && (!thread || e.thread === thread || e.id === thread) && (!project || proyectoDe(e) === project);
     };
     for (;;) {
       const lista = this.store.listMailSince ? await this.store.listMailSince(local, since) : (await this.store.listMail(local)).filter((m) => !since || String(m.received) > since);
@@ -401,8 +524,9 @@ export class Estafeta {
   }
   // La conversación con una dirección (o, sin dirección, la lista de conversaciones): lo recibido,
   // incluido lo confirmado, y lo enviado, que ahora queda en la bandeja con su sobre.
-  async conversacion(local, { con = null, limit = 50 } = {}) {
+  async conversacion(local, { con = null, limit = 50, project = null } = {}) {
     const propia = `${local}@${this.domain}`;
+    const delProyecto = (x) => !project || proyectoDe(x.envelope) === project;
     const recibidos = (await this.store.listMailHistory(local, { limit: 1000 })).map((m) => ({ id: m.envelope.id, dir: 'in', at: m.received, acked: !!m.acked, envelope: m.envelope }));
     const enviados = [];
     const vistos = new Set();
@@ -413,8 +537,14 @@ export class Estafeta {
       if (e.envelope.to.includes(propia)) continue;
       enviados.push({ id: e.envelope.id, dir: 'out', at: e.envelope.created, status: e.status, envelope: e.envelope });
     }
-    const todos = [...recibidos, ...enviados];
-    const contraparte = (x) => (x.dir === 'in' ? (x.envelope.extensions?.['urn:nyx5:ext:email']?.from || x.envelope.from) : (x.envelope.to.find((t) => t !== propia) || x.envelope.to[0]));
+    // Lo enviado sabe si fue leído: el acuse de lectura llegó como recibo de postmaster@ con read_of.
+    const leidos = new Map();
+    for (const r of recibidos) { const b = r.envelope?.content?.body; if (r.envelope?.type === 'receipt' && b?.read_of) leidos.set(b.read_of, { by: b.read_by, at: b.read_at }); }
+    for (const e of enviados) { const l = leidos.get(e.id); if (l) e.read = l; }
+    const todos = [...recibidos, ...enviados].filter(delProyecto);
+    // Un mensaje de grupo se conversa con el GRUPO, no con quien lo escribió.
+    const grupo = (x) => x.envelope.to.find((t) => { try { const p = parseAddress(t); return p.domain === this.domain && p.local.startsWith('g.'); } catch { return false; } });
+    const contraparte = (x) => grupo(x) || (x.dir === 'in' ? (x.envelope.extensions?.['urn:nyx5:ext:email']?.from || x.envelope.from) : (x.envelope.to.find((t) => t !== propia) || x.envelope.to[0]));
     const orden = (a, b) => String(a.at).localeCompare(String(b.at));
     if (con) return todos.filter((x) => contraparte(x) === con || (x.dir === 'out' && x.envelope.to.includes(con))).sort(orden).slice(-limit);
     const mapa = new Map();
@@ -642,7 +772,9 @@ export class Estafeta {
     if (claims.host !== this.authHost) throw Object.assign(new Error(`token issued for another house (host ${claims.host || 'missing'}, expected ${this.authHost})`), { status: 401 });
     if (!verifyBytes(canonical(claims), m[2], rec.sig)) throw Object.assign(new Error('invalid token signature'), { status: 401 });
     if (!await this.store.useNonce(`${claims.address}:${claims.nonce}`, now())) throw Object.assign(new Error('nonce reutilizado'), { status: 401 });
-    return { local, address: claims.address, record: rec };
+    const who = { local, address: claims.address, record: rec };
+    if (domain === this.domain) this._anotarPresencia(who).catch((e) => this.log(`presencia: ${e.message}`));
+    return who;
   }
 
   // ---------- salida: el agente entrega un sobre a su estafeta ----------
@@ -959,6 +1091,27 @@ export class Estafeta {
           if (!r.ok) { rejected.push({ to, code: r.code, reason: r.reason }); continue; }
           for (const rc of r.recibos || []) recibosPendientes.push(rc);
           results[to] = r.result;
+        } else if (rec.group) {
+          // Grupo: la casa NO descifra. Deja el MISMO sobre firmado en el buzón de cada miembro (menos
+          // el remitente, que lo tiene en su bandeja de salida) y en el del grupo, que es su historial.
+          // La membresía se comprueba aquí otra vez: la política del buzón deja pasar un `intro` o un
+          // aval, y eso no puede abrir un grupo.
+          const posters = rec.group.post === 'admins' ? rec.group.admins : rec.group.members;
+          if (!posters.includes(env.from)) { rejected.push({ to, code: 403, reason: 'only members post to this group' }); continue; }
+          const meta = { from_verified: true, relay_verified: relayVerified, sender_kid: env.signature.kid, group: to };
+          // Cada miembro recibe sólo si SU buzón acepta a quien escribe: el grupo no es una puerta
+          // trasera a una lista blanca. Y cada entrega extra cuenta en el límite de tasa del remitente:
+          // un grupo de 50 no multiplica por 50 lo que un dominio puede mandar por minuto.
+          let omitidos = 0;
+          for (const dir of rec.group.members) {
+            if (dir === env.from) continue;
+            const recM = await this.store.getAgent(parseAddress(dir).local);
+            if (!recM || recM.revoked || !this._aceptaDe(recM, env.from)) { omitidos++; continue; }
+            if (mails.length && !this.rate.allow(fromDomain)) { rejected.push({ to, code: 429, reason: 'rate limit for the sending domain (group delivery)' }); break; }
+            mails.push({ local: parseAddress(dir).local, envelope: env, meta });
+          }
+          mails.push({ local, envelope: env, meta });
+          results[to] = { members: rec.group.members.length, skipped: omitidos };
         } else if (p.stamp) {
           // Una estampilla paga UN buzón: el sobre declara un monto, no un monto por destinatario.
           if (stampUsed) { rejected.push({ to, code: 402, reason: 'the envelope stamp was already spent on another recipient' }); continue; }
@@ -1203,6 +1356,43 @@ export class Estafeta {
         if ((rx.headers.authorization || '') !== `Bearer ${this.adminToken}`) return send(401, { reason: 'only the house configures assistants' });
         return this._adminAsistente(rx, m[1] ? decodeURIComponent(m[1]).toLowerCase() : null, m[2] || null);
       }
+      // ----- Ficha pública: la edita el dueño de la dirección o el dueño de su delegación -----
+      if (rx.method === 'POST' && (m = /^\/agents\/([^/]+)\/profile$/.exec(path))) {
+        const who = await this._authenticate(rx, path);
+        const l = decodeURIComponent(m[1]).toLowerCase();
+        const rec = Estafeta.validLocal(l) ? await this.store.getAgent(l) : null;
+        if (!rec || rec.revoked) return send(404, { reason: 'no such agent' });
+        if (who.record.delegation?.scope?.messages_only && who.local !== l) return send(403, { reason: 'a messages-only address cannot edit another profile' });
+        if (who.local !== l && who.address !== rec.delegation?.by) return send(403, { reason: 'only the owner of an address (or of its delegation) edits its profile' });
+        const v = validarPerfil(rx.body?.profile === undefined ? null : rx.body.profile);
+        if (v.error) return send(400, { reason: v.error });
+        // Re-certificar sin tocar nada más: mismas llaves, misma delegación, mismo buzón.
+        const { certification: _c, webhook, notify_email, ...cuerpo } = rec;
+        const card = signObject({ ...cuerpo, profile: v.perfil ? { ...v.perfil, updated: iso() } : undefined }, this.keys, 'certification');
+        await this.store.putAgent(l, { ...card, webhook, notify_email });
+        this.resolver.invalidate(`agent:${l}@${this.domain}`);
+        return send(200, { address: card.address, profile: card.profile || null });
+      }
+      // ----- Presencia: «visto por última vez», sólo con opt-in del dueño -----
+      if (rx.method === 'GET' && (m = /^\/agents\/([^/]+)\/presence$/.exec(path))) {
+        if (!this.rate.allow(`resolve:${rx.ip || 'x'}`)) return send(429, { reason: 'too many requests' });
+        const l = decodeURIComponent(m[1]).toLowerCase();
+        if (!Estafeta.validLocal(l)) return send(400, { reason: 'invalid agent name' });
+        return send(200, { address: `${l}@${this.domain}`, last_seen: await this.presenciaDe(l) });
+      }
+      // ----- Grupos: crear, ver miembros, agregar, quitar, irse -----
+      if (rx.method === 'POST' && path === '/groups') {
+        const who = await this._authenticate(rx, path);
+        const r = await this.crearGrupo(who, rx.body || {});
+        return send(r.status, r.body);
+      }
+      if ((m = /^\/groups\/([^/]+)\/members$/.exec(path))) {
+        const who = await this._authenticate(rx, path);
+        const l = decodeURIComponent(m[1]).toLowerCase();
+        if (!Estafeta.validLocal(l)) return send(400, { reason: 'invalid group name' });
+        const r = rx.method === 'GET' ? await this.miembrosGrupo(who, l) : rx.method === 'POST' ? await this.editarGrupo(who, l, rx.body || {}) : { status: 405, body: { reason: 'method not allowed here' } };
+        return send(r.status, r.body);
+      }
       // ----- Contactos: la casa conecta dos direcciones suyas en los dos sentidos -----
       if (rx.method === 'POST' && path === '/admin/contacts') {
         if ((rx.headers.authorization || '') !== `Bearer ${this.adminToken}`) return send(401, { reason: 'only the house connects contacts' });
@@ -1416,6 +1606,9 @@ export class Estafeta {
         const { ids = [] } = rx.body || {};
         const acked = [];
         for (const id of ids) if (await this.store.ackMail(who.local, id)) acked.push(id);
+        // Acuse de lectura (13-sep-2026), opt-in del que lee: «entregado» no decía si alguien leyó.
+        // Sale de la casa, que da fe de la hora en que ese buzón confirmó; sólo la primera vez.
+        if (acked.length && who.record.capabilities?.read_receipts === true) await this._acusesDeLectura(who, acked);
         return send(200, { acked });
       }
       // ----- Tiempo real, historial, conectores y tarjetas ajenas -----
@@ -1424,7 +1617,7 @@ export class Estafeta {
         if (who.local !== decodeURIComponent(m[1]).toLowerCase()) return send(403, { reason: 'not your mailbox' });
         const q = Object.fromEntries(rx.query);
         const segundos = Math.max(0, Math.min(Number(q.timeout ?? 25) || 0, 90));
-        const msg = await this.esperarCorreo(who.local, { from: q.from || null, thread: q.thread || null, since: q.since || null, timeoutMs: segundos * 1000 });
+        const msg = await this.esperarCorreo(who.local, { from: q.from || null, thread: q.thread || null, since: q.since || null, project: q.project ? String(q.project).trim().toLowerCase() : null, timeoutMs: segundos * 1000 });
         return send(200, { message: msg });
       }
       if (rx.method === 'GET' && (m = /^\/conversations\/([^/]+)$/.exec(path))) {
@@ -1432,8 +1625,9 @@ export class Estafeta {
         if (who.local !== decodeURIComponent(m[1]).toLowerCase()) return send(403, { reason: 'not your conversations' });
         const con = rx.query.get('with');
         const limit = Math.max(1, Math.min(Number(rx.query.get('limit') || 50) || 50, 500));
-        if (con) return send(200, { with: con.toLowerCase(), messages: await this.conversacion(who.local, { con: con.toLowerCase(), limit }) });
-        return send(200, { conversations: await this.conversacion(who.local) });
+        const project = rx.query.get('project') ? String(rx.query.get('project')).trim().toLowerCase() : null;
+        if (con) return send(200, { with: con.toLowerCase(), messages: await this.conversacion(who.local, { con: con.toLowerCase(), limit, project }) });
+        return send(200, { conversations: await this.conversacion(who.local, { project }) });
       }
       if (rx.method === 'GET' && (m = /^\/delegations\/([^/]+)$/.exec(path))) {
         const who = await this._authenticate(rx, path);
@@ -1465,7 +1659,11 @@ export class Estafeta {
         try {
           const { _estafeta, _domain, delegation, ...card } = await this.resolver.agentCard(addr);
           const { _parent, ...d } = delegation || {};
-          return send(200, { ...card, ...(delegation ? { delegation: d } : {}) });
+          // La presencia va FUERA de la tarjeta firmada (no altera la certificación) y sólo si es de
+          // esta casa y el dueño la activó.
+          const p = parseAddress(addr);
+          const last_seen = p.domain === this.domain ? await this.presenciaDe(p.local) : null;
+          return send(200, { ...card, ...(delegation ? { delegation: d } : {}), ...(last_seen ? { presence: { last_seen } } : {}) });
         } catch (e) { return send(e.permanent ? 404 : 502, { reason: e.message }); }
       }
       // ----- Libro (lecturas directas; las operaciones van por correo a libro@) -----

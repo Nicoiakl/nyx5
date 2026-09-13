@@ -3,6 +3,7 @@
 // Las operaciones del Libro son sobres firmados a libro@<casa>; las respuestas vuelven como recibos al buzón.
 
 import { Resolver, parseAddress } from './resolver.js';
+import { EXT_PROYECTO, proyectoDe, rolDe } from './politica.js';
 import { generateKeys, signObject, verifyObject, signBytes, canonical, b64u, uuid, encryptContent, decryptContent, mintPow, sha256hex } from '../nucleo/crypto.js';
 import { Libro, MEDIA } from '../libro/libro.js';
 
@@ -78,9 +79,11 @@ export class Agent {
   }
 
   // ---------- envío ----------
-  async send({ to, type = 'message', body, media, encrypt = true, thread, inReplyTo, expires, deliverAfter, attachments, extensions, receipt }) {
+  async send({ to, type = 'message', body, media, encrypt = true, thread, inReplyTo, expires, deliverAfter, attachments, extensions, receipt, project, role }) {
     const recipients = Array.isArray(to) ? to : [to];
     const id = uuid();
+    // Proyecto y rol viajan como extensión firmada: el buzón del otro lado filtra por proyecto.
+    if (project || role) extensions = { ...(extensions || {}), [EXT_PROYECTO]: { ...(project ? { project: String(project).trim().toLowerCase().slice(0, 40) } : {}), ...(role ? { role: String(role).trim().slice(0, 40) } : {}) } };
     // Un sobre que responde a otro hereda su hilo. Defecto real (12-sep-2026): las respuestas iban con
     // in_reply_to y thread null, y la conversación quedaba como mensajes sueltos; el historial firmado
     // es el producto, y sin hilo no es historial. La casa no puede rellenarlo: el sobre va firmado.
@@ -93,17 +96,31 @@ export class Agent {
     const content = { media: media || (typeof body === 'string' ? 'text/plain' : 'application/json'), body };
 
     // Tarjetas de los destinatarios: para cifrar (clave enc) y para saber si exigen proof-of-work.
+    // La tarjeta de un grupo cambia cada vez que entra o sale alguien: se pide fresca, siempre.
+    // Defecto real de la primera prueba: con la tarjeta en caché, el miembro nuevo recibía un sobre
+    // que no podía abrir.
+    for (const r of recipients) { try { if (parseAddress(r).local.startsWith('g.')) this.resolver.invalidate(`agent:${r}`); } catch { /* dirección inválida: la resolución lo dirá */ } }
     const cards = await Promise.all(recipients.map((r) => this.resolver.agentCard(r).catch((e) => ({ address: r, _error: e.message }))));
     const missing = cards.filter((c) => c._error);
     if (missing.length) throw new Error(`could not resolve: ${missing.map((c) => `${c.address} (${c._error})`).join(', ')}`);
 
+    // Un grupo no tiene llave: se cifra para cada uno de sus miembros, que sí la publican. La casa
+    // reparte el sobre tal cual y nunca puede abrirlo.
+    const lectores = [];
+    for (const c of cards) {
+      if (!c.group) { lectores.push({ address: c.address, enc: c.enc }); continue; }
+      for (const dir of c.group.members) {
+        if (dir === this.address) continue;
+        const mc = await this.resolver.agentCard(dir).catch(() => null);
+        lectores.push({ address: dir, enc: mc?.enc || null });
+      }
+    }
     let env;
-    if (encrypt && cards.every((c) => c.enc)) {
+    if (encrypt && lectores.every((l) => l.enc)) {
       // El remitente también recibe una copia de la llave del contenido. No es un destinatario más:
       // `to` no cambia y la AAD tampoco. Sin esto, lo que uno mismo mandó cifrado es ilegible para
       // uno mismo, y el historial de una conversación queda con la mitad de los mensajes en blanco.
-      const lectores = cards.map((c) => ({ address: c.address, enc: c.enc }));
-      if (this.keys.enc && !recipients.includes(this.address)) lectores.push({ address: this.address, enc: this.keys.enc });
+      if (this.keys.enc && !lectores.some((l) => l.address === this.address)) lectores.push({ address: this.address, enc: this.keys.enc });
       env = { ...base, encrypted: await encryptContent(content, lectores, aad(base)) };
     } else {
       if (encrypt === 'required') throw new Error('a recipient does not publish an encryption key');
@@ -237,15 +254,31 @@ export class Agent {
 
   // ---------- conversación y tiempo real ----------
   // El historial vive en la casa, no en la sesión: desde otro dispositivo se retoma igual.
-  async conversation(withAddress, { limit = 30 } = {}) {
-    const q = new URLSearchParams({ with: String(withAddress), limit: String(limit) });
+  async conversation(withAddress, { limit = 30, project = null } = {}) {
+    const q = new URLSearchParams({ with: String(withAddress), limit: String(limit), ...(project ? { project } : {}) });
     return (await this._call('GET', `/conversations/${this.local}?${q}`)).messages;
   }
-  async conversations() { return (await this._call('GET', `/conversations/${this.local}`)).conversations; }
+  async conversations({ project = null } = {}) { const q = project ? `?${new URLSearchParams({ project })}` : ''; return (await this._call('GET', `/conversations/${this.local}${q}`)).conversations; }
+  // Ficha pública: la propia (o la de un delegado propio) se declara; la de cualquiera se lee de su tarjeta.
+  setProfile(profile, { of = null } = {}) { const l = of ? parseAddress(of).local : this.local; return this._call('POST', `/agents/${encodeURIComponent(l)}/profile`, { profile }); }
+  async profile(address) { this.resolver.invalidate(`agent:${String(address).toLowerCase()}`); const c = await this.resolver.agentCard(address); return { address: c.address, profile: c.profile || null, capabilities: c.capabilities || {} }; }
+  // «Visto por última vez» de una dirección de una casa (null si el dueño no lo activó).
+  async presence(address) {
+    const { local, domain } = parseAddress(address);
+    const r = await this._callAt(domain, 'GET', `/agents/${encodeURIComponent(local)}/presence`).catch(() => null);
+    return r?.last_seen || null;
+  }
+  // ---------- grupos ----------
+  // `g` acepta la dirección completa (g.equipo@casa) o el nombre (equipo). Los miembros son de la casa.
+  static _localDeGrupo(g) { const s = String(g || '').toLowerCase(); const l = s.includes('@') ? parseAddress(s).local : s; return l.startsWith('g.') ? l : `g.${l}`; }
+  createGroup(name, { members = [], post = 'members' } = {}) { return this._call('POST', '/groups', { name: String(name).replace(/^g\./, ''), members, post }); }
+  group(g) { return this._call('GET', `/groups/${encodeURIComponent(Agent._localDeGrupo(g))}/members`); }
+  editGroup(g, { add = [], remove = [], admins = [] } = {}) { return this._call('POST', `/groups/${encodeURIComponent(Agent._localDeGrupo(g))}/members`, { add, remove, admins }); }
+  leaveGroup(g) { return this.editGroup(g, { remove: [this.address] }); }
   // Espera el próximo sobre pendiente que cumpla el filtro. No sondea desde aquí: la casa responde
   // apenas llega. Devuelve null si se acabó el tiempo sin nada.
-  async wait({ from, thread, since, seconds = 25 } = {}) {
-    const q = new URLSearchParams(Object.entries({ from, thread, since, timeout: String(seconds) }).filter(([, v]) => v != null && v !== ''));
+  async wait({ from, thread, since, project, seconds = 25 } = {}) {
+    const q = new URLSearchParams(Object.entries({ from, thread, since, project, timeout: String(seconds) }).filter(([, v]) => v != null && v !== ''));
     return (await this._call('GET', `/mailbox/${this.local}/wait?${q}`, undefined, { timeoutMs: (Number(seconds) + 15) * 1000 })).message;
   }
   // Quién soy y qué puedo hacer: la tarjeta certificada, resumida.
@@ -266,9 +299,11 @@ export class Agent {
     const verified = Resolver.acceptedKids(card).includes(envelope.signature?.kid) && verifyObject(envelope, envelope.signature.kid);
     if (!verified) throw new Error(`invalid signature on envelope ${envelope.id} from ${envelope.from}`);
     if (envelope.expires && Date.parse(envelope.expires) < Date.now()) throw new Error(`sobre vencido: ${envelope.id}`);
-    if (!envelope.encrypted && !envelope.to.includes(this.address) && envelope.from !== this.address) throw new Error(`envelope ${envelope.id} is not addressed to ${this.address}`);
+    // Un sobre a un grupo llega con la dirección del grupo, no la del miembro que lo abre.
+    const aGrupo = envelope.to.some((t) => { try { return parseAddress(t).local.startsWith('g.'); } catch { return false; } });
+    if (!envelope.encrypted && !aGrupo && !envelope.to.includes(this.address) && envelope.from !== this.address) throw new Error(`envelope ${envelope.id} is not addressed to ${this.address}`);
     const content = envelope.encrypted ? await decryptContent(envelope.encrypted, this.address, this.keys, aad(envelope)) : envelope.content;
-    return { id: envelope.id, from: envelope.from, to: envelope.to, type: envelope.type, thread: envelope.thread, in_reply_to: envelope.in_reply_to, created: envelope.created, encrypted: !!envelope.encrypted, sender: card, content };
+    return { id: envelope.id, from: envelope.from, to: envelope.to, type: envelope.type, thread: envelope.thread, in_reply_to: envelope.in_reply_to, created: envelope.created, encrypted: !!envelope.encrypted, project: proyectoDe(envelope), role: rolDe(envelope), sender: card, content };
   }
 
   // Espera hasta que llegue un sobre que cumpla el filtro (útil para pruebas y flujos síncronos).

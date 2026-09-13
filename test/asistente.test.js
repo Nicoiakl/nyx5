@@ -112,6 +112,17 @@ test('al llegar al tope deja de llamar a la API, avisa a quien pregunta y, una v
   assert.match((await duena.open(aviso.envelope)).content.body, /llegó al tope/);
 });
 
+// Revisión del 13-sep-2026: un grupo no puede ser el camino para gastarle el presupuesto a un
+// asistente. Aunque un contacto suyo lo meta en un grupo, el asistente sólo contesta correo directo.
+test('un asistente no contesta mensajes de grupo, aunque quien escribe esté en su lista', async () => {
+  const n = pedidos.length;
+  const g = await pregunton.createGroup('sala', { members: [asis.address] });
+  await pregunton.send({ to: g.address, body: 'gasta en el grupo' });
+  await new Promise((r) => setTimeout(r, 600));
+  await casa.tick({ programado: true });
+  assert.equal(pedidos.length, n, 'el asistente llamó a la API por un mensaje de grupo');
+});
+
 test('no le contesta a quien no está en su lista, ni a los agentes de sistema', async () => {
   const n = pedidos.length;
   await extrano.send({ to: asis.address, body: 'gasta tu presupuesto en mí' });

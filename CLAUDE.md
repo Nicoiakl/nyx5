@@ -26,7 +26,7 @@ src/correo/agente.js     cliente: register (admin|invite|open), rotateKeys, dire
 src/libro/libro.js       kernel: post() y las primitivas (topup, transfer, hold, release, refund), verifyQuote, handle(), stamp()
 src/libro/contratos.js   máquinas de estado sobre el kernel: ops {accept, deliver, release, refund, bond, forfeit, mandate, charge, revoke, pay, balance, statement, contract}; CONTRATOS {spot, escrow, metered, bond}
 src/libro/errores.js     LibroError(code, message)
-src/puentes/herramientas.js las 20 herramientas MCP, UN módulo para los dos puentes (MENSAJERIA = las 12 del remoto)
+src/puentes/herramientas.js las 22 herramientas MCP, UN módulo para los dos puentes (MENSAJERIA = las 13 del remoto)
 src/puentes/mcp.js       puente MCP por stdio (la llave del agente en el disco del usuario)
 src/puentes/mcp-remoto.js puente MCP por Streamable HTTP en /mcp (subagente delegado; llave en la bóveda)
 src/puentes/oauth.js     servidor OAuth 2.1 del conector: RFC 9728/8414/7591, PKCE S256, rotación de refresco
@@ -46,7 +46,7 @@ src/puentes/x402.js      adaptador x402 v2: PAYMENT-REQUIRED / PAYMENT-SIGNATURE
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos -> `npm test` (226)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil -> `npm test` (238)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
 ```
@@ -54,7 +54,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 226 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 238 pruebas, todas deben pasar antes de cualquier commit
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
 npm run demo             # correo: tarea cifrada, respuesta, acuse

@@ -11,6 +11,52 @@ import { parseAddress } from './resolver.js';
 
 export const TYPES = new Set(['message', 'task', 'result', 'receipt', 'intro']);
 
+// Proyecto y rol de un sobre (13-sep-2026): un mismo dueño con varios chats sobre un solo conector
+// distingue «Sigo Main» de «Rosetta Lab» con una extensión firmada dentro del sobre, y el buzón
+// filtra por ella. Va en claro (las extensiones no se cifran): el nombre de un proyecto no es secreto.
+export const EXT_PROYECTO = 'urn:nyx5:ext:proyecto';
+export const proyectoDe = (env) => { const p = env?.extensions?.[EXT_PROYECTO]?.project; return typeof p === 'string' ? p.trim().toLowerCase() : null; };
+export const rolDe = (env) => { const r = env?.extensions?.[EXT_PROYECTO]?.role; return typeof r === 'string' ? r.trim().slice(0, 40) : null; };
+
+// Ficha pública del agente (13-sep-2026): qué hace, en qué idiomas, de quién es, con qué etiquetas.
+// Va DENTRO de la tarjeta certificada, la firma el dueño al declararla y la casa al certificarla.
+// Vocabulario CERRADO, como el alcance de un mandato: una clave desconocida se rechaza nombrándola,
+// porque una ficha es lo que otros agentes leen antes de contratar, y no puede llevar de todo.
+// Lo declarado NO está verificado (eso es el sello de dueño, otra pieza): es lo que el dueño dice.
+const PERFIL_CLAVES = ['display_name', 'summary', 'description', 'languages', 'tags', 'owner', 'links'];
+const limpio = (s, max) => String(s).replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, max);
+export function validarPerfil(p) {
+  if (p === null) return { perfil: null };
+  if (typeof p !== 'object' || Array.isArray(p)) return { error: 'profile must be an object' };
+  const ajenas = Object.keys(p).filter((k) => !PERFIL_CLAVES.includes(k));
+  if (ajenas.length) return { error: `profile carries ${ajenas.map((k) => JSON.stringify(k)).join(', ')}, which this house does not publish; it accepts: ${PERFIL_CLAVES.join(', ')}` };
+  const out = {};
+  for (const [k, max] of [['display_name', 80], ['summary', 280], ['description', 2000]]) {
+    if (p[k] == null) continue;
+    if (typeof p[k] !== 'string') return { error: `profile.${k} must be a string` };
+    const v = limpio(p[k], max); if (v) out[k] = v;
+  }
+  if (p.languages != null) {
+    if (!Array.isArray(p.languages) || p.languages.length > 10 || !p.languages.every((l) => typeof l === 'string' && /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(l))) return { error: 'profile.languages must be up to 10 language tags like "es", "en-US"' };
+    out.languages = [...new Set(p.languages)];
+  }
+  if (p.tags != null) {
+    if (!Array.isArray(p.tags) || p.tags.length > 20 || !p.tags.every((t) => typeof t === 'string' && /^[a-z0-9-]{1,32}$/.test(t))) return { error: 'profile.tags must be up to 20 tags of lowercase letters, digits and dashes' };
+    out.tags = [...new Set(p.tags)];
+  }
+  if (p.owner != null) {
+    const o = p.owner;
+    if (typeof o !== 'object' || Array.isArray(o) || !['person', 'org'].includes(o.kind) || typeof o.name !== 'string' || Object.keys(o).some((k) => !['kind', 'name'].includes(k))) return { error: 'profile.owner must be { kind: person|org, name }' };
+    out.owner = { kind: o.kind, name: limpio(o.name, 120) };
+  }
+  if (p.links != null) {
+    if (!Array.isArray(p.links) || p.links.length > 5) return { error: 'profile.links must be up to 5 https URLs' };
+    for (const l of p.links) { let u; try { u = new URL(String(l)); } catch { u = null; } if (!u || u.protocol !== 'https:' || String(l).length > 200) return { error: `profile.links: not an https URL: ${String(l).slice(0, 60)}` }; }
+    out.links = [...new Set(p.links.map(String))];
+  }
+  return { perfil: out };
+}
+
 export function validateEnvelope(env, { maxBytes = 1_048_576 } = {}) {
   const fail = (reason) => ({ ok: false, code: 400, reason });
   if (!env || typeof env !== 'object') return fail('sobre no es un objeto');

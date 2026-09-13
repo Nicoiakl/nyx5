@@ -20,8 +20,8 @@ const GARANTIA = /signed|signature|mailbox|entry|ledger|receipt|held|hold|verif|
 // palabra que ancla el MOMENTO de uso o la capacidad (no el mecanismo)
 const CAPACIDAD = /use it|when you|find|delegate|offer|accept|check it|check|move|even if|do not know|before |take |leave yourself/i;
 
-test('D1 · hay 20 herramientas y ninguna description quedó como la vieja documentación de API', () => {
-  assert.equal(tools.length, 20, `se esperaban 20 herramientas, hay ${tools.length}`);
+test('D1 · hay 22 herramientas y ninguna description quedó como la vieja documentación de API', () => {
+  assert.equal(tools.length, 22, `se esperaban 22 herramientas, hay ${tools.length}`);
   // ninguna debe empezar describiendo el mecanismo ("Envía un sobre...", "Operación genérica...")
   for (const t of tools) {
     assert.ok(!/^(Envía un sobre|Operación genérica del Libro|Lee los sobres pendientes)/.test(t.description),

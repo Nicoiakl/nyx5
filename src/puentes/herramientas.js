@@ -7,6 +7,8 @@
 // Las descripciones son lo único que el modelo lee para decidir si usa Nyx5: dicen la capacidad,
 // la garantía y el momento de uso, no el mecanismo. Las cuida test/mcp.test.js.
 
+import { proyectoDe } from '../correo/politica.js';
+
 export const TOOLS = [
   { name: 'nyx5_send', description: 'Delegate a task to another agent even if it is switched off: it waits in their mailbox and their reply reaches you signed when they answer. Use it when you need someone to do something and do not know whether they are available now. The result says whether it went encrypted (it does when the recipient has a key).',
     inputSchema: { type: 'object', required: ['to', 'body'], properties: {
@@ -14,10 +16,12 @@ export const TOOLS = [
       body: { description: 'Contenido: texto o JSON' },
       type: { type: 'string', enum: ['message', 'task', 'result', 'receipt', 'intro'], default: 'message' },
       thread: { type: 'string' }, in_reply_to: { type: 'string' },
+      project: { type: 'string', description: 'which project or chat this belongs to (e.g. "sigo", "rosetta"); the other side can filter its mailbox by it' },
+      role: { type: 'string', description: 'your role in that project, if any (e.g. "main", "lab")' },
       aval: { type: 'object', description: 'para entrar a un buzón con lista blanca sin estar en ella: { voucher, bond } de un tercero de la allowlist que te respaldó con una fianza', properties: { voucher: { type: 'string' }, bond: { type: 'string' } } },
       encrypt: { type: 'boolean', default: true } } } },
   { name: 'nyx5_inbox', description: 'What others sent you while you were not looking. Every envelope arrives with a verified signature (you know who really sent it) and comes decrypted. Check it when you start and before treating anything as unanswered: a reply may have landed between sessions.',
-    inputSchema: { type: 'object', properties: { limit: { type: 'integer', default: 20 } } } },
+    inputSchema: { type: 'object', properties: { limit: { type: 'integer', default: 20 }, project: { type: 'string', description: 'only messages of this project (see nyx5_send)' } } } },
   { name: 'nyx5_ack', description: 'Close the envelopes in your mailbox that you already handled so they stop coming back. Use it after acting on a message; what you acknowledge stays in the record.',
     inputSchema: { type: 'object', required: ['ids'], properties: { ids: { type: 'array', items: { type: 'string' } } } } },
   { name: 'nyx5_resolve', description: 'Check who an address really is before trusting it: returns their card, certified by their domain (verified identity, what they can do, how they charge). Use it before sending anything sensitive or paying them.',
@@ -55,9 +59,13 @@ export const TOOLS = [
   { name: 'nyx5_email', description: 'Write by email to a human who is not on Nyx5 yet. Use it when the recipient has no agent address: their reply comes back to your mailbox (Reply-To). It enters unsigned, marked as not verified, never disguised; when they want the real thing, they register.',
     inputSchema: { type: 'object', required: ['to', 'body'], properties: { to: { type: 'string', description: 'dirección de correo, ej. persona@gmail.com' }, subject: { type: 'string' }, body: { description: 'el texto del correo' } } } },
   { name: 'nyx5_wait', description: 'Wait, up to a limit, for the next message in your mailbox (optionally only from one sender or one thread) and get it opened, with its signature verified, the moment it lands. Use it right after sending when the other side is live: it is how two agents hold a real-time conversation instead of polling.',
-    inputSchema: { type: 'object', properties: { from: { type: 'string', description: 'only messages from this address' }, thread: { type: 'string', description: 'only messages in this thread' }, since: { type: 'string', description: 'ISO time: only messages received after it. Default: now, so earlier unread mail is never mistaken for the reply' }, seconds: { type: 'number', description: 'how long to wait, 1 to 90 (default 60)' } } } },
+    inputSchema: { type: 'object', properties: { from: { type: 'string', description: 'only messages from this address' }, thread: { type: 'string', description: 'only messages in this thread' }, since: { type: 'string', description: 'ISO time: only messages received after it. Default: now, so earlier unread mail is never mistaken for the reply' }, project: { type: 'string', description: 'only messages of this project (see nyx5_send)' }, seconds: { type: 'number', description: 'how long to wait, 1 to 90 (default 60)' } } } },
   { name: 'nyx5_conversation', description: 'The signed history between you and one address, both directions and oldest first, including what you already acknowledged; without an address, the list of your conversations. Use it to pick up where a conversation was left, from any device: the history lives in the house, not in your session.',
-    inputSchema: { type: 'object', properties: { with: { type: 'string', description: 'the other address; omit it to list your conversations' }, limit: { type: 'number', description: 'how many messages, newest kept (default 30)' } } } },
+    inputSchema: { type: 'object', properties: { with: { type: 'string', description: 'the other address; omit it to list your conversations' }, limit: { type: 'number', description: 'how many messages, newest kept (default 30)' }, project: { type: 'string', description: 'only messages of this project (see nyx5_send)' } } } },
+  { name: 'nyx5_group', description: 'A group address (g.name@house): one signed message reaches every member, encrypted for each, with a shared history nobody outside can read. Use it when work involves several agents. ops: create {name, members, post}, members {group}, add {group, members}, remove {group, members}, leave {group}. Only members post; admins change members.',
+    inputSchema: { type: 'object', required: ['op'], properties: { op: { type: 'string', enum: ['create', 'members', 'add', 'remove', 'leave'] }, name: { type: 'string', description: 'create: the group name (becomes g.name@house)' }, group: { type: 'string', description: 'the group address or name' }, members: { type: 'array', items: { type: 'string' }, description: 'addresses of this house' }, post: { type: 'string', enum: ['members', 'admins'], description: 'who can post (default members)' } } } },
+  { name: 'nyx5_profile', description: 'What an agent says about itself, certified by its house: name, what it does, languages, owner, tags, links. Read it before hiring a stranger (it is declared, not verified: the record in the ledger is). Set your own so others find you. ops: get {address}, set {profile} (a key the house does not publish is rejected by name).',
+    inputSchema: { type: 'object', required: ['op'], properties: { op: { type: 'string', enum: ['get', 'set'] }, address: { type: 'string', description: 'get: whose profile (default: yours)' }, profile: { type: 'object', description: 'set: { display_name, summary, description, languages, tags, owner: {kind, name}, links }; null clears it' } } } },
   { name: 'nyx5_whoami', description: 'Your own address and what it may do: who delegated it, until when, whether the house holds its keys, and who may write to it. Check it before promising anything on behalf of your owner; the card is certified by the domain.',
     inputSchema: { type: 'object', properties: {} } },
 ];
@@ -68,7 +76,7 @@ export const TOOLS = [
 // el teléfono le pidió tres permisos (inbox, send, wait) antes del primer mensaje.
 const SOLO_LECTURA = new Set(['nyx5_inbox', 'nyx5_resolve', 'nyx5_outbox', 'nyx5_directory', 'nyx5_search', 'nyx5_balance', 'nyx5_contract', 'nyx5_historial', 'nyx5_tareas', 'nyx5_wait', 'nyx5_conversation', 'nyx5_whoami']);
 const MUEVE_DINERO = new Set(['nyx5_accept', 'nyx5_libro', 'nyx5_tomar']);
-const TITULOS = { nyx5_send: 'Send a message', nyx5_inbox: 'Read my mailbox', nyx5_ack: 'Mark messages as handled', nyx5_resolve: 'Check who an address is', nyx5_outbox: 'Delivery status of what I sent', nyx5_directory: 'Agents in a house', nyx5_search: 'Find an agent', nyx5_quote: 'Offer a service', nyx5_accept: 'Accept an offer and pay', nyx5_libro: 'Ledger operation', nyx5_balance: 'My balance', nyx5_remind: 'Remind myself later', nyx5_contract: 'A deal and its history', nyx5_historial: 'Reputation of an agent', nyx5_tareas: 'Paid tasks available', nyx5_tomar: 'Take a paid task', nyx5_email: 'Email a person', nyx5_wait: 'Wait for a reply', nyx5_conversation: 'Conversation history', nyx5_whoami: 'Who am I' };
+const TITULOS = { nyx5_send: 'Send a message', nyx5_inbox: 'Read my mailbox', nyx5_ack: 'Mark messages as handled', nyx5_resolve: 'Check who an address is', nyx5_outbox: 'Delivery status of what I sent', nyx5_directory: 'Agents in a house', nyx5_search: 'Find an agent', nyx5_quote: 'Offer a service', nyx5_accept: 'Accept an offer and pay', nyx5_libro: 'Ledger operation', nyx5_balance: 'My balance', nyx5_remind: 'Remind myself later', nyx5_contract: 'A deal and its history', nyx5_historial: 'Reputation of an agent', nyx5_tareas: 'Paid tasks available', nyx5_tomar: 'Take a paid task', nyx5_email: 'Email a person', nyx5_wait: 'Wait for a reply', nyx5_conversation: 'Conversation history', nyx5_group: 'Group of agents', nyx5_profile: 'Public profile', nyx5_whoami: 'Who am I' };
 for (const t of TOOLS) {
   t.title = TITULOS[t.name] || t.name;
   t.annotations = { title: t.title, readOnlyHint: SOLO_LECTURA.has(t.name), destructiveHint: MUEVE_DINERO.has(t.name), idempotentHint: SOLO_LECTURA.has(t.name) || t.name === 'nyx5_ack', openWorldHint: true };
@@ -77,9 +85,9 @@ for (const t of TOOLS) {
 // Lo que el conector remoto expone: mensajería y nada que mueva saldo. El subagente de un teléfono
 // es de alcance `messages_only` (la casa se lo niega igual si lo intenta); ofrecerle herramientas
 // que van a fallar sólo le enseñaría al modelo a prometer lo que no puede cumplir.
-export const MENSAJERIA = new Set(['nyx5_send', 'nyx5_inbox', 'nyx5_ack', 'nyx5_resolve', 'nyx5_outbox', 'nyx5_directory', 'nyx5_search', 'nyx5_remind', 'nyx5_historial', 'nyx5_wait', 'nyx5_conversation', 'nyx5_whoami']);
+export const MENSAJERIA = new Set(['nyx5_send', 'nyx5_inbox', 'nyx5_ack', 'nyx5_resolve', 'nyx5_outbox', 'nyx5_directory', 'nyx5_search', 'nyx5_remind', 'nyx5_historial', 'nyx5_wait', 'nyx5_conversation', 'nyx5_group', 'nyx5_whoami']);
 
-export const INSTRUCCIONES = `Nyx5 gives an agent three things it has no other way of getting: an address of its own, a mailbox that holds while it is off, and a ledger where an agreement carries weight (payment is held until the proof passes; a false claim forfeits its bond). Use it to reach an agent that may not be available now, to find someone who does X in any house, or to close a deal that must be worth more than a promise. Before trusting a stranger, read their record: it is a query on the ledger, so every point of it cost tokens. Every message is signed and every movement of money leaves a receipt no party can deny.`;
+export const INSTRUCCIONES = `Nyx5 gives an agent three things it has no other way of getting: an address of its own, a mailbox that holds while it is off, and a ledger where an agreement carries weight (payment is held until the proof passes; a false claim forfeits its bond). Use it to reach an agent that may not be available now, to find someone who does X in any house, or to close a deal that must be worth more than a promise. Before trusting a stranger, read their record: it is a query on the ledger, so every point of it cost tokens. Every message is signed and every movement of money leaves a receipt no party can deny. Tag what you send with a project name and filter by it to keep several chats apart.`;
 
 export function instrucciones({ remoto = false, address = null, contactos = [] } = {}) {
   if (!remoto) return INSTRUCCIONES;
@@ -92,9 +100,10 @@ export async function llamar(agent, name, args = {}, { permitidas = null, espera
   const text = (v) => ({ content: [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }] });
   if (permitidas && !permitidas.has(name)) return { ...text(`${name} is not available here: this is a messages-only address (no ledger, no payments)`), isError: true };
   switch (name) {
-    case 'nyx5_send': { const r = await agent.send({ to: args.to, body: args.body, type: args.type, thread: args.thread, inReplyTo: args.in_reply_to, encrypt: args.encrypt ?? true, extensions: args.aval ? { 'urn:nyx5:ext:aval': args.aval } : undefined }); return text({ id: r.id, jobs: r.jobs, encrypted: r.encrypted }); }
+    case 'nyx5_send': { const r = await agent.send({ to: args.to, body: args.body, type: args.type, thread: args.thread, inReplyTo: args.in_reply_to, encrypt: args.encrypt ?? true, project: args.project, role: args.role, extensions: args.aval ? { 'urn:nyx5:ext:aval': args.aval } : undefined }); return text({ id: r.id, jobs: r.jobs, encrypted: r.encrypted }); }
     case 'nyx5_inbox': {
-      const msgs = await agent.inbox({ limit: args.limit ?? 20 });
+      const proyecto = args.project ? String(args.project).trim().toLowerCase() : null;
+      const msgs = (await agent.inbox({ limit: args.limit ?? 20 })).filter((m) => !proyecto || proyectoDe(m.envelope) === proyecto);
       const opened = [];
       // `received` es la hora que entiende `since` de nyx5_wait (la de llegada al buzón, no la de
       // creación): sin exponerla, el filtro no se podía usar bien (defecto reportado el 12-sep-2026).
@@ -102,7 +111,7 @@ export async function llamar(agent, name, args = {}, { permitidas = null, espera
       return text(opened);
     }
     case 'nyx5_ack': return text({ acked: await agent.ack(args.ids) });
-    case 'nyx5_resolve': { const { _domain, ...card } = await agent.resolver.agentCard(args.address); return text(card); }
+    case 'nyx5_resolve': { const { _domain, ...card } = await agent.resolver.agentCard(args.address); const last_seen = await agent.presence(args.address); return text({ ...card, ...(last_seen ? { presence: { last_seen } } : {}) }); }
     case 'nyx5_outbox': return text(await agent.outbox());
     case 'nyx5_directory': return text(await agent.directory(args.house, args));
     case 'nyx5_search': return text(await agent.search(args.index, args));
@@ -137,22 +146,36 @@ export async function llamar(agent, name, args = {}, { permitidas = null, espera
       // Lo que YA estaba sin leer se entrega igual (nada se pierde), pero marcado como anterior a la
       // espera, para que nadie lo tome por la respuesta a lo que acaba de mandar.
       const desde = args.since || new Date().toISOString();
-      const anterior = args.since ? null : (await agent.inbox({ limit: 50 })).find((m) => m.received < desde && (!args.from || m.envelope?.from === args.from) && (!args.thread || m.envelope?.thread === args.thread || m.envelope?.id === args.thread));
-      const m = anterior || await agent.wait({ from: args.from, thread: args.thread, since: desde, seconds: secs });
+      const anterior = args.since ? null : (await agent.inbox({ limit: 50 })).find((m) => m.received < desde && (!args.from || m.envelope?.from === args.from) && (!args.thread || m.envelope?.thread === args.thread || m.envelope?.id === args.thread) && (!args.project || proyectoDe(m.envelope) === String(args.project).trim().toLowerCase()));
+      const m = anterior || await agent.wait({ from: args.from, thread: args.thread, since: desde, project: args.project, seconds: secs });
       if (!m) return text({ message: null, waited_seconds: secs, note: 'nothing arrived; call again to keep listening' });
       let abierto;
       try { const { sender, ...o } = await agent.open(m.envelope); abierto = o; } catch (e) { abierto = { id: m.envelope.id, from: m.envelope.from, error: e.message }; }
       return text({ ...abierto, received: m.received, ...(anterior ? { arrived_before_wait: true, note: 'this message was already unread in your mailbox before you started waiting: if you expected a reply to something you just sent, this is probably not it. Pass since (its received time) to wait only for newer mail.' } : {}) });
     }
     case 'nyx5_conversation': {
-      if (!args.with) return text(await agent.conversations());
-      const msgs = await agent.conversation(args.with, { limit: args.limit ?? 30 });
+      if (!args.with) return text(await agent.conversations({ project: args.project || null }));
+      const msgs = await agent.conversation(args.with, { limit: args.limit ?? 30, project: args.project || null });
       const out = [];
       for (const m of msgs) {
         try { const { sender, ...o } = await agent.open(m.envelope); out.push({ dir: m.dir, at: m.at, status: m.status, ...o }); }
         catch (e) { out.push({ dir: m.dir, at: m.at, id: m.envelope?.id, from: m.envelope?.from, error: e.message }); }
       }
       return text(out);
+    }
+    case 'nyx5_group': {
+      const op = args.op;
+      if (op === 'create') return text(await agent.createGroup(args.name, { members: args.members || [], post: args.post }));
+      if (op === 'members') return text(await agent.group(args.group));
+      if (op === 'add') return text(await agent.editGroup(args.group, { add: args.members || [] }));
+      if (op === 'remove') return text(await agent.editGroup(args.group, { remove: args.members || [] }));
+      if (op === 'leave') return text(await agent.leaveGroup(args.group));
+      return { ...text(`unknown group op: ${op}. Valid ones: create, members, add, remove, leave`), isError: true };
+    }
+    case 'nyx5_profile': {
+      if (args.op === 'get') return text(await agent.profile(args.address || agent.address));
+      if (args.op === 'set') return text(await agent.setProfile(args.profile === undefined ? null : args.profile));
+      return { ...text(`unknown profile op: ${args.op}. Valid ones: get, set`), isError: true };
     }
     case 'nyx5_whoami': return text(await agent.whoami());
     default: return { ...text(`unknown tool: ${name}`), isError: true };

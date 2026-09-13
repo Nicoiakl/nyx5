@@ -57,6 +57,9 @@ export async function atenderAsistentes(est, { maxPorTick = 3 } = {}) {
     const pendientes = (await est.store.listMail(local)).filter((m) => {
       const e = m.envelope || {};
       if (!e.signature || e.from === propia || !['message', 'result'].includes(e.type)) return false;
+      // Un asistente contesta correo directo, nunca un grupo: su tope en dólares es de su dueño, y un
+      // grupo es un sobre que llega por un camino que su lista no eligió (revisión del 13-sep-2026).
+      if ((e.to || []).some((t) => { try { return parseAddress(t).local.startsWith('g.'); } catch { return false; } })) return false;
       try { const { local: l, domain } = parseAddress(e.from); return !(domain === est.domain && SISTEMA.has(l)); } catch { return false; }
     }).slice(0, maxPorTick);
     for (const m of pendientes) {
