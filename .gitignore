@@ -6,3 +6,4 @@ keys/
 node_modules/
 .dev.vars
 .wrangler/
+.claude/worktrees/
