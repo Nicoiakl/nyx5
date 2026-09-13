@@ -407,6 +407,50 @@ test('la casa conecta dos Claude en los dos sentidos, se escriben de verdad, y n
   assert.equal(w.datos.content.body, 'hola segundo');
 });
 
+// Tres defectos reportados por el Claude del teléfono de Nicholas el 12-sep-2026, probando el canal
+// de verdad: una respuesta sin hilo deja la conversación como mensajes sueltos; nyx5_wait devolvía
+// un mensaje viejo como si fuera la respuesta; y since filtra por received, que el buzón no mostraba.
+test('el canal cuenta la conversación: la respuesta hereda el hilo, wait no confunde lo viejo con lo nuevo, y el buzón muestra received', async () => {
+  const uno = Agent.create(`primera@${H}`, URL_CASA, { hosts });
+  const dos = Agent.create(`segunda@${H}`, URL_CASA, { hosts });
+  for (const a of [uno, dos]) await a.register({ adminToken: 't' });
+  const c1 = await conectar(uno, { allowlist: [`claude.segunda@${H}`] });
+  const c2 = await conectar(dos, { allowlist: [c1.sub] });
+  // Como en una conversación real: el que espera se pone a escuchar ANTES de que el otro mande.
+  const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
+  const escuchando = async (token, from) => { const p = herramienta(token, 'nyx5_wait', { from, seconds: 10 }); await pausa(300); return p; };
+  // 1. Una respuesta con in_reply_to y sin thread hereda el hilo del sobre original.
+  let espera = escuchando(c2.access_token, c1.sub);
+  const primero = await herramienta(c1.access_token, 'nyx5_send', { to: c2.sub, body: 'primero' });
+  const llego = await espera;
+  assert.equal(llego.datos.id, primero.datos.id);
+  await herramienta(c2.access_token, 'nyx5_ack', { ids: [primero.datos.id] }); // lo leído se confirma, como haría un agente
+  espera = escuchando(c1.access_token, c2.sub);
+  const resp = await herramienta(c2.access_token, 'nyx5_send', { to: c1.sub, body: 'respuesta', in_reply_to: primero.datos.id });
+  const enHilo = await espera;
+  assert.equal(enHilo.datos.id, resp.datos.id);
+  assert.equal(enHilo.datos.thread, primero.datos.id, 'la respuesta no heredó el hilo del original');
+  espera = escuchando(c2.access_token, c1.sub);
+  await herramienta(c1.access_token, 'nyx5_send', { to: c2.sub, body: 'tercero', in_reply_to: resp.datos.id });
+  const t3 = await espera;
+  assert.equal(t3.datos.thread, primero.datos.id, 'el tercer mensaje debe seguir en el mismo hilo, no abrir uno por respuesta');
+  // 2. Un mensaje que ya estaba sin leer se entrega, pero marcado como anterior a la espera: no se
+  // confunde con la respuesta a lo que se acaba de mandar.
+  await herramienta(c2.access_token, 'nyx5_ack', { ids: [primero.datos.id, t3.datos.id] });
+  const viejo = await herramienta(c1.access_token, 'nyx5_send', { to: c2.sub, body: 'viejo sin leer' });
+  await pausa(400);
+  const w = await herramienta(c2.access_token, 'nyx5_wait', { from: c1.sub, seconds: 2 });
+  assert.equal(w.datos.id, viejo.datos.id, 'lo que ya estaba sin leer no se pierde');
+  assert.equal(w.datos.arrived_before_wait, true, 'pero se marca como anterior a la espera');
+  assert.equal(llego.datos.arrived_before_wait, undefined, 'lo que llega mientras se espera no lleva la marca');
+  // 3. El buzón expone received, que es lo que entiende since.
+  const bandeja = await herramienta(c2.access_token, 'nyx5_inbox');
+  assert.ok(bandeja.datos.length && bandeja.datos.every((m) => typeof m.received === 'string'), 'cada mensaje del buzón trae received');
+  const ultimo = bandeja.datos[bandeja.datos.length - 1];
+  const nada = await herramienta(c2.access_token, 'nyx5_wait', { from: c1.sub, since: ultimo.received, seconds: 1 });
+  assert.equal(nada.datos.message, null, 'since = received del último no debe devolverlo de nuevo');
+});
+
 // Defecto real (12-sep-2026): la pantalla de conectar viene marcada en "sólo tú", así que reconectar
 // un Claude reemplazaba su lista por la del dueño y borraba a sus contactos. A Basti, al vencer su
 // conector, le habría cortado las respuestas del agente de Sigo.

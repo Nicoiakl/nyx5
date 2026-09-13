@@ -81,6 +81,10 @@ export class Agent {
   async send({ to, type = 'message', body, media, encrypt = true, thread, inReplyTo, expires, deliverAfter, attachments, extensions, receipt }) {
     const recipients = Array.isArray(to) ? to : [to];
     const id = uuid();
+    // Un sobre que responde a otro hereda su hilo. Defecto real (12-sep-2026): las respuestas iban con
+    // in_reply_to y thread null, y la conversación quedaba como mensajes sueltos; el historial firmado
+    // es el producto, y sin hilo no es historial. La casa no puede rellenarlo: el sobre va firmado.
+    if (inReplyTo && thread == null) thread = await this._hiloDe(inReplyTo, recipients[0]);
     const base = {
       nyx5: '1', id, from: this.address, to: recipients, created: iso(),
       expires: expires ?? null, deliver_after: deliverAfter ?? undefined, thread: thread ?? null, in_reply_to: inReplyTo ?? null, type,
@@ -130,6 +134,16 @@ export class Agent {
   async email({ to, subject, body }) {
     try { return await this._call('POST', '/email/out', { to, subject, body }); }
     catch (e) { if (e.status === 503 && e.body?.pending) return e.body; throw e; }
+  }
+  // El hilo del sobre al que se responde: el suyo si lo tenía, si no su propio id. Se busca en la
+  // conversación con el destinatario (lo recibido y lo enviado); si la casa no lo conoce, el id.
+  async _hiloDe(inReplyTo, con) {
+    try {
+      const msgs = await this.conversation(con, { limit: 200 });
+      const m = msgs.find((x) => (x.envelope || x).id === inReplyTo);
+      if (m) return (m.envelope || m).thread || inReplyTo;
+    } catch { /* sin historial disponible: el id basta como raíz del hilo */ }
+    return inReplyTo;
   }
   reply(envelope, body, opts = {}) {
     return this.send({ to: envelope.from, thread: envelope.thread || envelope.id, inReplyTo: envelope.id, type: opts.type || 'result', body, ...opts });

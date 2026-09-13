@@ -55,7 +55,7 @@ export const TOOLS = [
   { name: 'nyx5_email', description: 'Write by email to a human who is not on Nyx5 yet. Use it when the recipient has no agent address: their reply comes back to your mailbox (Reply-To). It enters unsigned, marked as not verified, never disguised; when they want the real thing, they register.',
     inputSchema: { type: 'object', required: ['to', 'body'], properties: { to: { type: 'string', description: 'dirección de correo, ej. persona@gmail.com' }, subject: { type: 'string' }, body: { description: 'el texto del correo' } } } },
   { name: 'nyx5_wait', description: 'Wait, up to a limit, for the next message in your mailbox (optionally only from one sender or one thread) and get it opened, with its signature verified, the moment it lands. Use it right after sending when the other side is live: it is how two agents hold a real-time conversation instead of polling.',
-    inputSchema: { type: 'object', properties: { from: { type: 'string', description: 'only messages from this address' }, thread: { type: 'string', description: 'only messages in this thread' }, since: { type: 'string', description: 'ISO time: only messages received after it' }, seconds: { type: 'number', description: 'how long to wait, 1 to 90 (default 60)' } } } },
+    inputSchema: { type: 'object', properties: { from: { type: 'string', description: 'only messages from this address' }, thread: { type: 'string', description: 'only messages in this thread' }, since: { type: 'string', description: 'ISO time: only messages received after it. Default: now, so earlier unread mail is never mistaken for the reply' }, seconds: { type: 'number', description: 'how long to wait, 1 to 90 (default 60)' } } } },
   { name: 'nyx5_conversation', description: 'The signed history between you and one address, both directions and oldest first, including what you already acknowledged; without an address, the list of your conversations. Use it to pick up where a conversation was left, from any device: the history lives in the house, not in your session.',
     inputSchema: { type: 'object', properties: { with: { type: 'string', description: 'the other address; omit it to list your conversations' }, limit: { type: 'number', description: 'how many messages, newest kept (default 30)' } } } },
   { name: 'nyx5_whoami', description: 'Your own address and what it may do: who delegated it, until when, whether the house holds its keys, and who may write to it. Check it before promising anything on behalf of your owner; the card is certified by the domain.',
@@ -96,8 +96,10 @@ export async function llamar(agent, name, args = {}, { permitidas = null, espera
     case 'nyx5_inbox': {
       const msgs = await agent.inbox({ limit: args.limit ?? 20 });
       const opened = [];
-      for (const m of msgs) { try { opened.push(await agent.open(m.envelope)); } catch (e) { opened.push({ id: m.envelope.id, from: m.envelope.from, error: e.message }); } }
-      return text(opened.map(({ sender, ...o }) => o));
+      // `received` es la hora que entiende `since` de nyx5_wait (la de llegada al buzón, no la de
+      // creación): sin exponerla, el filtro no se podía usar bien (defecto reportado el 12-sep-2026).
+      for (const m of msgs) { try { const { sender, ...o } = await agent.open(m.envelope); opened.push({ ...o, received: m.received }); } catch (e) { opened.push({ id: m.envelope.id, from: m.envelope.from, error: e.message, received: m.received }); } }
+      return text(opened);
     }
     case 'nyx5_ack': return text({ acked: await agent.ack(args.ids) });
     case 'nyx5_resolve': { const { _domain, ...card } = await agent.resolver.agentCard(args.address); return text(card); }
@@ -129,11 +131,18 @@ export async function llamar(agent, name, args = {}, { permitidas = null, espera
     case 'nyx5_contract': return text(await agent.contract(args.house || agent.domain, args.contract));
     case 'nyx5_wait': {
       const secs = Math.max(1, Math.min(Number(args.seconds ?? 60) || 60, esperaMaxS));
-      const m = await agent.wait({ from: args.from, thread: args.thread, since: args.since, seconds: secs });
+      // Sin `since`, se espera lo que llegue DESDE AHORA. Defecto real (12-sep-2026): devolvía como
+      // "respuesta" un mensaje viejo que ya estaba en el buzón, y el que espera daba por contestada
+      // una conversación que no lo estaba. Lo pendiente de antes se avisa, no se confunde con lo nuevo.
+      // Lo que YA estaba sin leer se entrega igual (nada se pierde), pero marcado como anterior a la
+      // espera, para que nadie lo tome por la respuesta a lo que acaba de mandar.
+      const desde = args.since || new Date().toISOString();
+      const anterior = args.since ? null : (await agent.inbox({ limit: 50 })).find((m) => m.received < desde && (!args.from || m.envelope?.from === args.from) && (!args.thread || m.envelope?.thread === args.thread || m.envelope?.id === args.thread));
+      const m = anterior || await agent.wait({ from: args.from, thread: args.thread, since: desde, seconds: secs });
       if (!m) return text({ message: null, waited_seconds: secs, note: 'nothing arrived; call again to keep listening' });
       let abierto;
       try { const { sender, ...o } = await agent.open(m.envelope); abierto = o; } catch (e) { abierto = { id: m.envelope.id, from: m.envelope.from, error: e.message }; }
-      return text({ ...abierto, received: m.received });
+      return text({ ...abierto, received: m.received, ...(anterior ? { arrived_before_wait: true, note: 'this message was already unread in your mailbox before you started waiting: if you expected a reply to something you just sent, this is probably not it. Pass since (its received time) to wait only for newer mail.' } : {}) });
     }
     case 'nyx5_conversation': {
       if (!args.with) return text(await agent.conversations());

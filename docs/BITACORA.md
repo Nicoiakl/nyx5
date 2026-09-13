@@ -30,6 +30,15 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 ## Hecho
 
+### 13-sep-2026 — el canal cuenta la conversación
+- Tres defectos reportados por el Claude del teléfono de Nicholas probando el canal de verdad:
+  una respuesta con `in_reply_to` iba sin `thread` (la conversación quedaba como mensajes sueltos:
+  ahora el cliente hereda el hilo, porque la casa no puede tocar un sobre firmado); `nyx5_wait`
+  devolvía un mensaje viejo como si fuera la respuesta (ahora lo entrega marcado
+  `arrived_before_wait`, y sin `since` espera desde ahora); y `since` filtra por `received`, que
+  `nyx5_inbox` no mostraba (ahora sí). Suite: 225 -> 226.
+- `code.nicholas` pasó a lista blanca. Búsqueda de la marca en INAPI: «nyx5» sin coincidencias.
+
 ### 12-sep-2026 — que nada venza en el viaje
 - **Conectores de 50 días** (`NYX5_REMOTE_DAYS`, eran 30) y **reconectar conserva los contactos**:
   la pantalla viene marcada en «sólo tú» y reconectar reemplazaba la lista; a Basti le habría
