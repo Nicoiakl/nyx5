@@ -331,6 +331,12 @@ export class Estafeta {
       valid_until = valid_until || delegation.valid_until || null;
     }
     const prev = await this.store.getAgent(local);
+    // `<algo>.<agente existente>` es la forma de un subagente: sin la delegación de ese agente no se
+    // registra (revisión del 13-sep: `evil.alicia` parecía delegado de alicia sin serlo).
+    if (!prev && !delegation && !group && local.includes('.')) {
+      const padre = local.slice(local.indexOf('.') + 1);
+      if (await this.store.getAgent(padre)) throw Object.assign(new Error(`names of the form <name>.${padre} are subagents of ${padre}@${this.domain}: they need its delegation`), { status: 409 });
+    }
     const previous = [];
     // Una llave revocada no vuelve por la ventana de gracia: si su dueño la revocó fue porque no
     // debía seguir firmando, y los siete días de `previous` la resucitarían.
@@ -427,7 +433,7 @@ export class Estafeta {
       let p; try { p = parseAddress(dir); } catch { return { error: `not an address: ${dir}` }; }
       if (p.domain !== this.domain) return { error: `${dir} is not in this house: groups hold members of ${this.domain} only, for now` };
       const rec = await this.store.getAgent(p.local);
-      if (!rec || rec.revoked || (agregadoPor && !this._visibleA(rec, agregadoPor))) return { error: `${dir} does not exist or is revoked` };
+      if (!rec || rec.revoked || (agregadoPor && !await this._visibleA(rec, agregadoPor))) return { error: `${dir} does not exist or is revoked` };
       if (rec.group || this.isSystem(p.local)) return { error: `${dir} cannot be a member (it is a group or a system address)` };
       if (agregadoPor && dir !== agregadoPor && (!nuevos || nuevos.has(dir)) && !this._aceptaDe(rec, agregadoPor)) return { error: `${dir} does not accept messages from you: only someone who already lists you as a contact can be added to a group` };
       if (!lista.includes(dir)) lista.push(dir);
@@ -491,24 +497,33 @@ export class Estafeta {
   // ---------- visibilidad (NX-202): a quién se le confirma que un agente secreto existe ----------
   // Lo ve: él mismo, quien lo delegó, sus propios delegados, y quien está en su lista (dirección o
   // dominio). Nadie más: ni autenticado, ni la app, ni otra casa que no diga para quién pregunta.
-  _visibleA(rec, quien) {
+  // «Sus delegados» se comprueba leyendo la tarjeta del que pregunta: el sufijo del nombre no basta
+  // (revisión del 13-sep: `evil.alicia` registrado por un extraño veía a alicia).
+  async _visibleA(rec, quien) {
     if (!rec || rec.visibility !== 'secret') return true;
     if (!quien) return false;
     quien = String(quien).toLowerCase();
     if (quien === rec.address || quien === rec.delegation?.by) return true;
     let q; try { q = parseAddress(quien); } catch { q = null; }
-    const local = parseAddress(rec.address).local;
-    if (q && q.domain === this.domain && q.local.endsWith(`.${local}`)) return true;
+    if (q && q.domain === this.domain) {
+      const del = await this.store.getAgent(q.local);
+      if (del && !del.revoked && del.delegation?.by === rec.address) return true;
+    }
     const dominio = q ? q.domain : (quien.includes('@') ? quien.slice(quien.lastIndexOf('@') + 1) : '');
     return (rec.inbox?.allowlist || []).some((x) => String(x).toLowerCase() === quien || String(x).toLowerCase() === dominio);
   }
   // Quién pregunta por una tarjeta: un agente de esta casa autenticado, o una casa ajena que firma
-  // «lo pido para bob@su-casa» con su llave de dominio. Sólo se resuelve cuando hace falta (el
-  // agente es secreto): verificar a la otra casa cuesta una tarjeta de dominio.
+  // «lo pido para bob@su-casa» con su llave de dominio. Se evalúa SIEMPRE, exista o no lo que se
+  // pide, y antes de tocar el almacén (revisión del 13-sep: evaluarlo sólo cuando había tarjeta
+  // convertía un 401, o la latencia del fetch a la otra casa, en un oráculo de existencia). Un
+  // token inválido cuenta como nadie, no como error. Una petición que trae credencial cuesta (una
+  // firma o una tarjeta de dominio ajena): se limita por IP igual que /resolve.
   async _quienPregunta(rx, path) {
-    if (rx.headers.authorization?.startsWith('Nyx5 ')) return (await this._authenticate(rx, path)).address;
+    const auth = rx.headers.authorization?.startsWith('Nyx5 ');
     const h = rx.headers['x-nyx5-for'];
-    if (!h) return null;
+    if (!auth && !h) return null;
+    if (!await this.rate.allow(`resolve:${rx.ip || 'x'}`)) throw Object.assign(new Error('too many requests'), { status: 429, headers: this._retryAfter() });
+    if (auth) { try { return (await this._authenticate(rx, path)).address; } catch { return null; } }
     const r = Object.fromEntries(String(h).replace(/^nyx51\s*/, '').split(';').map((p) => p.trim().split('=').map((x) => x.trim())).filter((p) => p[0]));
     try {
       const { domain } = parseAddress(r.for || '');
@@ -898,7 +913,9 @@ export class Estafeta {
     try { await this.store.kvPurge?.(now()); } catch (e) { this.log(`kv: no se pudo purgar lo vencido: ${e.message}`); }
     if (this.index.enabled) await this._indexCrawlIfDue();
     if (this.verifica.enabled) await this._verificarPendientes();
-    await this._liberarVencidos();
+    // Sólo desde el reloj programado: recorre la tabla de contratos, y el tick que sigue a cada
+    // petición no tiene por qué pagarlo.
+    if (programado) await this._liberarVencidos();
     if (programado) { try { await atenderAsistentes(this); } catch (e) { this.log(`asistentes: ${e.message}`); } }
     await this.flushPushes();
   }
@@ -1168,7 +1185,7 @@ export class Estafeta {
       const rec = await this.store.getAgent(local);
       // Un secreto le contesta a quien no está en su lista lo mismo que un inexistente: ni el
       // rebote del postmaster confirma que la dirección existe.
-      if (!rec || !this._visibleA(rec, env.from)) { rejected.push({ to, code: 404, reason: 'no such agent' }); continue; }
+      if (!rec || !await this._visibleA(rec, env.from)) { rejected.push({ to, code: 404, reason: 'no such agent' }); continue; }
       const p = applyInboxPolicy(env, rec, senderCard._domain);
       if (!p.ok) { rejected.push({ to, ...p, ok: undefined }); continue; }
       try {
@@ -1386,7 +1403,7 @@ export class Estafeta {
     try { ({ local, domain: dom } = parseAddress(to)); } catch { return { ok: false, code: 400, reason: 'invalid recipient' }; }
     if (dom !== this.domain) return { ok: false, code: 400, reason: `the email is for ${dom}, not ${this.domain}` };
     const rec = await this.store.getAgent(local);
-    if (!rec || !this._visibleA(rec, from)) return { ok: false, code: 404, reason: 'no such agent' };
+    if (!rec || !await this._visibleA(rec, from)) return { ok: false, code: 404, reason: 'no such agent' };
     // La política del buzón manda también aquí. Antes no: la puerta del correo se saltaba la
     // estampilla, la lista blanca y la prueba de trabajo. El adaptador del edge convierte este
     // rechazo en un rechazo SMTP, así que el remitente recibe un rebote de su propio proveedor y
@@ -1480,7 +1497,8 @@ export class Estafeta {
         const l = decodeURIComponent(m[1]).toLowerCase();
         if (!Estafeta.validLocal(l)) return send(400, { reason: 'invalid agent name' });
         // Un inexistente contesta «sin presencia»; un secreto, a quien no lo ve, exactamente lo mismo.
-        const visible = this._visibleA(await this.store.getAgent(l), await this._quienPregunta(rx, path));
+        const quien = await this._quienPregunta(rx, path);
+        const visible = await this._visibleA(await this.store.getAgent(l), quien);
         return send(200, { address: `${l}@${this.domain}`, last_seen: visible ? await this.presenciaDe(l) : null });
       }
       // ----- Grupos: crear, ver miembros, agregar, quitar, irse -----
@@ -1584,8 +1602,9 @@ export class Estafeta {
       const mX402 = rx.method === 'GET' ? /^\/x402\/inbox\/([^/]+)$/.exec(path) : null;
       if (mX402) {
         const local = decodeURIComponent(mX402[1]).toLowerCase();
+        const quien = await this._quienPregunta(rx, path);
         const rec = await this.store.getAgent(local);
-        if (!rec || !this._visibleA(rec, await this._quienPregunta(rx, path))) return send(404, { reason: 'no such agent' });
+        if (!rec || !await this._visibleA(rec, quien)) return send(404, { reason: 'no such agent' });
         const precio = rec.inbox?.policy === 'stamp' ? (rec.inbox.price ?? 1) : 0;
         const url = `https://${this.domain}/x402/inbox/${encodeURIComponent(local)}`;
         if (!precio) return send(200, { x402Version: x402.X402_VERSION, free: true, resource: { url }, reason: `${local}@${this.domain} does not charge for delivery` });
@@ -1624,15 +1643,18 @@ export class Estafeta {
       // contrapartes: solo cuántas entregas, cuántas fianzas y cuántos tokens se movieron.
       if (rx.method === 'GET' && (m = /^\/agents\/([^/]+)\/historial$/.exec(path))) {
         const local = decodeURIComponent(m[1]).toLowerCase();
+        const quien = await this._quienPregunta(rx, path);
         const rec = Estafeta.validLocal(local) ? await this.store.getAgent(local) : null;
-        if (!rec || !this._visibleA(rec, await this._quienPregunta(rx, path))) return send(404, { reason: 'no such agent' });
+        if (!rec || !await this._visibleA(rec, quien)) return send(404, { reason: 'no such agent' });
         return send(200, await this.libro.historial(`${local}@${this.domain}`));
       }
       if (rx.method === 'GET' && (m = /^\/agents\/([^/]+)$/.exec(path))) {
-        const card = await this.agentCard(decodeURIComponent(m[1]).toLowerCase());
         // Un secreto responde a quien no lo ve EXACTAMENTE lo que un inexistente: mismo cuerpo,
         // mismas cabeceras. Lo cuida test/visibilidad.test.js comparando los dos byte a byte.
-        if (!card || !this._visibleA(card, await this._quienPregunta(rx, path))) return send(404, { reason: 'no such agent' });
+        // Quién pregunta se resuelve ANTES de mirar si existe: el orden es parte de la igualdad.
+        const quien = await this._quienPregunta(rx, path);
+        const card = await this.agentCard(decodeURIComponent(m[1]).toLowerCase());
+        if (!card || !await this._visibleA(card, quien)) return send(404, { reason: 'no such agent' });
         return send(200, card);
       }
       if (rx.method === 'GET' && path === '/agents') {
@@ -1654,16 +1676,18 @@ export class Estafeta {
         }
         if (!ok) {
           // Auto-registro: el cuerpo viene firmado por la clave que se inscribe (prueba de posesión).
-          // «Nombre tomado» también confirma existencia: para un secreto se contesta lo mismo que
-          // para un nombre reservado por el protocolo.
-          if (exists && previo.visibility === 'secret') return send(409, { reason: `name reserved by the protocol: ${local}` });
-          if (exists) return send(409, { reason: 'that name is taken; only its owner or the house can update it' });
+          // «Nombre tomado» también confirma existencia: un secreto recorre el MISMO camino que un
+          // nombre que no existe (firma, fecha, tasa, invitación) y recién al final recibe el 409 de
+          // un nombre reservado por el protocolo, que es donde lo recibiría un reservado de verdad.
+          const secreto = exists && previo.visibility === 'secret';
+          if (exists && !secreto) return send(409, { reason: 'that name is taken; only its owner or the house can update it' });
           if (!body.signature || body.signature.kid !== body.sig || !verifyObject(body, body.sig)) return send(401, { reason: 'to self-register, sign the body with the same sig key you are enrolling (proof of possession)' });
           if (Math.abs(now() - Date.parse(body.ts || 0)) > 300_000) return send(401, { reason: 'the signed request needs a ts (ISO) within 5 minutes' });
           if (!await this.regRate.allow(rx.ip || 'x')) return tarde({ reason: 'too many registrations from this address' });
           if (this.policy.registration === 'open') via = 'open';
           else if (this.policy.registration === 'invite') { const inv = await this._consumeInvite(body.invite); via = `invite:${inv.code}`; if (inv.welcome != null) body._welcome = inv.welcome; }
           else return send(403, { reason: `this house does not accept self-registration (registration=${this.policy.registration}); ask for an invitation` });
+          if (secreto) return send(409, { reason: `name reserved by the protocol: ${local}` });
         }
         // `source` es atribución y NO entra en la tarjeta: se descarta aquí y viaja al evento.
         // `custody` y `revoked` los pone sólo la casa: nadie se declara custodiado ni des-revocado.
@@ -1774,7 +1798,7 @@ export class Estafeta {
         try {
           if (parseAddress(addr).domain === this.domain) {
             const rec = Estafeta.validLocal(parseAddress(addr).local) ? await this.store.getAgent(parseAddress(addr).local) : null;
-            if (!rec || !this._visibleA(rec, quien)) return send(404, { reason: 'no such agent' });
+            if (!rec || !await this._visibleA(rec, quien)) return send(404, { reason: 'no such agent' });
           }
           const { _estafeta, _domain, delegation, ...card } = await this.resolver.agentCard(addr, { onBehalfOf: quien });
           const { _parent, ...d } = delegation || {};
@@ -1861,7 +1885,7 @@ export class Estafeta {
       // Falla cerrado y con código HTTP válido: e.code puede ser un string del sistema ('ENOENT').
       const status = Number.isInteger(e.status) ? e.status : (Number.isInteger(e.code) ? e.code : 500);
       if (status >= 500) this.log(`error ${rx.method} ${path}: ${e.message}`);
-      return send(status, { reason: e.message });
+      return send(status, { reason: e.message }, e.headers || null);
     }
   }
 

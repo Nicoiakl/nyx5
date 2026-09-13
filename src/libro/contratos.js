@@ -177,7 +177,7 @@ const ops = {
     const asiento = await libro.release(c.id, c.seller, c.amount, `liberación por ventana vencida ${c.id}: ${c.concept}`, { contract: c.id, kind: 'expire' }, { op: ctx.env.id, op_sha256: ctx.opHash }, c.referrer);
     c.state = 'released';
     record(libro, c, 'expire', from, { asiento: asiento.id, review_until: new Date(desde).toISOString() });
-    return { result: { contract: c, asiento }, recibos: [{ to: parties(c), thread: c.id, body: { contract: c, asiento, note: 'delivered, deadline passed, no objection within the review window' } }] };
+    return { result: { contract: c, asiento }, recibos: [{ to: parties(c), thread: c.id, body: { contract: c, asiento, note: 'delivered, deadline passed, not refunded within the review window: released by the house clock' } }] };
   },
 
   // --- fianza: el que afirma deposita; si la verificación lo derriba, la pierde ---

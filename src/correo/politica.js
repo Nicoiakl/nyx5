@@ -160,13 +160,16 @@ export class RateLimiterDurable {
   constructor({ store, perMinute = 120, ns = 'tasa', log = () => {} } = {}) {
     if (!store?.kvIncrement) throw new Error('RateLimiterDurable needs a store with kvIncrement');
     this.store = store; this.perMinute = perMinute; this.ns = ns; this.log = log;
+    this.cerradas = new Map(); // clave -> ventana ya agotada, por proceso: un flood no escribe una fila por golpe
   }
   static ventana(nowMs = Date.now()) { return Math.floor(nowMs / 60_000); }
   async allow(key, nowMs = Date.now()) {
     const v = RateLimiterDurable.ventana(nowMs);
+    if (this.cerradas.get(key) === v) return false;
     try {
       const n = await this.store.kvIncrement(this.ns, `${key}:${v}`, (v + 2) * 60_000, nowMs);
-      return n <= this.perMinute;
+      if (n > this.perMinute) { if (this.cerradas.size > 10_000) this.cerradas.clear(); this.cerradas.set(key, v); return false; }
+      return true;
     } catch (e) { this.log(`tasa: el almacén no contó (${e.message}); se deja pasar`); return true; }
   }
   // Segundos hasta que abra la ventana siguiente: es lo que va en Retry-After.

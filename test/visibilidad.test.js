@@ -98,6 +98,41 @@ test('entre casas: la casa que pregunta firma para quién, y la otra sirve el se
   assert.equal(buena.status, 200);
 });
 
+// Segunda revisión adversarial (13-sep), cuatro canales que distinguían un secreto de un inexistente:
+// un token inválido daba 401 al secreto y 404 al inexistente; la casa hacía un fetch saliente sólo si
+// el agente existía (latencia como oráculo, y sin límite); el 409 del secreto salía antes de pedir
+// firma; y `evil.alicia` registrado por un extraño contaba como «su delegado».
+test('los cuatro canales de la revisión: token basura, fetch saliente, POST sin firma, sufijo de delegado', async () => {
+  // 1. Token inválido: el mismo 404 para los dos.
+  const basura = { headers: { authorization: 'Nyx5 basura.basura' } };
+  for (const ruta of [(n) => `/agents/${n}`, (n) => `/agents/${n}/historial`, (n) => `/x402/inbox/${n}`]) {
+    assert.deepEqual(await foto(`${URL_A}${ruta('alicia')}`, basura), await foto(`${URL_A}${ruta('nadie')}`, basura), ruta('alicia'));
+  }
+  // 2. x-nyx5-for con un dominio ajeno: la casa evalúa la cabecera (y paga el fetch) exista o no el
+  //    nombre, así que el número de fetches salientes es el mismo; y cuesta límite de tasa por IP.
+  const fetches = []; const original = casaA.resolver.fetch;
+  casaA.resolver.fetch = async (url, init) => { fetches.push(String(url)); throw new Error('sin red'); };
+  try {
+    const cab = { headers: { 'x-nyx5-for': 'nyx51 domain=atacante.test; for=x@atacante.test; ts=' + new Date().toISOString() + '; kid=k; sig=s' } };
+    await foto(`${URL_A}/agents/alicia`, cab); const n1 = fetches.length;
+    await foto(`${URL_A}/agents/nadie`, cab); const n2 = fetches.length - n1;
+    assert.equal(n1, n2, `fetches salientes: secreto ${n1}, inexistente ${n2}`);
+    assert.ok(n1 >= 1, 'la casa intentó verificar al dominio que firma');
+  } finally { casaA.resolver.fetch = original; }
+  // 3. POST /agents sin firma: el secreto y el inexistente contestan lo mismo (401, prueba de posesión).
+  const sinFirma = (local) => foto(`${URL_A}/agents`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ local, sig: dani.keys.sig }) });
+  assert.deepEqual(await sinFirma('alicia'), await sinFirma('nadie'));
+  // 4. Un nombre con la forma de subagente de alicia no se registra sin su delegación; un delegado
+  //    de verdad sí la ve.
+  const impostor = Agent.create(`evil.alicia@${A}`, URL_A, { hosts });
+  await assert.rejects(() => impostor.register({ adminToken: 't' }), /need its delegation/);
+  await assert.rejects(() => impostor.register(), /need its delegation|reserved|taken/);
+  const bot = await alicia.delegate('bot', { scope: { messages_only: true } });
+  assert.equal((await bot.resolver.agentCard(alicia.address, { onBehalfOf: bot.address })).visibility, 'secret');
+  const botDeDani = await dani.delegate('bot', { scope: { messages_only: true } });
+  await assert.rejects(() => botDeDani.resolver.agentCard(alicia.address, { onBehalfOf: botDeDani.address }), /404/);
+});
+
 test('directorio: public figura; secret nunca, ni con listed; private no figura; visibilidad inválida se rechaza', async () => {
   const dir = await fetch(`${URL_A}/agents`).then((r) => r.json());
   const nombres = dir.agents.map((a) => a.address);

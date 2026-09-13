@@ -123,7 +123,9 @@ export class Libro {
     const cuenta = () => ({ n: 0, tokens: 0 });
     const h = {
       address, house: this.domain,
-      vendiendo: { entregas_aceptadas: cuenta(), entregas_devueltas: cuenta(), ventas_directas: cuenta() },
+      // entregas_por_silencio: liberadas por el reloj de la casa al vencer la ventana de revisión
+      // (NX-503). Silencio no es aceptación: se cuentan aparte, y también dentro de aceptadas.
+      vendiendo: { entregas_aceptadas: cuenta(), entregas_por_silencio: cuenta(), entregas_devueltas: cuenta(), ventas_directas: cuenta() },
       comprando: { encargos_liberados: cuenta(), encargos_devueltos: cuenta(), compras_directas: cuenta() },
       afirmando: { fianzas_sostenidas: cuenta(), fianzas_ejecutadas: cuenta(), fianzas_vigentes: cuenta() },
       avalando: { avales_sostenidos: cuenta(), avales_ejecutados: cuenta() },
@@ -145,7 +147,10 @@ export class Libro {
         else sumar(sostenida ? grupo.fianzas_sostenidas : grupo.fianzas_ejecutadas, monto);
       } else if (c.seller === address) {
         if (c.kind === 'spot') sumar(h.vendiendo.ventas_directas, monto);
-        else sumar(c.state === 'released' ? h.vendiendo.entregas_aceptadas : h.vendiendo.entregas_devueltas, monto);
+        else {
+          sumar(c.state === 'released' ? h.vendiendo.entregas_aceptadas : h.vendiendo.entregas_devueltas, monto);
+          if (c.state === 'released' && c.history?.some((x) => x.op === 'expire')) sumar(h.vendiendo.entregas_por_silencio, monto);
+        }
       } else {
         if (c.kind === 'spot') sumar(h.comprando.compras_directas, monto);
         else sumar(c.state === 'released' ? h.comprando.encargos_liberados : h.comprando.encargos_devueltos, monto);
