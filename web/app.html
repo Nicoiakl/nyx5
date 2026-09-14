@@ -403,10 +403,10 @@ function textoDe(c, de) {
   if (de === 'postmaster@' + DOMINIO && b && typeof b.reason === 'string') return 'Not done: ' + b.reason;
   return JSON.stringify(b, null, 1);
 }
-async function abrir(m) {
+async function abrir(m, contra) {
   const e = m.envelope || {};
-  if (e.encrypted) { try { const c = await descifrar(e); return { texto: textoDe(c, e.from), cifrado: true, cobro: cobroDe(c, true) }; } catch { return { texto: 'Encrypted, and this device has no key to open it.', cifrado: true, ilegible: true }; } }
-  return { texto: textoDe(e.content, e.from), cifrado: false, cobro: cobroDe(e.content, false) };
+  if (e.encrypted) { try { const c = await descifrar(e); return { texto: textoDe(c, e.from), cifrado: true, cobro: cobroDe(c, true, contra) }; } catch { return { texto: 'Encrypted, and this device has no key to open it.', cifrado: true, ilegible: true }; } }
+  return { texto: textoDe(e.content, e.from), cifrado: false, cobro: cobroDe(e.content, false, contra) };
 }
 // ---------- payment request (real money, off-ledger) ----------
 // Same rules as src/correo/cobro.js: the house cannot check any of this (the content is encrypted),
@@ -427,17 +427,23 @@ function montoNormal(amount, currency) {
 function montoBonito(amount, currency) { return '$' + (currency === 'CLP' ? Number(amount).toLocaleString('es-CL') : String(amount)) + ' ' + currency; }
 // What arrived is a payment request or a confirmation ONLY if it came encrypted (the house could
 // not have read or altered it) and every field passes the same checks as when it is sent.
-function cobroDe(c, cifrado) {
+// `contraparte` is the other side's card when known: an address whose key the house holds
+// (custody.keys = house) was signed and encrypted BY the house, so the house could have written or
+// altered the details. From there, nothing is a card (same rule as paymentConfirm in the client).
+// A text longer than its limit is not trimmed: it is not a card (the sender's client would have
+// refused it, and the server-side validator does).
+function cobroDe(c, cifrado, contraparte) {
   if (!cifrado || !c || !c.body || typeof c.body !== 'object') return null;
-  const b = c.body, texto = (v, max) => typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, '').trim().slice(0, max) : '';
+  if (contraparte && contraparte.custody && contraparte.custody.keys === 'house') return null;
+  const b = c.body, texto = (v, max) => { if (typeof v !== 'string') return ''; const t = v.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, '').trim(); return t.length > max ? null : t; };
   if (typeof b.request_id !== 'string' || !/^[A-Za-z0-9._:-]{8,128}$/.test(b.request_id)) return null;
   if (c.media === MEDIA_COBRO) {
     const currency = b.currency === 'USD' ? 'USD' : b.currency === 'CLP' ? 'CLP' : null;
     const amount = currency && montoNormal(b.amount, currency), rut = rutNormal(b.rut);
-    if (amount === null || !rut || !TIPOS_CUENTA[b.account_type] || !/^[0-9-]{1,30}$/.test(String(b.account_number || ''))) return null;
-    const name = texto(b.name, 120), bank = texto(b.bank, 60);
-    if (!name || !bank) return null;
-    return { kind: 'request', request_id: b.request_id, amount, currency, name, rut, bank, account_type: b.account_type, account_number: String(b.account_number), reference: texto(b.reference, 140) };
+    if (amount === null || !rut || typeof b.account_type !== 'string' || !Object.hasOwn(TIPOS_CUENTA, b.account_type) || !/^[0-9-]{1,30}$/.test(String(b.account_number || ''))) return null;
+    const name = texto(b.name, 120), bank = texto(b.bank, 60), reference = texto(b.reference, 140);
+    if (!name || !bank || reference === null) return null;
+    return { kind: 'request', request_id: b.request_id, amount, currency, name, rut, bank, account_type: b.account_type, account_number: String(b.account_number), reference };
   }
   if (c.media === MEDIA_COBRO_CONF) { const ref = texto(b.bank_reference, 80); return ref ? { kind: 'confirmation', request_id: b.request_id, bank_reference: ref } : null; }
   return null;
@@ -529,7 +535,8 @@ async function refrescarChat() {
   // A confirmation counts only for a request that is in THIS conversation and went the other way:
   // they confirm what I sent, I confirm what they sent. Anything else stays as plain text.
   const pedidos = new Map(), confirmados = new Map();
-  for (const m of msgs) { const a = await abrir(m); abiertos.push([m, a]); if (a.cobro && a.cobro.kind === 'request') pedidos.set(a.cobro.request_id, m.dir); }
+  const contra = await tarjeta(CON).catch(() => null);
+  for (const m of msgs) { const a = await abrir(m, contra); abiertos.push([m, a]); if (a.cobro && a.cobro.kind === 'request') pedidos.set(a.cobro.request_id, m.dir); }
   for (const [m, a] of abiertos) if (a.cobro && a.cobro.kind === 'confirmation' && pedidos.has(a.cobro.request_id) && pedidos.get(a.cobro.request_id) !== m.dir) confirmados.set(a.cobro.request_id, a.cobro.bank_reference);
   COBROS.clear();
   for (const [m, a] of abiertos) {

@@ -653,9 +653,11 @@ between the two parties, and records that a request and a confirmation happened.
 - **Nothing is stored.** The bank details live in the encrypted envelope and nowhere else: not in the
   card, not in the profile, not in the browser storage of the app. Each request carries its own.
 - **The app** shows a request as a card (`Payment request`: amount, name, RUT, bank, account,
-  reference; `Copy details`; `I paid — confirm` with the bank reference) only when it arrived encrypted
-  and every field passes the same validation as on sending; anything else stays plain text. Every value
-  is escaped before rendering.
+  reference; `Copy details`; `I paid — confirm` with the bank reference) only when it arrived encrypted,
+  every field passes the same validation as on sending (a field over its limit is not trimmed: it is
+  not a card), and the other side is not an address whose key the house holds (there the house signed
+  and encrypted in its name, so it could have written the details); anything else stays plain text.
+  Every value is escaped before rendering.
 - MCP: `nyx5_payment_request { to, amount, currency?, name, rut, bank, account_type, account_number,
   reference? }` and `nyx5_payment_confirm { in_reply_to, bank_reference, from? }`.
 - What it does **not** prove: that the transfer happened. A confirmation is a signed claim by the payer,

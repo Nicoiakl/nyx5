@@ -333,3 +333,30 @@ function leerTodo(dir) {
   }
   return out;
 }
+
+// ---------- revisión adversarial (14-sep-2026): lo que la primera pasada no cubría ----------
+test('ATAQUE 4 · la app no pinta tarjeta con account_type de prototipo, ni con campos más largos que el tope (misma regla que el servidor), ni de una contraparte cuya llave guarda la casa', () => {
+  // `TIPOS_CUENTA[b.account_type]` encontraba `constructor` en el prototipo y pintaba
+  // "Account: function Object() { [native code] } 12345678" como tarjeta válida.
+  for (const t of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 42, null]) {
+    assert.equal(app.cobroDe({ media: MEDIA_COBRO, body: { ...CONTENIDO.body, account_type: t } }, true), null, String(t));
+    assert.equal(validarCobro({ ...COBRO, account_type: t }).ok, false, 'el servidor también: ' + String(t));
+  }
+  // La app recortaba a 120/60/140 y pintaba tarjeta donde el servidor rechaza: ahora divergir es imposible.
+  for (const [k, max] of [['name', 120], ['bank', 60], ['reference', 140]]) {
+    assert.equal(app.cobroDe({ media: MEDIA_COBRO, body: { ...CONTENIDO.body, [k]: 'x'.repeat(max + 1) } }, true), null, `${k} de ${max + 1}`);
+    assert.equal(validarCobro({ ...COBRO, [k]: 'x'.repeat(max + 1) }).ok, false, `servidor: ${k} de ${max + 1}`);
+    assert.ok(app.cobroDe({ media: MEDIA_COBRO, body: { ...CONTENIDO.body, [k]: 'x'.repeat(max) } }, true), `SILENCIO: ${k} en el tope sigue siendo tarjeta`);
+    assert.equal(validarCobro({ ...COBRO, [k]: 'x'.repeat(max) }).ok, true, `SILENCIO servidor: ${k} en el tope`);
+  }
+  assert.equal(app.cobroDe({ media: MEDIA_COBRO_CONFIRMACION, body: { request_id: 'req-00000001', bank_reference: 'x'.repeat(81) } }, true), null);
+  assert.ok(app.cobroDe({ media: MEDIA_COBRO_CONFIRMACION, body: { request_id: 'req-00000001', bank_reference: 'x'.repeat(80) } }, true));
+  // Una contraparte con custody.keys = house: la casa firmó y cifró por ella, pudo escribir la cuenta. No es tarjeta.
+  assert.equal(app.cobroDe(CONTENIDO, true, { address: 'claude.x@h', enc: 'k', custody: { keys: 'house', via: 'connector' } }), null);
+  assert.ok(app.cobroDe(CONTENIDO, true, { address: 'x@h', enc: 'k' }), 'SILENCIO: una contraparte raíz sigue viendo la tarjeta');
+  assert.ok(app.cobroDe(CONTENIDO, true, null), 'SILENCIO: contraparte desconocida (no resuelta) no bloquea');
+  // El cableado: refrescarChat resuelve la tarjeta de la contraparte y se la pasa a abrir(). Sin esto, el guardia es prosa.
+  assert.match(html, /const contra = await tarjeta\(CON\)\.catch\(\(\) => null\);/);
+  assert.match(html, /await abrir\(m, contra\)/);
+  assert.match(html, /function abrir\(m, contra\)/);
+});
