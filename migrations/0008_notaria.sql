@@ -1,4 +1,4 @@
--- 0007 · Notaría (NX-601): la casa sella el hash de un documento con fecha y firma. Gratis.
+-- 0008 · Notaría (NX-601): la casa sella el hash de un documento con fecha y firma. Gratis.
 --
 -- Un sello no mueve dinero y no consume número de asiento: no toca nyx5_libro_diario ni el
 -- estado de saldos. Su candado es el índice único (sha256, by): dos sobres del mismo agente con

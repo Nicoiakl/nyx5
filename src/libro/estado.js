@@ -67,7 +67,9 @@ export function filasDe(asiento, account, casa) {
 // medianoche UTC de ese día: como `until` es exclusivo, `hasta=2026-09-14` cubre el 13 entero.
 function fechaIso(v, nombre) {
   if (v == null || v === '') return null;
-  const t = typeof v === 'string' ? Date.parse(v) : NaN;
+  // Sin zona horaria, Node la interpreta en la del proceso y workerd en UTC: se exige Z u offset
+  // (una fecha sola, sin hora, es UTC en las dos).
+  const t = typeof v === 'string' && (/^\d{4}-\d{2}-\d{2}$/.test(v) || /(Z|[+-]\d{2}:?\d{2})$/.test(v)) ? Date.parse(v) : NaN;
   if (Number.isNaN(t)) throw new LibroError(400, `${nombre} must be an ISO-8601 date, got ${JSON.stringify(v)}`);
   return new Date(t).toISOString();
 }

@@ -742,14 +742,17 @@ export class Estafeta {
     await this._evento('invitation_created', inviter, { with_claude: !!inv.inviter_claude });
     return { status: 201, body: { link: `${this.publicUrl}/i/${code}`, connector_url: `${this.publicUrl}/mcp/i/${code}`, inviter, inviter_claude: inv.inviter_claude, contacts: contactos, expires: inv.expires } };
   }
-  async _paginaInvitacion(code, fuente = null) {
+  async _paginaInvitacion(code, fuente = null, ip = null) {
     const inv = await this.store.kvGet('invitacion', code);
     const datos = inv && !inv.used_by
       ? { code, inviter: inv.inviter, inviter_claude: inv.inviter_claude, contacts: inv.contacts || [], greet: inv.greet || null, name_hint: inv.name_hint, connector_url: `${this.publicUrl}/mcp/i/${code}` }
       : { error: inv ? 'used' : 'unknown' };
     // Embudo, etapa 1: el enlace se abrió (una invitación viva). Cuenta visitas, no personas: una
     // vista previa de WhatsApp o un bot también abren. Actor = quien invitó; el invitado aún no existe.
-    if (!datos.error) await this._evento('open_invite', inv.inviter, { code, source: Estafeta.fuenteLimpia(fuente) || inv.source || null });
+    // Una visita por código, canal, IP y hora: la revisión del 14-sep inundó el embudo con 80 GET en
+    // 43 ms. Otro canal (`?source=`) sí cuenta: es otra puerta, no la misma vista previa repetida.
+    const canal = Estafeta.fuenteLimpia(fuente) || inv?.source || '';
+    if (!datos.error && await this.store.kvPutIfAbsent?.('open_invite', `${code}:${canal}:${ip || 'x'}:${iso().slice(0, 13)}`, 1, now() + 2 * 3600_000)) await this._evento('open_invite', inv.inviter, { code, source: Estafeta.fuenteLimpia(fuente) || inv.source || null });
     const html = APP_HTML.replace('<!--OAUTH-->', `<script>window.NYX5_INVITE=${JSON.stringify(datos).replace(/</g, '\\u003c')}</script>`);
     return { status: inv ? 200 : 404, contentType: 'text/html; charset=utf-8', body: html };
   }
@@ -1553,7 +1556,7 @@ export class Estafeta {
       if (this.remoto.enabled && rx.method === 'POST' && path === '/oauth/approve') return oauth.aprobar(this, rx);
       // ----- Invitaciones de contacto: un link que se manda por WhatsApp -----
       if (this.remoto.enabled && rx.method === 'POST' && path === '/contact-invites') return this.crearInvitacion(rx);
-      if (this.remoto.enabled && rx.method === 'GET' && (m = /^\/i\/([A-Za-z0-9_-]{16,64})$/.exec(path))) return this._paginaInvitacion(m[1], rx.query.get('source'));
+      if (this.remoto.enabled && rx.method === 'GET' && (m = /^\/i\/([A-Za-z0-9_-]{16,64})$/.exec(path))) return this._paginaInvitacion(m[1], rx.query.get('source'), rx.ip);
       // ----- Asistentes (sólo la casa los configura; el dueño los pide) -----
       if ((m = /^\/admin\/assistants(?:\/([^/]+))?(?:\/(knowledge|config|pause|resume))?$/.exec(path))) {
         if ((rx.headers.authorization || '') !== `Bearer ${this.adminToken}`) return send(401, { reason: 'only the house configures assistants' });
@@ -1741,8 +1744,9 @@ export class Estafeta {
       // /resolve. Un hash sin sellos y un id inexistente contestan el mismo 404. El nombre del
       // declarante se muestra sólo si «nadie» lo vería (_visibleA con quien = null).
       if (rx.method === 'GET' && (m = /^\/notaria\/(?:sello\/([^/]+)|([0-9a-fA-F]{64}))$/.exec(path))) {
-        if (!await this.rate.allow(`resolve:${rx.ip || 'x'}`)) return tarde({ reason: 'too many requests' });
-        const docs = m[1] ? [await this.store.notariaGet(decodeURIComponent(m[1]))].filter(Boolean) : await this.store.notariaList(m[2].toLowerCase());
+        if (!await this.rate.allow(`notaria:${rx.ip || 'x'}`)) return tarde({ reason: 'too many requests' });
+        let idSello = null; if (m[1]) { try { idSello = decodeURIComponent(m[1]); } catch { return send(404, { reason: 'no such seal' }); } }
+        const docs = idSello ? [await this.store.notariaGet(idSello)].filter(Boolean) : await this.store.notariaList(m[2].toLowerCase());
         if (!docs.length) return send(404, { reason: 'no such seal' });
         const seals = [];
         for (const d of docs) seals.push(selloPublico(d, await this._declaranteVisible(d)));
@@ -1919,6 +1923,9 @@ export class Estafeta {
         const formato = p.formato || 'json';
         if (!['json', 'csv'].includes(formato)) return send(400, { reason: 'formato must be json or csv' });
         const estado = await estadoDeCuenta(this.libro, cuenta, { since: p.desde, until: p.hasta, limit: p.limit, max: 1000 });
+        // Diario y saldos que no cuadran es la primera señal de un libro corrompido: se anota y se
+        // registra como evento, no se devuelve en silencio dentro del JSON.
+        if (estado.reconciled === false) { this.log(`libro: el diario y los saldos de ${cuenta} divergen (${estado.closing_balance} vs ${estado.ledger_balance})`); await this._evento('ledger_divergence', cuenta, { closing_balance: estado.closing_balance, ledger_balance: estado.ledger_balance }); }
         if (formato === 'json') return send(200, estado);
         return { status: 200, contentType: 'text/csv; charset=utf-8', headers: { 'content-disposition': `attachment; filename="${nombreCsv(estado)}"` }, body: csvDe(estado) };
       }

@@ -49,7 +49,7 @@ src/puentes/x402.js      adaptador x402 v2: PAYMENT-REQUIRED / PAYMENT-SIGNATURE
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria -> `npm test` (ver npm test)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria -> `npm test` (290)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
 ```
@@ -57,7 +57,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # todas las pruebas deben pasar antes de cualquier commit (el conteo se pone al final de la noche)
+npm test                 # 290 pruebas, todas deben pasar antes de cualquier commit
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
 npm run demo             # correo: tarea cifrada, respuesta, acuse
@@ -432,7 +432,7 @@ la op `notarize { sha256, name?, media?, note? }` sella un hash con fecha y firm
 sello vuelve como recibo y cualquiera lo verifica sin cuenta en `GET /notaria/<sha256>` y
 `GET /notaria/sello/<id>` (SPEC §23b). Tres cosas que hay que saber para no romperla:
 - **No hay asiento.** El candado contra el doble sello es el índice único `(sha256, by)` de
-  `nyx5_notaria` (migración 0007), no el número de asiento: mismo agente + mismo hash = UN sello
+  `nyx5_notaria` (migración 0008), no el número de asiento: mismo agente + mismo hash = UN sello
   (el primero, `existing: true`); dos agentes = dos sellos. FileStore aplica el mismo candado.
 - **Dos versiones firmadas por sello** (`sello` con `by`, `anonimo` con `by: null`), mismo id: la
   pública sirve la anónima si el declarante es secreto (`_declaranteVisible`), y sigue verificando.

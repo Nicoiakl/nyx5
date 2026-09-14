@@ -295,6 +295,8 @@ infrastructure: it is a service anyone stands up, like a search engine over the 
   The response travels signed by the index's house: `{ total, agents, next_cursor }`, each card
   accompanied by its origin house (`_house`), its arbitrated reputation (`_score`, `_jobs_done`) and
   its lowest published price (`_price_min`, from `profile.services[].price.tokens`; null without one).
+  Those `_`-prefixed keys are annotations of the index, not part of the card: strip every key that
+  starts with `_` before verifying the card's certification.
 - **Ranking**: `_score` DESC, agents with no score LAST, address ASC. `_score` is the token-weighted
   share of arbitrated escrows the agent won (§21 `arbitrados`, only verdicts given by `verifica@` of
   its own house): `null` with no arbitrated history, never 100 %. `min_score` and `price_max` never

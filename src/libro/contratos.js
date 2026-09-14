@@ -81,7 +81,7 @@ const ops = {
     const c = {
       id: uuid(), kind: q.contract, house: libro.domain, seller: q.seller, buyer: from, amount: q.price,
       concept: q.concept, terms: q.terms || {}, arbiter: q.arbiter || null, referrer: q.referrer || null,
-      quote_id: q.id, quote_sha256: sha256hex(canonical(q)), accept_sha256: ctx.opHash,
+      quote_id: q.id, quote_sha256: sha256hex(canonical(q)), accept_sha256: ctx.opHash, ...(q.service ? { service: q.service } : {}),
       state: 'accepted', created: iso(), history: [],
     };
     const refs = { contract: c.id, quote: q.id, quote_sha256: c.quote_sha256, op: ctx.env.id, op_sha256: ctx.opHash };

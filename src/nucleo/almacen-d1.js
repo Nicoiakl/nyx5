@@ -317,7 +317,7 @@ export class D1Store {
     if (f.tag) { where.push('EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)'); binds.push(f.tag); }
     if (f.lang) { where.push("EXISTS (SELECT 1 FROM json_each(langs) WHERE value = ? OR value LIKE ? || '-%')"); binds.push(f.lang, f.lang); }
     if (f.price_max != null) { where.push('price_min IS NOT NULL AND price_min <= ?'); binds.push(f.price_max); }
-    if (f.q) { where.push('lower(doc) LIKE ?'); binds.push(`%${String(f.q).toLowerCase()}%`); }
+    if (f.q) { where.push("lower(doc) LIKE ? ESCAPE '\\'"); binds.push(`%${String(f.q).toLowerCase().replace(/[\\%_]/g, (c) => '\\' + c)}%`); }
     const wBase = where.length ? `WHERE ${where.join(' AND ')}` : '';
     if (f.cursor) {
       // Caduco: una fila que ya existía en g y cuyo historial no conserva ninguna entrada <= g.

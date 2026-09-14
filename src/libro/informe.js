@@ -59,7 +59,7 @@ export const ETAPAS = [
   { id: 'open_invite', label: 'Invite opened' },
   { id: 'join', label: 'Address created' },
   { id: 'claude_connected', label: 'Claude connected' },
-  { id: 'first_message', label: 'First message' },
+  { id: 'first_message', label: 'First message sent' },
   { id: 'first_quote', label: 'First contract' },
   { id: 'mandate_created', label: 'First mandate' },
 ];

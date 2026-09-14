@@ -86,6 +86,7 @@ export function validarFiltros(p = {}) {
   for (const k of ['q', 'capability', 'accepts', 'house']) {
     if (vacio(p[k])) continue;
     if (typeof p[k] !== 'string' || p[k].length > 200) throw fallo(400, `${k} must be a string of up to 200 characters`);
+    if (k === 'capability' && !/^[a-z0-9_-]{1,64}$/.test(p[k])) throw fallo(400, 'capability must be 1-64 lowercase letters, digits, dashes or underscores');
     f[k] = k === 'house' ? p[k].toLowerCase() : p[k];
   }
   if (!vacio(p.tag)) {
