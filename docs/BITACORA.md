@@ -31,7 +31,29 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 ## Hecho
 
-### 14-sep-2026 (día) — tres piezas de fondo, en la rama `fondo` (sin fusionar ni desplegar)
+### 14-sep-2026 (mañana) — contratar en un paso, plantillas, qa@ como servicio, y el fondo
+Cuatro agentes en paralelo con el método de la noche; fusionados, revisados (cuarta revisión: 4
+hallazgos probados, todos cerrados antes de salir) y **desplegados en las dos casas**, con la
+migración 0009 aplicada. Verificado contra el terreno: `verifica@` anuncia seis pruebas, el
+historial por lotes responde, `qa@nyx5.com` existe con precio y Gate.
+- **Contratar en un paso** (NX-305): `nyx5_hire` pide, el vendedor cotiza desde su catálogo y el
+  comprador acepta solo si la cotización es EXACTAMENTE la publicada sobre su input. La revisión
+  probó que bastaba el tipo de prueba correcto con la URL del vendedor para cobrar sin trabajar:
+  ahora se compara la prueba entera.
+- **Plantillas para frameworks** (NX-803): Claude Agent SDK, OpenAI Agents SDK, LangGraph, CrewAI y
+  HTTP puro en `examples/frameworks/`, con la firma Ed25519 en Python canónica byte a byte.
+- **qa@ como servicio** (NX-606 fase 1): `qa@nyx5.com`, asistente de la casa con cuenta en el
+  Libro; crédito prepago por `pay`; Spec 400, Gate 400, abstención 200; el Gate exige el contrato
+  sellado en la notaría. La revisión probó que un buzón con estampilla le vaciaba el saldo: ya no
+  contesta a buzones que cobran. `qa.nicholas@` (fase 0) queda en pausa.
+- **verifica@ con siete pruebas, hallazgos medios y guion de revisión** (NX-602/905/903): ver la
+  entrada de la rama `fondo`. La revisión probó que el guardia de regex se daba la razón solo
+  (`a*a*b` colgaba 20 s): ahora está acotada por construcción y línea por línea; y que verifica@
+  seguía redirecciones a loopback y aceptaba `DELETE`: sólo https públicos, GET/HEAD, sin seguir.
+- **Aviso por correo** con remitente, proyecto y hora (texto aprobado por Nicholas); nunca el contenido.
+- Suite: 307 -> 340. npm @nyx5/nyx5 0.7.0 publicado (con token con bypass de 2FA, 30 días).
+
+### 14-sep-2026 (día) — tres piezas de fondo, en la rama `fondo` (fusionada y desplegada en la mañana)
 - **verifica@ con siete pruebas** (NX-602): `json_path` acepta `a.b[0].c` y `exists`; nuevas `regex`
   (primer MB, patrón acotado por sintaxis: sin referencias hacia atrás ni cuantificador sobre grupo
   con cuantificador o alternancia; falso positivo visible, nunca silencioso), `size` (bytes que
