@@ -222,6 +222,19 @@ test('el dueño (y su Claude delegado) no paga: crédito infinito para probar', 
     assert.equal(await consumido(quien), 0);
   }
   assert.equal(await casa.libro.balance(QA), antesQa, 'nada se movió en el Libro');
+  // free_for: otra dirección (y su delegado) que tampoco paga; para que Nicholas pruebe desde su celular.
+  const probador = Agent.create(`probador@${H}`, URL_CASA, { hosts });
+  await probador.register({ adminToken: 't' });
+  assert.equal((await admin('PUT', `/admin/assistants/qa/config`, { free_for: ['no-es-direccion'] })).status, 400);
+  assert.deepEqual((await admin('PUT', `/admin/assistants/qa/config`, { free_for: [probador.address] })).body.free_for, [probador.address]);
+  const d = await probador.delegate('claude', { scope: { messages_only: true } });
+  const cel = new Agent({ address: d.address, keys: d.keys, estafeta: URL_CASA, hosts });
+  const n = pedidos.length, t0 = Date.now();
+  await cel.send({ to: QA, body: 'pruebo desde el celular' });
+  const cuerpo = await cuerpoDe(cel, await respuestaA(cel, t0));
+  assert.equal(pedidos.length, n + 1, 'el delegado de free_for llamó a la API sin pagar');
+  assert.ok(!/cobrado:/.test(cuerpo));
+  await admin('PUT', `/admin/assistants/qa/config`, { free_for: [] });
 });
 
 test('el crédito es por cliente: lo que pagó uno no lo gasta otro', async () => {

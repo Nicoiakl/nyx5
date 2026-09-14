@@ -235,7 +235,10 @@ async function responder(est, local, cfg, m) {
   if (esGate && cfg.gate !== true) return rechazar('Esta dirección no atiende Gate: sólo contesta pedidas de contrato.');
   // ----- cobro por crédito -----
   // El dueño (y sus delegados: su Claude conectado) no paga: es quien prueba el asistente.
-  const dueno = !!cfg.owner && (de === cfg.owner || abierto.sender?.delegation?.by === cfg.owner);
+  // `free_for`: direcciones (y sus delegados) que tampoco pagan; nació para que Nicholas pruebe qa@
+  // desde su Claude del celular (delegado de nico@, no de nicholas@) antes de abrirlo a otros.
+  const libres = [cfg.owner, ...(Array.isArray(cfg.free_for) ? cfg.free_for : [])].filter(Boolean);
+  const dueno = libres.includes(de) || (abierto.sender?.delegation?.by && libres.includes(abierto.sender.delegation.by));
   const precio = dueno ? 0 : Number(esGate ? cfg.gate_price_tokens : cfg.price_tokens) || 0;
   let gate = null;
   if (esGate) {

@@ -779,6 +779,8 @@ export class Estafeta {
     // seal: cada respuesta termina con su sha256, para sellarla en la notaría (qa@, NX-606).
     const seal = c.seal ?? base.seal ?? false;
     if (typeof seal !== 'boolean') return { error: 'seal must be true or false' };
+    const free_for = c.free_for ?? base.free_for ?? [];
+    if (!Array.isArray(free_for) || free_for.length > 10 || !free_for.every((a) => { try { parseAddress(a); return true; } catch { return false; } })) return { error: 'free_for must be a list of up to 10 addresses that do not pay' };
     // Cobro por crédito (NX-606 fase 1): tokens por respuesta de Spec, por veredicto de Gate y por
     // abstención de Gate. 0 = gratis (el asistente de Sigo). Decisión de Nicholas (14-sep-2026):
     // Spec 400, Gate 400 si dictamina y 200 si se abstiene.
@@ -793,7 +795,7 @@ export class Estafeta {
     if (typeof gate !== 'boolean') return { error: 'gate must be true or false' };
     const persona_gate = c.persona_gate ?? base.persona_gate ?? '';
     if (typeof persona_gate !== 'string' || persona_gate.length > 20_000) return { error: 'persona_gate must be a string of at most 20000 characters' };
-    return { model, effort, max_tokens, budget_usd, seal, price_tokens, gate_price_tokens, gate_abstain_tokens, gate, persona_gate };
+    return { model, effort, max_tokens, budget_usd, seal, price_tokens, gate_price_tokens, gate_abstain_tokens, gate, persona_gate, free_for };
   }
   // Alta de un asistente de SISTEMA (NX-606): `<local>@<casa>` con llaves propias guardadas en la
   // bóveda, tarjeta certificada por la casa, buzón abierto y cuenta en el Libro (recibe `pay`).
@@ -872,7 +874,7 @@ export class Estafeta {
       if (v.error) return { status: 400, body: { reason: v.error } };
       const nueva = { ...cfg, ...v, ...(typeof b.persona === 'string' ? { persona: b.persona } : {}), updated: iso() };
       await this.store.kvPut('asistente', local, nueva);
-      return { status: 200, body: { model: nueva.model, effort: nueva.effort, max_tokens: nueva.max_tokens, budget_usd: nueva.budget_usd, seal: nueva.seal === true, price_tokens: nueva.price_tokens, gate: nueva.gate === true, gate_price_tokens: nueva.gate_price_tokens, gate_abstain_tokens: nueva.gate_abstain_tokens } };
+      return { status: 200, body: { model: nueva.model, effort: nueva.effort, max_tokens: nueva.max_tokens, budget_usd: nueva.budget_usd, seal: nueva.seal === true, price_tokens: nueva.price_tokens, gate: nueva.gate === true, gate_price_tokens: nueva.gate_price_tokens, gate_abstain_tokens: nueva.gate_abstain_tokens, free_for: nueva.free_for || [] } };
     }
     if (rx.method === 'POST' && (accion === 'pause' || accion === 'resume')) {
       await this.store.kvPut('asistente', local, { ...cfg, enabled: accion === 'resume' });
@@ -882,7 +884,7 @@ export class Estafeta {
       const mes = new Date().toISOString().slice(0, 7);
       const gasto = (await this.store.kvGet('asistente-gasto', `${local}:${mes}`)) || { usd: 0, llamadas: 0 };
       const con = await this.store.kvGet('asistente-conocimiento', local);
-      return { status: 200, body: { address: `${local}@${this.domain}`, enabled: cfg.enabled, system: cfg.system === true, owner: cfg.owner || null, model: cfg.model, effort: cfg.effort, budget_usd: cfg.budget_usd, price_tokens: cfg.price_tokens ?? 0, gate: cfg.gate === true, gate_price_tokens: cfg.gate_price_tokens ?? 0, gate_abstain_tokens: cfg.gate_abstain_tokens ?? 0, month: mes, spent_usd: Math.round(gasto.usd * 10000) / 10000, calls: gasto.llamadas, knowledge_bytes: con ? Buffer.byteLength(con.texto) : 0, knowledge_updated: con?.updated || null, api_key: !!this.asistente, pending: (await this.store.listMail(local)).length } };
+      return { status: 200, body: { address: `${local}@${this.domain}`, enabled: cfg.enabled, system: cfg.system === true, owner: cfg.owner || null, free_for: cfg.free_for || [], model: cfg.model, effort: cfg.effort, budget_usd: cfg.budget_usd, price_tokens: cfg.price_tokens ?? 0, gate: cfg.gate === true, gate_price_tokens: cfg.gate_price_tokens ?? 0, gate_abstain_tokens: cfg.gate_abstain_tokens ?? 0, month: mes, spent_usd: Math.round(gasto.usd * 10000) / 10000, calls: gasto.llamadas, knowledge_bytes: con ? Buffer.byteLength(con.texto) : 0, knowledge_updated: con?.updated || null, api_key: !!this.asistente, pending: (await this.store.listMail(local)).length } };
     }
     return { status: 405, body: { reason: 'method not allowed here' } };
   }
