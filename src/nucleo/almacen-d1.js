@@ -150,6 +150,13 @@ export class D1Store {
     return Number(r.results[0].doc);
   }
   async kvDelete(ns, key) { await this.db.prepare('DELETE FROM nyx5_kv WHERE ns = ? AND key = ?').bind(ns, key).run(); }
+  // Las claves vivas de un espacio que empiezan por `prefix`, en orden de clave. `%` y `_` del
+  // prefijo se escapan: son comodines de LIKE y un prefijo no es un patrón.
+  async kvList(ns, { prefix = '', limit = 1000 } = {}, nowMs = Date.now()) {
+    const patron = `${String(prefix).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const r = await this.db.prepare(`SELECT key, doc FROM nyx5_kv WHERE ns = ? AND key LIKE ? ESCAPE '\\' AND (expires IS NULL OR expires > ?) ORDER BY key LIMIT ?`).bind(ns, patron, nowMs, limit).all();
+    return r.results.map((row) => ({ key: row.key, doc: JSON.parse(row.doc) }));
+  }
   async kvPurge(nowMs = Date.now()) { await this.db.prepare('DELETE FROM nyx5_kv WHERE expires IS NOT NULL AND expires <= ?').bind(nowMs).run(); }
 
   // --- pins (una fila por dominio: el primero gana y ningún isolate pisa lo que otro aprendió) ---

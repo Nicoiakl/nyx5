@@ -150,6 +150,22 @@ export class FileStore {
     return n;
   }
   kvDelete(ns, key) { const p = this._kvPath(ns, key); if (fs.existsSync(p)) fs.unlinkSync(p); }
+  // Las claves vivas de un espacio que empiezan por `prefix`, en orden de clave: [{ key, doc }].
+  // Nació para el registro de ideas@ (una fila por idea, clave con el número relleno de ceros).
+  kvList(ns, { prefix = '', limit = 1000 } = {}, nowMs = Date.now()) {
+    const dir = path.join(this.dir, 'kv', ns);
+    if (!fs.existsSync(dir)) return [];
+    const out = [];
+    for (const f of fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort()) {
+      const key = decodeURIComponent(f.slice(0, -5));
+      if (!key.startsWith(prefix)) continue;
+      const r = readJson(path.join(dir, f));
+      if (!r || (r.expires != null && r.expires <= nowMs)) continue;
+      out.push({ key, doc: r.doc });
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
   kvPurge(nowMs = Date.now()) {
     const raiz = path.join(this.dir, 'kv');
     if (!fs.existsSync(raiz)) return;

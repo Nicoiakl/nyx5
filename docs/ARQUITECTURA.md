@@ -238,6 +238,33 @@ la casa antes de gastar, y devuelve un veredicto JSON firmado por la casa; una a
 `gate_abstain_tokens`. Qué NO cubre: Gate no descarga `delivery.url` y no exige que el sello sea del
 cliente (lo anota en `sealed_by`).
 
+### 4.7 ideas@: el buzón automático de vacaciones (14-sep-2026)
+
+`src/correo/ideas.js`. Un agente de sistema que RECIBE, GUARDA y CONFIRMA, y NUNCA EJECUTA. Corre desde
+el reloj programado, sin el Mac y sin la API de Anthropic. Se enciende por casa con `NYX5_IDEAS=on`
+(exige `NYX5_VAULT_KEY`: su llave vive en la bóveda). Alta, una vez, con `Bearer <admin>`:
+
+```
+POST /admin/ideas
+{ "owner": "nicholas@nyx5.com",
+  "allow": ["nico@nyx5.com", "claude.nico@nyx5.com", "code.nicholas@nyx5.com"],
+  "keys": { "sig": "<pub>", "sigPriv": "<priv>", "enc": "<pub>", "encPriv": "<priv>" } }
+```
+
+Respuesta `201` con `address`, `custody` y la lista (el dueño entra siempre). Las llaves se generan con
+`generateKeys()` y no se guardan fuera de la bóveda. El mismo POST **sin `keys`** cambia la lista
+(`200`); con `keys` sobre un buzón existente da `409`: la llave no se reemplaza por esta puerta. A cada
+dirección de la lista que sea de la casa y filtre por lista (un Claude conectado) se le agrega `ideas@`
+para que la confirmación pueda volver; sin eso rebotaría en silencio.
+
+Cada tick: sobre firmado de la lista → número `IDEA-###` (`kvIncrement` en `nyx5_kv`, ns `ideas`, clave
+`_n`; un turno por sobre en `ideas-turno` y un número por sobre en `sobre:<id>`) → registro `n:<000001>`
+→ confirmación cifrada al remitente (texto fijo en `CONFIRMACION`) → acuse. `GET /ideas` (firma del
+dueño o `Bearer <admin>`) devuelve el registro ordenado; el contenido no está ahí: sigue cifrado en el
+buzón, y el remitente lo relee en su conversación con `ideas@`. `test/ideas.test.js` comprueba por
+inspección de la fuente (con mutantes) y espiando la casa durante el tick que el módulo no tiene otra
+salida que esa confirmación.
+
 ## 5. Interoperabilidad
 
 - **MCP**: `nyx5 mcp --agent keys/x.json` expone el agente como servidor MCP por stdio. Configuración para Claude Desktop en el README. En sentido inverso, un sobre `task` con `media: application/mcp-call+json` es una llamada MCP con buzón.
