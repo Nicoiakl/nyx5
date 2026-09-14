@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes } from "node:crypto";
+import { sha256hex } from "../src/nucleo/crypto.js";
 import { Estafeta } from '../src/correo/estafeta.js';
 import { Agent } from '../src/correo/agente.js';
 import { costoDe } from '../src/correo/asistente.js';
@@ -165,4 +166,20 @@ test('config: cambia a un modelo más barato que se cobra con su propio precio; 
   const despues = (await admin('GET', `/admin/assistants/${asis.local}`)).body.spent_usd;
   assert.ok(Math.abs(despues - antes - costoDe('claude-sonnet-5', USO)) < 2e-4, `se cobró con el precio de Sonnet 5: ${despues - antes}`);
   assert.ok(costoDe('claude-sonnet-5', USO) < costoDe('claude-opus-5', USO));
+});
+
+// NX-606 (14-sep-2026): qa@ contesta con un contrato de aceptación y la casa le pone al pie su
+// sha256 (el modelo no sabe calcularlo), para sellarlo en la notaría tal cual llegó.
+test('config seal: la respuesta termina con su propio sha256, calculado por la casa', async () => {
+  const ruta = `/admin/assistants/${asis.local}/config`;
+  assert.equal((await admin('PUT', ruta, { seal: 'si' })).status, 400);
+  assert.equal((await admin('PUT', ruta, { seal: true })).body.seal, true);
+  const t0 = Date.now();
+  await pregunton.send({ to: asis.address, body: 'dame el spec' });
+  const r = await respuestaA(pregunton, t0);
+  const cuerpo = (await pregunton.open(r.envelope)).content.body;
+  const m = /\n\n---\nsha256: ([0-9a-f]{64})\n/.exec(cuerpo);
+  assert.ok(m, `sin pie de sello: ${cuerpo}`);
+  assert.equal(m[1], sha256hex(cuerpo.slice(0, m.index)), 'el sha256 no es el del texto que lo precede');
+  await admin('PUT', ruta, { seal: false });
 });

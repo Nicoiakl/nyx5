@@ -721,7 +721,10 @@ export class Estafeta {
     if (!Number.isInteger(max_tokens) || max_tokens < 256 || max_tokens > 64000) return { error: 'max_tokens must be an integer between 256 and 64000' };
     const budget_usd = Number(c.budget_usd ?? base.budget_usd ?? 30);
     if (!(budget_usd > 0 && budget_usd <= 1000)) return { error: 'budget_usd must be above 0 and at most 1000' };
-    return { model, effort, max_tokens, budget_usd };
+    // seal: cada respuesta termina con su sha256, para sellarla en la notaría (qa@, NX-606).
+    const seal = c.seal ?? base.seal ?? false;
+    if (typeof seal !== 'boolean') return { error: 'seal must be true or false' };
+    return { model, effort, max_tokens, budget_usd, seal };
   }
   async _adminAsistente(rx, local, accion) {
     const b = rx.body || {};
@@ -764,7 +767,7 @@ export class Estafeta {
       if (v.error) return { status: 400, body: { reason: v.error } };
       const nueva = { ...cfg, ...v, ...(typeof b.persona === 'string' ? { persona: b.persona } : {}), updated: iso() };
       await this.store.kvPut('asistente', local, nueva);
-      return { status: 200, body: { model: nueva.model, effort: nueva.effort, max_tokens: nueva.max_tokens, budget_usd: nueva.budget_usd } };
+      return { status: 200, body: { model: nueva.model, effort: nueva.effort, max_tokens: nueva.max_tokens, budget_usd: nueva.budget_usd, seal: nueva.seal === true } };
     }
     if (rx.method === 'POST' && (accion === 'pause' || accion === 'resume')) {
       await this.store.kvPut('asistente', local, { ...cfg, enabled: accion === 'resume' });

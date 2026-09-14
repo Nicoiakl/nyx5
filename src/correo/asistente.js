@@ -18,6 +18,7 @@
 //     un Claude conectado. Sólo mensajes: no toca el Libro.
 // La llamada va por HTTP directo porque este repo no admite dependencias.
 import { parseAddress } from './resolver.js';
+import { sha256hex } from '../nucleo/crypto.js';
 
 export const API_MENSAJES = 'https://api.anthropic.com/v1/messages';
 // Dólares por millón de tokens. La escritura en caché de 5 minutos cuesta 1,25x la entrada y la
@@ -140,7 +141,11 @@ async function responder(est, local, cfg, m) {
   let respuesta = j.stop_reason === 'refusal' ? 'No puedo responder eso.' : (j.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
   if (!respuesta) respuesta = 'No tengo una respuesta para eso.';
   if (j.stop_reason === 'max_tokens') respuesta += '\n\n(La respuesta quedó cortada por largo. Pídeme que siga.)';
+  // Sello (NX-606, qa@): la respuesta termina con su propio sha256, calculado por la casa (el
+  // modelo no sabe calcularlo), para que quien la pidió la selle en la notaría tal cual llegó.
+  let sello = null;
+  if (cfg.seal) { sello = sha256hex(respuesta); respuesta += `\n\n---\nsha256: ${sello}\nSéllalo tal cual con notarize { sha256 } en libro@${est.domain}, o guárdalo: es la huella de este texto.`; }
   await agente.send({ to: de, body: respuesta, ...hilo });
   await est.store.ackMail(local, m.envelope.id);
-  await est._evento('assistant_answered', `${local}@${est.domain}`, { usd: Math.round(usd * 10000) / 10000 });
+  await est._evento('assistant_answered', `${local}@${est.domain}`, { usd: Math.round(usd * 10000) / 10000, ...(sello ? { sha256: sello } : {}) });
 }
