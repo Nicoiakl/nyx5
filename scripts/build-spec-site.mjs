@@ -10,7 +10,7 @@
 //   node scripts/build-spec-site.mjs
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fuentes = {
@@ -27,7 +27,7 @@ const inline = (s) => esc(s)
 
 // Conversor markdown -> HTML acotado al subconjunto que usa la spec: encabezados, tablas, code
 // fences, listas, citas, párrafos. Sin dependencias.
-function toHtml(src) {
+export function toHtml(src) {
   const lines = src.split('\n');
   const out = [];
   let i = 0;
@@ -59,9 +59,32 @@ function toHtml(src) {
       continue;
     }
     if (/^\s*[-*]\s+/.test(line)) {                            // lista con viñetas
-      const buf = [];
-      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) { buf.push(`<li>${inline(lines[i].replace(/^\s*[-*]\s+/, ''))}</li>`); i++; }
-      out.push(`<ul>${buf.join('')}</ul>`); continue;
+      // Una viñeta que sigue en la línea de abajo (indentada) es la MISMA viñeta: antes el conversor
+      // cerraba el <ul> en cada salto de línea y la continuación salía como <p> suelto, con el
+      // `código` partido por la mitad (34 casos en el sitio el 14-sep-2026). Misma regla que la lista
+      // numerada: continuación indentada, un bloque de código dentro del ítem, y una línea en blanco
+      // sólo si lo que sigue es continuación u otra viñeta.
+      // Cada ítem junta su texto CRUDO y se convierte al final: un `código` partido entre dos líneas
+      // sólo cierra si las dos mitades se ven juntas. `html` es lo ya convertido (un bloque de código).
+      const items = [];
+      const cerrar = (it) => it.html + (it.raw ? inline(it.raw) : '');
+      while (i < lines.length) {
+        if (/^\s*[-*]\s+/.test(lines[i])) { items.push({ html: '', raw: lines[i].replace(/^\s*[-*]\s+/, '') }); i++; continue; }
+        const sig = lines[i + 1] ?? '';
+        if (lines[i].trim() === '' && (/^\s{2,}\S/.test(sig) || /^\s*[-*]\s+/.test(sig))) { i++; continue; }
+        if (/^\s{2,}\S/.test(lines[i]) && items.length) {
+          const it = items[items.length - 1];
+          if (/^\s*```/.test(lines[i])) {
+            const indent = /^(\s*)/.exec(lines[i])[1].length; const cb = []; i++;
+            while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { cb.push(esc(lines[i].slice(indent))); i++; }
+            i++;
+            it.html = cerrar(it) + `<pre><code>${cb.join('\n')}</code></pre>`; it.raw = '';
+          } else { it.raw += ' ' + lines[i].trim(); i++; }
+          continue;
+        }
+        break;
+      }
+      out.push(`<ul>${items.map((it) => `<li>${cerrar(it)}</li>`).join('')}</ul>`); continue;
     }
     if (/^\s*\d+\.\s+/.test(line)) {                           // lista numerada
       // Un bloque indentado entre dos ítems (un ejemplo de código, un párrafo de continuación)
@@ -178,6 +201,9 @@ ${cfg.pie}
   return { html, desc, titulo, body };
 }
 
+// Generar es el efecto; se corre sólo cuando este archivo es el programa principal, para que
+// `test/superficie.test.js` pueda importar `toHtml` sin reescribir el sitio.
+export function generar() {
 const en = construir('en');
 
 // llms.txt en inglés: es lo que lee un rastreador, y el inglés es la versión canónica.
@@ -214,3 +240,7 @@ const mod = `// GENERADO por scripts/build-spec-site.mjs desde docs/SPEC.md — 
 fs.writeFileSync(path.join(root, 'src/plataformas/spec-html.js'), mod);
 
 console.log(`sitio generado: ${(en.html.length / 1024).toFixed(1)} KB, ${en.body.match(/<h2/g)?.length || 0} secciones`);
+return en;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) generar();

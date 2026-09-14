@@ -7,7 +7,7 @@
 // Las descripciones son lo único que el modelo lee para decidir si usa Nyx5: dicen la capacidad,
 // la garantía y el momento de uso, no el mecanismo. Las cuida test/mcp.test.js.
 
-import { proyectoDe } from '../correo/politica.js';
+import { proyectoDe, nombreDeProyecto } from '../correo/politica.js';
 import { MEDIA_GATE } from '../correo/asistente.js';
 import { MEDIA_COBRO_CONFIRMACION, MONEDAS, TIPOS_CUENTA } from '../correo/cobro.js';
 
@@ -138,7 +138,9 @@ export async function llamar(agent, name, args = {}, { permitidas = null, espera
   switch (name) {
     case 'nyx5_send': { const r = await agent.send({ to: args.to, body: args.body, type: args.type, thread: args.thread, inReplyTo: args.in_reply_to, encrypt: args.encrypt ?? true, project: args.project, role: args.role, extensions: args.aval ? { 'urn:nyx5:ext:aval': args.aval } : undefined }); return text({ id: r.id, jobs: r.jobs, encrypted: r.encrypted }); }
     case 'nyx5_inbox': {
-      const proyecto = args.project ? String(args.project).trim().toLowerCase() : null;
+      // La MISMA normalización que al enviar y que la casa (NFKC, sin invisibles): `trim().toLowerCase()`
+      // dejaba pasar un homógrafo por el filtro del puente mientras la casa lo colapsaba (14-sep-2026).
+      const proyecto = args.project ? nombreDeProyecto(args.project) : null;
       const msgs = (await agent.inbox({ limit: args.limit ?? 20 })).filter((m) => !proyecto || proyectoDe(m.envelope) === proyecto);
       const opened = [];
       // `received` es la hora que entiende `since` de nyx5_wait (la de llegada al buzón, no la de
@@ -191,7 +193,7 @@ export async function llamar(agent, name, args = {}, { permitidas = null, espera
       // Lo que YA estaba sin leer se entrega igual (nada se pierde), pero marcado como anterior a la
       // espera, para que nadie lo tome por la respuesta a lo que acaba de mandar.
       const desde = args.since || new Date().toISOString();
-      const anterior = args.since ? null : (await agent.inbox({ limit: 50 })).find((m) => m.received < desde && (!args.from || m.envelope?.from === args.from) && (!args.thread || m.envelope?.thread === args.thread || m.envelope?.id === args.thread) && (!args.project || proyectoDe(m.envelope) === String(args.project).trim().toLowerCase()));
+      const anterior = args.since ? null : (await agent.inbox({ limit: 50 })).find((m) => m.received < desde && (!args.from || m.envelope?.from === args.from) && (!args.thread || m.envelope?.thread === args.thread || m.envelope?.id === args.thread) && (!args.project || proyectoDe(m.envelope) === nombreDeProyecto(args.project)));
       const m = anterior || await agent.wait({ from: args.from, thread: args.thread, since: desde, project: args.project, seconds: secs });
       if (!m) return text({ message: null, waited_seconds: secs, note: 'nothing arrived; call again to keep listening' });
       let abierto;

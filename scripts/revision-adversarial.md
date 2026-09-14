@@ -63,6 +63,10 @@ normaliza homógrafos y quita ancho cero y bidi de la ficha; los nombres de agen
 **[manual]** con un script ad hoc: registrar `alicia` y luego el mismo nombre con U+200B dentro y
 con la `a` cirílica (U+0430); los dos tienen que rechazarse o colapsar al mismo. Escribir los invisibles con
 escapes `\u200B`, nunca el carácter literal (se corrompe al editar).
+Que ningún literal quede en la fuente lo cuida `test/fuente-limpia.test.js`, no un `grep`: en esta máquina
+`grep` es una función de shell que envuelve otro buscador y dio 0 con un NUL y dos U+200B literales presentes
+(14-sep-2026). La herramienta que escribe archivos convierte un escape tipeado en el carácter literal: después
+de escribir una prueba con invisibles, correr esa suite antes de commitear.
 
 ## 6. CSV con fórmulas
 

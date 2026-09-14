@@ -87,7 +87,11 @@ export class Agent {
     const recipients = Array.isArray(to) ? to : [to];
     const id = uuid();
     // Proyecto y rol viajan como extensión firmada: el buzón del otro lado filtra por proyecto.
-    if (project || role) extensions = { ...(extensions || {}), [EXT_PROYECTO]: { ...(project ? { project: nombreDeProyecto(project) } : {}), ...(role ? { role: String(role).trim().slice(0, 40) } : {}) } };
+    // Un proyecto que no normaliza a un nombre (sólo invisibles, o `__proto__`/`constructor`) se
+    // rechaza aquí, con nombre: antes viajaba como `project: null` y el remitente creía haberlo etiquetado.
+    const proyecto = project ? nombreDeProyecto(project) : null;
+    if (project && !proyecto) throw new Error(`invalid project name: ${JSON.stringify(String(project).slice(0, 40))} (empty after normalization, or a reserved word)`);
+    if (proyecto || role) extensions = { ...(extensions || {}), [EXT_PROYECTO]: { ...(proyecto ? { project: proyecto } : {}), ...(role ? { role: String(role).trim().slice(0, 40) } : {}) } };
     // Un sobre que responde a otro hereda su hilo. Defecto real (12-sep-2026): las respuestas iban con
     // in_reply_to y thread null, y la conversación quedaba como mensajes sueltos; el historial firmado
     // es el producto, y sin hilo no es historial. La casa no puede rellenarlo: el sobre va firmado.

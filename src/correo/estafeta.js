@@ -704,11 +704,28 @@ export class Estafeta {
     }
     return [...mapa.values()].sort((a, b) => b.last_at.localeCompare(a.last_at)).map(({ proyectos, pendientes, ...r }) => {
       // Por último uso, a lo sumo 20: un contacto que etiquetó 10.000 proyectos distintos no
-      // devuelve 10.000 nombres; `pending_by_project` sólo cuando hay algo pendiente.
+      // devuelve 10.000 nombres. `pending_by_project` cubre SÓLO esos 20 (revisión del 14-sep-2026:
+      // traía una clave por proyecto pendiente, 1.000 con la ventana del historial, y el lector no
+      // podía cruzarlas con `projects`); lo pendiente bajo los demás va sumado en `pending_other`.
+      // Ninguna de las dos claves aparece en cero. `Object.fromEntries` crea propiedades propias:
+      // aunque llegara un nombre como `__proto__`, no pisaría el prototipo.
       r.projects = [...proyectos.entries()].sort((a, b) => b[1].localeCompare(a[1])).slice(0, PROYECTOS_POR_CONTACTO).map(([p]) => p);
-      if (pendientes.size) r.pending_by_project = Object.fromEntries(pendientes);
+      const listados = new Set(r.projects);
+      const porProyecto = [...pendientes].filter(([p]) => listados.has(p));
+      const otros = [...pendientes].filter(([p]) => !listados.has(p)).reduce((s, [, n]) => s + n, 0);
+      if (porProyecto.length) r.pending_by_project = Object.fromEntries(porProyecto);
+      if (otros) r.pending_other = otros;
       return r;
     });
+  }
+  // El `?project=` de una ruta: null si no viene (o viene vacío: sin filtro), el nombre normalizado
+  // como al enviar, o `false` si viene algo que no es un nombre (sólo invisibles, `%00`, una palabra
+  // reservada). Revisión del 14-sep-2026: `?project=%00` devolvía la lista ENTERA como si no hubiera
+  // filtro, y quien pidió un proyecto se llevaba todo. Se evalúa después de autenticar: no es oráculo.
+  _proyectoPedido(query) {
+    const crudo = query.get('project');
+    if (!crudo) return null;
+    return nombreDeProyecto(crudo) ?? false;
   }
   // Los subagentes que un dueño delegó (sus Claude conectados), con lo necesario para revocarlos.
   async delegados(local) {
@@ -1996,7 +2013,9 @@ export class Estafeta {
         if (who.local !== dec(m[1]).toLowerCase()) return send(403, { reason: 'not your mailbox' });
         const q = Object.fromEntries(rx.query);
         const segundos = Math.max(0, Math.min(Number(q.timeout ?? 25) || 0, 90));
-        const msg = await this.esperarCorreo(who.local, { from: q.from || null, thread: q.thread || null, since: q.since || null, project: q.project ? nombreDeProyecto(q.project) : null, timeoutMs: segundos * 1000 });
+        const project = this._proyectoPedido(rx.query);
+        if (project === false) return send(400, { reason: 'invalid project: empty after normalization, or a reserved word' });
+        const msg = await this.esperarCorreo(who.local, { from: q.from || null, thread: q.thread || null, since: q.since || null, project, timeoutMs: segundos * 1000 });
         return send(200, { message: msg });
       }
       if (rx.method === 'GET' && (m = /^\/conversations\/([^/]+)$/.exec(path))) {
@@ -2004,7 +2023,8 @@ export class Estafeta {
         if (who.local !== dec(m[1]).toLowerCase()) return send(403, { reason: 'not your conversations' });
         const con = rx.query.get('with');
         const limit = Math.max(1, Math.min(Number(rx.query.get('limit') || 50) || 50, 500));
-        const project = rx.query.get("project") ? nombreDeProyecto(rx.query.get("project")) : null;
+        const project = this._proyectoPedido(rx.query);
+        if (project === false) return send(400, { reason: 'invalid project: empty after normalization, or a reserved word' });
         if (con) return send(200, { with: con.toLowerCase(), messages: await this.conversacion(who.local, { con: con.toLowerCase(), limit, project }) });
         return send(200, { conversations: await this.conversacion(who.local, { project }) });
       }

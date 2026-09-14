@@ -248,3 +248,25 @@ test('si la app pide cosas a la casa, la CSP la deja conectarse a la casa', asyn
     assert.ok(m && /'self'/.test(m), `la app declara un manifiesto y la CSP no lo deja cargar: ${m}`);
   }
 });
+
+// Revisión del 14-sep-2026: una viñeta que seguía en la línea de abajo (indentada, como envuelve el
+// editor a 100 columnas) cerraba el <ul> y la continuación salía como <p> suelto, con el `código`
+// partido por la mitad: 34 casos en el sitio (§13, §22, §23b, §23c, §23d). El conversor la junta
+// como ya hacía con las listas numeradas. Grito: el caso real; silencio: un párrafo tras una lista
+// sigue siendo párrafo, y dos viñetas siguen siendo dos.
+test('el conversor no parte una viñeta que sigue en la línea de abajo', async () => {
+  const { toHtml } = await import('../scripts/build-spec-site.mjs');
+  const roto = toHtml(['- **The request** carries `{ kind,', '  currency }` in the clear.', '- Second item.', '', 'A paragraph after the list.'].join('\n'));
+  assert.equal((roto.match(/<ul>/g) || []).length, 1, `la lista se partió: ${roto}`);
+  assert.equal((roto.match(/<li>/g) || []).length, 2);
+  assert.match(roto, /<code>\{ kind, currency \}<\/code> in the clear\.<\/li>/, `el código partido no cerró: ${roto}`);
+  assert.ok(!/<\/ul>\s*<p>\s{2}/.test(roto), 'la continuación salió como párrafo');
+  assert.match(roto, /<\/ul>\n<p>A paragraph after the list\.<\/p>$/, 'el párrafo de después sigue siendo párrafo');
+  // Un bloque de código dentro del ítem no cierra la lista, como en las numeradas.
+  const conCodigo = toHtml(['- item', '  ```', '  x', '  ```', '- otro'].join('\n'));
+  assert.equal((conCodigo.match(/<ul>/g) || []).length, 1);
+  assert.match(conCodigo, /<li>item<pre><code>x<\/code><\/pre><\/li><li>otro<\/li>/);
+  // Y en el sitio real no queda ninguna continuación suelta (así se veía el defecto: <p> con dos espacios).
+  const { SPEC_HTML } = await import('../src/plataformas/spec-html.js');
+  assert.equal((SPEC_HTML.match(/<p>\s{2}/g) || []).length, 0, 'quedan viñetas partidas en el sitio de la spec');
+});

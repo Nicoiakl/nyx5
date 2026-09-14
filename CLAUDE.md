@@ -52,7 +52,7 @@ src/nucleo/keccak.js     Keccak-256 (el de Ethereum, NO sha3-256) en JS puro; sr
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos -> `npm test` (388)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia -> `npm test` (393)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 scripts/revision-adversarial.{md,mjs}  el guion adversarial por versión (NX-903) y su parte automatizable
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
@@ -61,7 +61,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 388 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 393 pruebas, todas deben pasar antes de cualquier commit
 npm run revision         # revisión adversarial automatizable contra una casa local (scripts/revision-adversarial.md)
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
@@ -430,7 +430,7 @@ que hay que saber para no romperlas:
 - **Texto invisible en la fuente**: `limpio` quita ancho cero y bidi. Se escribe con escapes
   (barra, u, cuatro hexadecimales), nunca el carácter literal: un carácter invisible en un archivo
   se corrompe en silencio y las herramientas de edición lo pierden al reescribir (pasó esta
-  noche, dos veces). Antes de commitear, `grep -P` por los rangos U+200B-200F, 202A-202E, 2060-2064.
+  noche, dos veces). Lo cuida `test/fuente-limpia.test.js` (src, test, scripts, web, bin, migrations, demo, SPEC y README): en esta máquina `grep` es una FUNCIÓN de shell que envuelve otro buscador y dio 0 con un NUL y dos U+200B literales presentes (14-sep-2026); un `grep -P` a mano no es el control.
 
 **Notaría de documentos (NX-601, 14-sep-2026, GRATIS por decisión de Nicholas).** `src/libro/notaria.js`:
 la op `notarize { sha256, name?, media?, note? }` sella un hash con fecha y firma de la casa; el
