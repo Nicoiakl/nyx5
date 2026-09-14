@@ -26,7 +26,7 @@ import { Libro, MEDIA, LibroError } from '../libro/libro.js';
 import { veredicto, pruebasDe, pruebasDisponibles } from '../libro/verifica.js';
 import { contratoPublico, ACP } from '../libro/contratos.js';
 import { Tareas } from '../libro/tareas.js';
-import { datosInforme, informeHtml } from '../libro/informe.js';
+import { datosInforme, datosEmbudo, informeHtml } from '../libro/informe.js';
 import { APP_HTML } from '../plataformas/app-html.js';
 import { SPEC_HTML, LLMS_TXT } from '../plataformas/spec-html.js';
 import { HOME_HTML } from '../plataformas/home-html.js';
@@ -99,6 +99,7 @@ export class Estafeta {
     // el cron hace en una pasada para no comerse el minuto entero verificando.
     this.verifica = { enabled: true, maxPorTick: 10, timeoutMs: 10_000, ...verifica };
     this.eventos = eventos !== false;
+    this._primeros = new Set();   // raíces cuyo `first_message` esta instancia ya vio (ver _primerMensaje)
     this.terms = terms || null;   // HTML de los términos; sin esto, /terms no existe
     // Trabajo sembrado: la casa es el primer comprador. Sin catálogo, apagado.
     this.tareas = new Tareas(tareas);
@@ -205,6 +206,32 @@ export class Estafeta {
     if (!this.eventos || !this.store.putEvent) return;
     try { await this.store.putEvent({ id: uuid(), name, ts: iso(), actor: actor || null, data }); }
     catch (e) { this.log(`evento ${name} no registrado: ${e.message}`); }
+  }
+  // La fuente de atribución (`source`) es texto ajeno: se recorta y se sanea antes de entrar a
+  // un evento. Una sola definición para el join, la invitación y el enlace abierto.
+  static fuenteLimpia(x) { return typeof x === 'string' ? (x.slice(0, 64).replace(/[^\w.:@/-]/g, '') || null) : null; }
+  // Embudo (NX-801): `first_message` es la primera vez que una dirección raíz, o su Claude
+  // conectado `claude.<raíz>`, le escribe a OTRA dirección (no a sí misma, no a libro@). Se
+  // recuerda en el almacén por raíz (ns `primer_mensaje`, sin vencimiento) y en memoria por
+  // instancia: cuesta a lo sumo una escritura condicional por raíz, nunca una lectura de todos
+  // los eventos por sobre. Otros delegados no cuentan: un asistente que contesta solo no es el
+  // humano escribiendo. Un fallo aquí jamás detiene el envío.
+  async _primerMensaje(submitter, env) {
+    if (!this.eventos || !this.store.kvPutIfAbsent) return;
+    let raiz = submitter.address, via = 'root';
+    const del = submitter.record.delegation;
+    if (del) {
+      const padre = parseAddress(del.by);
+      if (padre.domain !== this.domain || submitter.local !== `claude.${padre.local}`) return;
+      raiz = del.by; via = 'claude';
+    }
+    if (this._primeros.has(raiz)) return;
+    const propias = new Set([env.from, raiz]);
+    if (!env.to.some((t) => !propias.has(t) && !String(t).startsWith('libro@'))) return;
+    try {
+      if (await this.store.kvPutIfAbsent('primer_mensaje', raiz, { ts: iso(), via })) await this._evento('first_message', raiz, { via });
+      this._primeros.add(raiz);
+    } catch (e) { this.log(`first_message ${raiz} no registrado: ${e.message}`); }
   }
   isSystem(local) { return ['postmaster', 'libro', 'verifica', 'tareas'].includes(local); }
   // ¿Podría alguien registrarse HOY con este nombre? Mismas reglas que registerAgent, sin registrar nada.
@@ -698,16 +725,21 @@ export class Estafeta {
     }
     const code = uuid().replace(/-/g, '');
     const greet = typeof b.greet === 'string' && [inviter, ...contactos].includes(b.greet.toLowerCase()) ? b.greet.toLowerCase() : null;
-    const inv = { code, inviter, inviter_claude: viva ? suClaude.address : null, contacts: contactos, greet, name_hint: hint || null, created: iso(), expires: iso(now() + 7 * 86_400_000) };
+    // `source`: por qué canal se va a mandar el enlace (whatsapp, correo...). Atribución del embudo;
+    // nunca entra a una tarjeta. Al abrir el enlace, `?source=` puede precisarla.
+    const inv = { code, inviter, inviter_claude: viva ? suClaude.address : null, contacts: contactos, greet, name_hint: hint || null, source: Estafeta.fuenteLimpia(b.source), created: iso(), expires: iso(now() + 7 * 86_400_000) };
     await this.store.kvPut('invitacion', code, inv, now() + 7 * 86_400_000);
     await this._evento('invitation_created', inviter, { with_claude: !!inv.inviter_claude });
     return { status: 201, body: { link: `${this.publicUrl}/i/${code}`, connector_url: `${this.publicUrl}/mcp/i/${code}`, inviter, inviter_claude: inv.inviter_claude, contacts: contactos, expires: inv.expires } };
   }
-  async _paginaInvitacion(code) {
+  async _paginaInvitacion(code, fuente = null) {
     const inv = await this.store.kvGet('invitacion', code);
     const datos = inv && !inv.used_by
       ? { code, inviter: inv.inviter, inviter_claude: inv.inviter_claude, contacts: inv.contacts || [], greet: inv.greet || null, name_hint: inv.name_hint, connector_url: `${this.publicUrl}/mcp/i/${code}` }
       : { error: inv ? 'used' : 'unknown' };
+    // Embudo, etapa 1: el enlace se abrió (una invitación viva). Cuenta visitas, no personas: una
+    // vista previa de WhatsApp o un bot también abren. Actor = quien invitó; el invitado aún no existe.
+    if (!datos.error) await this._evento('open_invite', inv.inviter, { code, source: Estafeta.fuenteLimpia(fuente) || inv.source || null });
     const html = APP_HTML.replace('<!--OAUTH-->', `<script>window.NYX5_INVITE=${JSON.stringify(datos).replace(/</g, '\\u003c')}</script>`);
     return { status: inv ? 200 : 404, contentType: 'text/html; charset=utf-8', body: html };
   }
@@ -899,6 +931,7 @@ export class Estafeta {
       await this._outbox(job);
       jobs.push({ job: job.id, domain, to });
     }
+    await this._primerMensaje(submitter, env);
     return { ok: true, code: 202, id: env.id, jobs };
   }
   async _outbox(job, extra = {}) {
@@ -1475,7 +1508,7 @@ export class Estafeta {
       if (this.remoto.enabled && rx.method === 'POST' && path === '/oauth/approve') return oauth.aprobar(this, rx);
       // ----- Invitaciones de contacto: un link que se manda por WhatsApp -----
       if (this.remoto.enabled && rx.method === 'POST' && path === '/contact-invites') return this.crearInvitacion(rx);
-      if (this.remoto.enabled && rx.method === 'GET' && (m = /^\/i\/([A-Za-z0-9_-]{16,64})$/.exec(path))) return this._paginaInvitacion(m[1]);
+      if (this.remoto.enabled && rx.method === 'GET' && (m = /^\/i\/([A-Za-z0-9_-]{16,64})$/.exec(path))) return this._paginaInvitacion(m[1], rx.query.get('source'));
       // ----- Asistentes (sólo la casa los configura; el dueño los pide) -----
       if ((m = /^\/admin\/assistants(?:\/([^/]+))?(?:\/(knowledge|config|pause|resume))?$/.exec(path))) {
         if ((rx.headers.authorization || '') !== `Bearer ${this.adminToken}`) return send(401, { reason: 'only the house configures assistants' });
@@ -1706,8 +1739,7 @@ export class Estafeta {
         const card = await this.registerAgent({ ...clean, welcome: _welcome });
         this.log(`registro ${card.address} via ${via}`);
         if (!card.delegation) {
-          const fuente = typeof _src === 'string' ? _src.slice(0, 64).replace(/[^\w.:@/-]/g, '') : null;
-          await this._evento('join', card.address, { via, listed: card.capabilities?.listed === true, source: fuente || null });
+          await this._evento('join', card.address, { via, listed: card.capabilities?.listed === true, source: Estafeta.fuenteLimpia(_src) });
         }
         return send(201, { ...card, registered_via: via });
       }
@@ -1857,6 +1889,21 @@ export class Estafeta {
           tasks: publicadas,
           mostrador: desk, arbitro: arbiter, tareas: publicadas, _deprecated: ['mostrador', 'arbitro', 'tareas'],
         });
+      }
+      // El embudo (NX-801), en PRIVADO: lleva direcciones y la fecha de cada etapa por persona,
+      // así que nunca va en /report, que es público y promete no nombrar a nadie. Misma llave
+      // que /eventos. Se calcula al pedirlo; si el almacén no responde, se dice, no se inventa.
+      if (rx.method === 'GET' && (path === '/informe' || path === '/informe.json')) {
+        if ((rx.headers.authorization || '') !== `Bearer ${this.adminToken}`) return send(401, { reason: 'only the house reads its funnel' });
+        try {
+          const dias = Math.min(90, Math.max(1, Number(rx.query.get('days') || 7) || 7));
+          const [d, embudo] = await Promise.all([datosInforme(this, { dias }), datosEmbudo(this)]);
+          if (path === '/informe.json') return send(200, { ...d, embudo });
+          return { status: 200, contentType: 'text/html; charset=utf-8', body: informeHtml(this.domain, d, { embudo }) };
+        } catch (e) {
+          this.log(`embudo no disponible: ${e.message}`);
+          return send(503, { reason: 'the ledger could not be read right now' });
+        }
       }
       if (rx.method === 'GET' && path === '/eventos') {
         if ((rx.headers.authorization || '') !== `Bearer ${this.adminToken}`) return send(401, { reason: 'only the house reads its events' });

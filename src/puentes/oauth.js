@@ -285,6 +285,9 @@ export async function aprobar(est, rx) {
   const p = v.pedido;
   await est.store.kvPut('codigo', sha(code), { client_id: p.client_id, redirect_uri: p.redirect_uri, code_challenge: p.code_challenge, resource: p.resource, scope: p.scope, sub, root: who.address }, Date.now() + 5 * 60_000);
   await est._evento('connector_authorized', who.address, { client: p.cliente.client_name || null, open: !allowlist });
+  // Embudo (NX-801), etapa 3: el Claude del dueño quedó conectado. `code` enlaza este recorrido con
+  // el `open_invite` del enlace que lo trajo (y con su fuente); sin invitación, ambos van en null.
+  await est._evento('claude_connected', who.address, { invited_by: inv?.inviter || null, code: inv?.code || null });
   const u = new URL(p.redirect_uri);
   u.searchParams.set('code', code);
   if (p.state) u.searchParams.set('state', p.state);

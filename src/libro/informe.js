@@ -51,6 +51,119 @@ export async function datosInforme(estafeta, { dias = 7 } = {}) {
   };
 }
 
+// ---------- Embudo (NX-801): de punta a punta, por fuente y por semana ----------
+// Seis etapas, en el orden en que una persona las cruza. Cada una es UN evento del diario; el
+// informe no infiere ninguna. `open_invite` cuenta visitas al enlace (una vista previa de
+// WhatsApp también abre); las otras cinco cuentan direcciones raíz, una vez cada una.
+export const ETAPAS = [
+  { id: 'open_invite', label: 'Invite opened' },
+  { id: 'join', label: 'Address created' },
+  { id: 'claude_connected', label: 'Claude connected' },
+  { id: 'first_message', label: 'First message' },
+  { id: 'first_quote', label: 'First contract' },
+  { id: 'mandate_created', label: 'First mandate' },
+];
+// `connector_authorized` existía antes de NX-801 y se emite en el mismo punto que
+// `claude_connected`: leerlo como alias hace que los recorridos anteriores al despliegue (Basti,
+// 11-sep) muestren la etapa 3 en vez de un hueco. Las etapas 1 y 4 no tienen alias: antes no se
+// medían, y el informe las muestra vacías en vez de inventarlas.
+const ALIAS = { connector_authorized: 'claude_connected' };
+
+// Semana ISO-8601 (lunes a domingo, la semana 1 es la del primer jueves), en UTC como el diario.
+export function semanaIso(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setUTCHours(0, 0, 0, 0);
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  const primero = Date.UTC(d.getUTCFullYear(), 0, 1);
+  return `${d.getUTCFullYear()}-W${String(Math.ceil(((d - primero) / 86_400_000 + 1) / 7)).padStart(2, '0')}`;
+}
+
+// Qué lee: los `join` de siempre (son la lista de raíces y de fuentes) y todos los eventos de la
+// ventana. Qué NO cubre: un delegado cuyo nombre no termine en `.<raíz>` de una raíz conocida queda
+// en `sinRaiz`, contado y no atribuido; si el diario supera el tope, `truncado` lo dice.
+export async function datosEmbudo(estafeta, { ventanaDias = 90, semanas = 8, diasRecorridos = 30, tope = 5000 } = {}) {
+  const ahora = Date.now();
+  const desde = new Date(ahora - ventanaDias * 86_400_000).toISOString();
+  const lee = async (q) => (await estafeta.store.listEvents?.(q)) || [];
+  const [eventos, joins] = await Promise.all([lee({ since: desde, limit: tope }), lee({ name: 'join', limit: tope })]);
+
+  // Raíces conocidas: quien hizo join, y quien las etapas 3 y 4 nombran (por construcción, raíces).
+  const raices = new Set(joins.map((e) => e.actor).filter(Boolean));
+  for (const e of eventos) if (['claude_connected', 'connector_authorized', 'first_message'].includes(e.name) && e.actor) raices.add(e.actor);
+  // Un delegado se llama <nombre>.<raíz>@casa: se prueba cada sufijo hasta dar con una raíz conocida.
+  const raizDe = (dir) => {
+    if (typeof dir !== 'string' || !dir.includes('@')) return null;
+    if (raices.has(dir)) return dir;
+    const [local, dominio] = dir.split('@');
+    const partes = local.split('.');
+    for (let i = 1; i < partes.length; i++) { const c = `${partes.slice(i).join('.')}@${dominio}`; if (raices.has(c)) return c; }
+    return null;
+  };
+  const recorridos = new Map();
+  const alcanza = (raiz, etapa, ts) => {
+    const r = recorridos.get(raiz) || { address: raiz, source: null, code: null, etapas: {} };
+    if (!r.etapas[etapa] || ts < r.etapas[etapa]) r.etapas[etapa] = ts;
+    recorridos.set(raiz, r);
+    return r;
+  };
+  const sinRaiz = {};
+  const aperturas = [];
+  for (const e of joins) { const r = alcanza(e.actor, 'join', e.ts); r.source = r.source || e.data?.source || null; }
+  for (const e of eventos) {
+    const etapa = ALIAS[e.name] || e.name;
+    if (etapa === 'open_invite') { aperturas.push(e); continue; }
+    if (etapa === 'join' || !ETAPAS.some((x) => x.id === etapa)) continue;
+    // Un contrato lo alcanzan las dos partes: el actor de `first_quote` es el comprador, `seller` la otra.
+    for (const p of etapa === 'first_quote' ? [e.actor, e.data?.seller] : [e.actor]) {
+      const raiz = raizDe(p);
+      if (!raiz) { if (p) sinRaiz[etapa] = (sinRaiz[etapa] || 0) + 1; continue; }
+      const r = alcanza(raiz, etapa, e.ts);
+      if (etapa === 'claude_connected' && e.data?.code && !r.code) r.code = e.data.code;
+    }
+  }
+  // Enlace abierto -> dirección: por el código de la invitación que `claude_connected` trae. Si el
+  // join no declaró fuente, la del enlace es la atribución (así se atribuye a quien llegó por la app).
+  const porCodigo = new Map();
+  for (const a of aperturas) { const c = a.data?.code; if (c && (!porCodigo.has(c) || a.ts < porCodigo.get(c).ts)) porCodigo.set(c, a); }
+  for (const r of recorridos.values()) {
+    const a = r.code && porCodigo.get(r.code);
+    if (a) { alcanza(r.address, 'open_invite', a.ts); r.source = r.source || a.data?.source || null; }
+  }
+  const NO = '(not declared)';
+  const inc = (tabla, fila, etapa) => { const f = tabla.get(fila) || {}; f[etapa] = (f[etapa] || 0) + 1; tabla.set(fila, f); };
+
+  // Por fuente, en la ventana: aperturas por su propia fuente; direcciones cuyo join cae en la
+  // ventana (o que no tienen join registrado) por la fuente del recorrido.
+  const porFuente = new Map();
+  for (const a of aperturas) inc(porFuente, a.data?.source || NO, 'open_invite');
+  for (const r of recorridos.values()) {
+    if (r.etapas.join && r.etapas.join < desde) continue;
+    for (const etapa of Object.keys(r.etapas)) if (etapa !== 'open_invite') inc(porFuente, r.source || NO, etapa);
+  }
+  // Por semana ISO: las últimas N, la actual incluida. Cada etapa cuenta en la semana en que se alcanzó.
+  const semanasLista = [];
+  for (let i = semanas - 1; i >= 0; i--) semanasLista.push(semanaIso(ahora - i * 7 * 86_400_000));
+  const porSemana = new Map(semanasLista.map((s) => [s, {}]));
+  for (const a of aperturas) { const s = semanaIso(a.ts); if (porSemana.has(s)) inc(porSemana, s, 'open_invite'); }
+  for (const r of recorridos.values()) for (const [etapa, ts] of Object.entries(r.etapas)) { if (etapa === 'open_invite') continue; const s = semanaIso(ts); if (porSemana.has(s)) inc(porSemana, s, etapa); }
+  // Recorridos individuales: los que alcanzaron alguna etapa en los últimos N días, el más reciente primero.
+  const corte = new Date(ahora - diasRecorridos * 86_400_000).toISOString();
+  const ultima = (r) => Object.values(r.etapas).sort().at(-1) || '';
+  const recientes = [...recorridos.values()].filter((r) => ultima(r) >= corte).sort((a, b) => (ultima(a) < ultima(b) ? 1 : -1))
+    .map((r) => ({ address: r.address, source: r.source, etapas: Object.fromEntries(ETAPAS.map((x) => [x.id, r.etapas[x.id] || null])) }));
+  const fila = (t) => ETAPAS.map((x) => t[x.id] || 0);
+  return {
+    generado: new Date(ahora).toISOString(), desde, ventanaDias, semanas, diasRecorridos,
+    eventosLeidos: eventos.length, joinsLeidos: joins.length, tope, truncado: eventos.length >= tope || joins.length >= tope,
+    etapas: ETAPAS.map((x) => x.label),
+    porFuente: [...porFuente.entries()].sort((a, b) => (b[1].join || 0) - (a[1].join || 0) || (b[1].open_invite || 0) - (a[1].open_invite || 0)).map(([fuente, t]) => ({ fuente, conteos: fila(t) })),
+    porSemana: [...porSemana.entries()].map(([semana, t]) => ({ semana, conteos: fila(t) })),
+    recorridos: recientes,
+    raices: recorridos.size, sinRaiz,
+  };
+}
+
 // Las frases que interpretan los números. Cada una puede ser mala noticia, y esa es la idea.
 export function lecturas(d) {
   const L = [];
@@ -67,7 +180,31 @@ export function lecturas(d) {
   return L;
 }
 
-export function informeHtml(dominio, d) {
+// La sección privada del embudo: tablas sin JS, cada celda escapada. Sólo se arma cuando la
+// ruta privada la pide; /report nunca la recibe.
+export function embudoHtml(e) {
+  const th = (xs) => `<tr>${xs.map((x) => `<th>${esc(x)}</th>`).join('')}</tr>`;
+  const tr = (cabeza, xs) => `<tr><td class="k">${esc(cabeza)}</td>${xs.map((x) => `<td class="n">${esc(x)}</td>`).join('')}</tr>`;
+  const fecha = (ts) => (ts ? ts.slice(0, 10) : '—');
+  const tabla = (cabeza, filas) => `<div class="ancha"><table class="embudo">${th(cabeza)}${filas.join('')}</table></div>`;
+  const vacio = (texto) => `<p class="rango">${esc(texto)}</p>`;
+  return `
+  <h2>Funnel</h2>
+  <p class="rango">Private: this section names addresses. Read from the events diary at load time: ${esc(e.eventosLeidos)} events in the last ${esc(e.ventanaDias)} days and ${esc(e.joinsLeidos)} joins overall (limit ${esc(e.tope)} each${e.truncado ? ', REACHED: older events were left out' : ''}). "Invite opened" counts link visits, previews included; the other five count addresses once each. A missing stage is shown as a dash, never guessed.</p>
+
+  <h3>By source, last ${esc(e.ventanaDias)} days</h3>
+  ${e.porFuente.length ? tabla(['Source', ...e.etapas], e.porFuente.map((f) => tr(f.fuente, f.conteos))) : vacio('No joins and no invite opened in this window.')}
+
+  <h3>By ISO week, last ${esc(e.semanas)}</h3>
+  ${tabla(['Week', ...e.etapas], e.porSemana.map((s) => tr(s.semana, s.conteos)))}
+
+  <h3>Journeys, last ${esc(e.diasRecorridos)} days</h3>
+  ${e.recorridos.length ? tabla(['Address', 'Source', ...e.etapas], e.recorridos.map((r) => tr(r.address, [r.source || '(not declared)', ...ETAPAS.map((x) => fecha(r.etapas[x.id]))]))) : vacio('Nobody reached any stage in this window.')}
+  ${Object.keys(e.sinRaiz).length ? `<p class="rango">Not attributed to any known root address: ${esc(Object.entries(e.sinRaiz).map(([k, v]) => `${k} ${v}`).join(', '))}.</p>` : ''}
+`;
+}
+
+export function informeHtml(dominio, d, { embudo = null } = {}) {
   const fila = (k, v) => `<tr><td>${esc(k)}</td><td class="n">${esc(v)}</td></tr>`;
   const fuentes = Object.entries(d.porFuente).sort((a, b) => b[1] - a[1]);
   return `<!doctype html>
@@ -99,6 +236,13 @@ export function informeHtml(dominio, d) {
   li b { color:var(--ink); }
   footer { color:var(--dim); font-size:.82rem; border-top:1px solid var(--line); padding-top:1.4rem; }
   a { color:var(--accent); text-decoration:none; } a:hover { text-decoration:underline; }
+  h3 { font-size:.95rem; font-weight:600; margin:0 0 .6rem; }
+  .ancha { overflow-x:auto; margin:0 0 2rem; }
+  table.embudo { font-size:.8rem; margin:0; }
+  table.embudo th { text-align:right; font-weight:600; color:var(--dim); padding:.35rem .4rem; border-bottom:1px solid var(--line); white-space:nowrap; }
+  table.embudo th:first-child, table.embudo td.k { text-align:left; padding-left:0; }
+  table.embudo td { padding:.35rem .4rem; }
+  table.embudo td.n { font-size:.8rem; }
 </style>
 </head>
 <body>
@@ -124,9 +268,9 @@ export function informeHtml(dominio, d) {
 
   <h2>Where they came from</h2>
   ${fuentes.length ? `<table>${fuentes.map(([f, n]) => fila(f, n)).join('')}</table><p class="rango">Joins, not visits. A page view is not an agent.</p>` : '<p class="rango">Nobody joined, so there is nothing to attribute.</p>'}
-
+${embudo ? embudoHtml(embudo) : ''}
   <footer>
-    No agent names, no counterparties and no message content appear here — only how many and how much.
+    ${embudo ? 'This page is private to the house and names addresses; the public <code>/report</code> does not.' : 'No agent names, no counterparties and no message content appear here — only how many and how much.'}
     Each agent's own record is public and verifiable separately at <code>/agents/&lt;name&gt;/historial</code>.
     <br><a href="/">Home</a> · <a href="/spec">Specification</a>
   </footer>
