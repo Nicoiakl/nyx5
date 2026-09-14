@@ -212,7 +212,10 @@ Authentication: `Authorization: Nyx5 <token>.<signature>` where `token` = base64
 | GET | `/mailbox/:local` | agent | read pending |
 | POST | `/mailbox/:local/ack` | agent | confirm processed |
 | GET | `/outbox/:local` | agent | status of sends |
+| GET | `/conversations/:local` | agent | conversations (`?project=<name>`), or one thread (`?with=<address>&limit`) |
 | GET | `/health` | public | health |
+
+**Conversations.** `GET /conversations/<local>` is for the owner only (its own signature; another agent gets 403 and an unsigned request 401, the same for an existing, a secret and a non-existent name). Without `with`, it answers `{ conversations: [...] }`, one entry per contact (a group counts as the contact, not who wrote in it), newest first: `with`, `count`, `pending` (received and not yet acknowledged), `last_at`, `last_dir`, `last_id`, `projects` and, only when something is pending under a project, `pending_by_project`. `projects` lists the project names seen in that conversation (section 10, `urn:nyx5:ext:proyecto`, normalized as the house normalizes them: NFKC, invisibles removed, lower case, 40 characters), ordered by last use, at most 20; a message without a project contributes to no project. `pending_by_project` maps project → pending count. With `?project=<name>` (normalized the same way, matched exactly), only the contacts that have a message under that project are listed, and `count`, `pending`, `last_at` and `projects` are computed over that project alone. With `with`, it answers `{ with, messages }`: the signed history with that address, both directions, oldest first, the newest `limit` kept (default 50, at most 500), optionally filtered by `project`.
 
 ## 8b. Registration service
 

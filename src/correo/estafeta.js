@@ -64,6 +64,8 @@ const MANIFIESTO = { name: 'Nyx5', short_name: 'Nyx5', start_url: '/app', scope:
 // Direcciones por petición en GET /agents/historial?addresses=… (NX-905). El rastreo del índice
 // pide lotes de este tamaño y una casa que no tenga la ruta (versión anterior) contesta 404.
 export const HISTORIAL_LOTE_MAX = 50;
+// Proyectos que la lista de conversaciones devuelve por contacto (14-sep-2026): los de último uso.
+export const PROYECTOS_POR_CONTACTO = 20;
 
 export class Estafeta {
   constructor({
@@ -679,16 +681,34 @@ export class Estafeta {
     const contraparte = (x) => grupo(x) || (x.dir === 'in' ? (x.envelope.extensions?.['urn:nyx5:ext:email']?.from || x.envelope.from) : (x.envelope.to.find((t) => t !== propia) || x.envelope.to[0]));
     const orden = (a, b) => String(a.at).localeCompare(String(b.at));
     if (con) return todos.filter((x) => contraparte(x) === con || (x.dir === 'out' && x.envelope.to.includes(con))).sort(orden).slice(-limit);
+    // La lista trae, por contacto, los proyectos vistos (14-sep-2026, decisión de Nicholas): la app
+    // filtra por proyecto sin leer cada hilo. Sale de la MISMA pasada, no de otra consulta: el
+    // proyecto real es `proyectoDe` (NFKC, sin invisibles, minúsculas), que SQLite no sabe calcular
+    // (su `lower()` es sólo ASCII y no hay NFKC), y el contacto tampoco es una columna (grupo,
+    // pasarela de correo o primer destinatario). Con `?project=` todo se calcula sobre ese proyecto.
     const mapa = new Map();
     for (const x of todos) {
       const c = contraparte(x);
-      const r = mapa.get(c) || { with: c, count: 0, pending: 0, last_at: '', last_dir: null, last_id: null };
+      const r = mapa.get(c) || { with: c, count: 0, pending: 0, last_at: '', last_dir: null, last_id: null, proyectos: new Map(), pendientes: new Map() };
       r.count++;
-      if (x.dir === 'in' && !x.acked) r.pending++;
+      const pendiente = x.dir === 'in' && !x.acked;
+      if (pendiente) r.pending++;
       if (String(x.at) > r.last_at) { r.last_at = String(x.at); r.last_dir = x.dir; r.last_id = x.id; }
+      const p = proyectoDe(x.envelope);
+      if (p) {
+        // Sin proyecto no hay entrada: no se inventa un «(none)».
+        if (String(x.at) > (r.proyectos.get(p) || '')) r.proyectos.set(p, String(x.at));
+        if (pendiente) r.pendientes.set(p, (r.pendientes.get(p) || 0) + 1);
+      }
       mapa.set(c, r);
     }
-    return [...mapa.values()].sort((a, b) => b.last_at.localeCompare(a.last_at));
+    return [...mapa.values()].sort((a, b) => b.last_at.localeCompare(a.last_at)).map(({ proyectos, pendientes, ...r }) => {
+      // Por último uso, a lo sumo 20: un contacto que etiquetó 10.000 proyectos distintos no
+      // devuelve 10.000 nombres; `pending_by_project` sólo cuando hay algo pendiente.
+      r.projects = [...proyectos.entries()].sort((a, b) => b[1].localeCompare(a[1])).slice(0, PROYECTOS_POR_CONTACTO).map(([p]) => p);
+      if (pendientes.size) r.pending_by_project = Object.fromEntries(pendientes);
+      return r;
+    });
   }
   // Los subagentes que un dueño delegó (sus Claude conectados), con lo necesario para revocarlos.
   async delegados(local) {
