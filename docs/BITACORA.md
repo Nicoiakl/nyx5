@@ -14,11 +14,12 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 |---|---|---|
 | ⏳ | **DNSSEC** en nyx5.com. NO es un clic pendiente: el panel dice "pending while we automatically add the DS record" y el único botón que ofrece es Cancel Setup, en rojo. Pero el DS no está en el registro .com y whois sigue diciendo `unsigned`, o sea que lleva colgado. Nadie debe tocar ese botón. Si sigue así, hay que cancelar y volver a encender, o abrir un ticket | 9-sep |
 | ☐ | **Leer y aprobar `docs/TERMS.md`**. Se sirven sólo si él los enciende: son declaraciones vinculantes en su nombre | 8-sep |
+| ☐ | **Textos de la app** para contactos con consentimiento (NX-402) y pedido de pago por transferencia (NX-502): `plan/textos-app-borrador.md` (privado) | 14-sep |
+| ☐ | **`npm publish`** de @nyx5/nyx5 0.7.0 si la sesión de npm de este Mac no alcanzó a hacerlo | 14-sep |
+| ☐ | **Marca INAPI** clase 42, en pausa hasta la vuelta (`marca/SOLICITUD-MARCA-NYX5.md`) | 13-sep |
 | ☐ | **Smithery**: `smithery auth login && smithery mcp publish dist/nyx5-*.mcpb -n <namespace>/nyx5` | 8-sep |
 | ☐ | **AP2**: ¿se queda mapeado o se le construye la segunda llave ECDSA? Recomendación: dejarlo mapeado | 9-sep |
-| ☐ | **Escrow con `reclaim`**: hoy un contrato que llega a su plazo sin que nadie decida sólo manda un aviso, y la plata sigue retenida. El rail al que mapeamos le da al comprador una salida unilateral. Es un hueco nuestro, arreglable en el Libro, independiente de todo lo del dinero real | 9-sep |
 | ☐ | **x402**: ¿la comisión de la casa puede seguir saliendo de lo que recibe el receptor? Si x402 responde que no, el binding exige cambiar cómo se asienta la comisión. Preguntado en su issue #3435 | 9-sep |
-| ☐ | **`ANTHROPIC_API_KEY`** para que `sigo.nicholas@` conteste solo (workspace con tope US$30): `npx wrangler secret put ANTHROPIC_API_KEY` | 11-sep |
 
 ## Abierto — de la sesión
 
