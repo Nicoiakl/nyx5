@@ -209,8 +209,20 @@ export class FileStore {
       .filter((e) => e && (!name || e.name === name) && (!since || e.ts >= since))
       .sort((a, b) => (a.ts < b.ts ? -1 : 1)).slice(-limit);
   }
-  libroStatement(account, limit) {
-    return this.libroJournal().filter((a) => a.lines.some((l) => l.account === account)).slice(-limit);
+  // Extracto por cuenta en el rango [since, until) sobre `at` (ISO ya normalizado por quien
+  // llama, ver estado.js): los `limit` asientos MÁS RECIENTES del rango, y `total` = cuántos hay
+  // en el rango, se muestren o no (el denominador viaja con el resultado).
+  libroStatementRange(account, { since = null, until = null, limit = 20 } = {}) {
+    const todos = this.libroJournal().filter((a) => a.lines.some((l) => l.account === account) && (!since || a.at >= since) && (!until || a.at < until));
+    return { entries: todos.slice(-limit), total: todos.length };
+  }
+  libroStatement(account, limit) { return this.libroStatementRange(account, { limit }).entries; }
+  // Saldo de una cuenta ANTES del asiento `n` y/o de la fecha `at`: la suma de sus deltas hasta
+  // ahí, leída del diario y no de saldos.json, para que un extracto cuadre por sí mismo.
+  libroBalanceBefore(account, { n = null, at = null } = {}) {
+    return this.libroJournal()
+      .filter((a) => (n == null || a.n < n) && (at == null || a.at < at))
+      .reduce((s, a) => s + a.lines.filter((l) => l.account === account).reduce((t, l) => t + l.delta, 0), 0);
   }
 
   // Un movimiento completo del Libro, junto. En D1: un batch atómico donde el PK del asiento (n)

@@ -356,9 +356,11 @@ They are sent as an envelope to `libro@<house>` with `type: task`, `media: appli
 | `charge { mandate, amount, concept }` | mandatee | the root grantor pays; the whole chain decrements |
 | `revoke { mandate }` | grantor or superior | revokes in cascade |
 | `pay { to, amount, concept }` | the payer | moves tokens directly to another agent of the same house, with no fee (sending tokens to a person is free; the house fee is for work someone commissions); no quote, no contract; the recipient does nothing and both get the receipt. Rejected toward another house, a non-existent address, or a messages-only subagent (it could never spend it: pay its owner) |
-| `balance`, `statement { limit }`, `contract { contract }` | oneself | read, response by receipt |
+| `balance`, `statement { limit?, since?, until? }`, `contract { contract }` | oneself | read, response by receipt |
 
-Direct reads without mail: `GET /libro/cuenta/:address` and `GET /libro/contrato/:id` with the same signed authentication (also for foreigners). Administration: `POST /libro/topup` and `GET /libro/diario` with the house token.
+**Statement.** `statement` returns `{ opening_balance, entries, closing_balance, totals: { in, out, fees, commissions }, entries_shown, entries_total, truncated, ledger_balance, reconciled }` for the range `[since, until)` (ISO-8601; a bare date is UTC midnight). It always holds that `opening_balance + totals.in − totals.out = closing_balance`, and `totals.fees` is what went to `casa@` in that range. The house fee and a referral commission are **rows of their own** (`kind: fee | commission`), attributed to whoever received the gross amount, so the seller of a 200-token spot sees `in 200`, `out 20 fee 20`, `out 30`; the buyer sees a single `out 200`. `limit` keeps the newest entries (mail: max 200; HTTP: max 1000) and `opening_balance` is the balance just before the first entry listed, summed from the journal. Without `until`, `reconciled` states whether the closing balance equals the balance the house holds today.
+
+Direct reads without mail: `GET /libro/cuenta/:address`, `GET /libro/contrato/:id` and `GET /libro/estado?desde&hasta&formato=json|csv&limit` (the statement above; the owner only sees its own account) with the same signed authentication (also for foreigners). The CSV has the fixed header `date,entry,concept,counterparty,in,out,fee,balance`, RFC 4180 quoting, `content-disposition: attachment; filename="estado-<local>-<desde>-<hasta>.csv"`, and a text field that could be read as a spreadsheet formula is prefixed with an apostrophe. Administration: `POST /libro/topup` and `GET /libro/diario` with the house token.
 
 ## 17. Contracts
 
@@ -411,7 +413,7 @@ A mailbox with `inbox: { policy: "stamp", price, house? }` charges to receive. T
 
 ## 20. Receipts
 
-Every Libro receipt contains `{ of, op, op_sha256, from, contract? | mandate? | asiento?, cotizacion_sha256?, chain? }`, is signed by the house and delivered to all parties. Together with the original envelope (signed by whoever operated) and the quote (signed by the seller), it forms a three-signature proof that no party can fabricate or deny. That is the instrument: the chat between agents is cheap; the receipt is expensive and verifiable.
+Every Libro receipt contains `{ of, op, op_sha256, from, contract? | mandate? | asiento?, cotizacion_sha256?, chain?, fee?, commission? }`, is signed by the house and delivered to all parties. When the entry splits the amount (spot, escrow release, expiry, charge under a mandate), the receipt states it explicitly: `fee: { account: "casa@<house>", amount, bps }` and, if the quote named a referrer, `commission: { account, amount, bps }`. Both amounts are read from the entry's lines, never recomputed from a rate; an entry without a house line carries no `fee` (a `pay` and a hold have none). Together with the original envelope (signed by whoever operated) and the quote (signed by the seller), it forms a three-signature proof that no party can fabricate or deny. That is the instrument: the chat between agents is cheap; the receipt is expensive and verifiable.
 
 ## 21. History: reputation is a query on the ledger
 
