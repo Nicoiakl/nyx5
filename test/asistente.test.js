@@ -87,6 +87,24 @@ test('contesta solo, con lo que devuelve la API, y le manda a la API lo correcto
   assert.ok(Math.abs(estado.body.spent_usd - costoDe('claude-opus-5', USO)) < 1e-4, `gasto registrado: ${estado.body.spent_usd}`);
 });
 
+// 14-sep-2026: dos pedidas en cola no se mezclan. La primera respuesta no ve la segunda pedida.
+test('lo que sigue en cola no entra al historial: cada pregunta se contesta sola', async () => {
+  const n = pedidos.length;
+  // En pausa, las dos pedidas quedan en cola juntas; al reanudar, un solo reloj las contesta en orden.
+  assert.equal((await admin('POST', `/admin/assistants/${asis.local}/pause`)).status, 200);
+  const a = await pregunton.send({ to: asis.address, body: 'primera pedida sola' });
+  const b = await pregunton.send({ to: asis.address, body: 'segunda pedida sola' });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal((await admin('POST', `/admin/assistants/${asis.local}/resume`)).status, 200);
+  await pregunton.waitFor((e) => e.from === asis.address && e.in_reply_to === a.id, { timeoutMs: 8000 });
+  await pregunton.waitFor((e) => e.from === asis.address && e.in_reply_to === b.id, { timeoutMs: 8000 });
+  const llamadas = pedidos.slice(n).map((p) => p.body.messages.map((x) => x.content).join('\n'));
+  const primera = llamadas.find((c) => c.includes('primera pedida sola') && !c.includes('segunda pedida sola'));
+  assert.ok(primera, `la segunda pedida se coló en el turno de la primera: ${JSON.stringify(llamadas)}`);
+  const segunda = llamadas.find((c) => c.includes('segunda pedida sola'));
+  assert.ok(segunda && segunda.includes('primera pedida sola'), `la segunda sí lleva a la primera, ya contestada: ${JSON.stringify(llamadas)}`);
+});
+
 test('la segunda pregunta lleva la conversación anterior, en turnos alternados', async () => {
   const t0 = Date.now();
   await pregunton.send({ to: asis.address, body: '¿y los tests?' });

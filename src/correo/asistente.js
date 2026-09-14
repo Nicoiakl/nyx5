@@ -118,9 +118,12 @@ async function responder(est, local, cfg, m) {
     return;
   }
   // La conversación con esa persona, en orden: los turnos se alternan y el primero es suyo.
+  // Lo que todavía no se contestó (otras pedidas en cola) no entra al historial: el 14-sep qa@ vio
+  // cinco pedidas juntas en un solo turno y contestó una con los contratos de otras dos.
+  const enCola = new Set((await est.store.listMail(local)).map((x) => x.envelope?.id));
   const mensajes = [];
   for (const h of await est.conversacion(local, { con: de, limit: 13 })) {
-    if (h.id === m.envelope.id) continue;
+    if (h.id === m.envelope.id || (h.dir === 'in' && enCola.has(h.id))) continue;
     let t; try { t = textoDe((await agente.open(h.envelope)).content); } catch { continue; }
     const rol = h.dir === 'in' ? 'user' : 'assistant';
     if (mensajes.length && mensajes[mensajes.length - 1].role === rol) mensajes[mensajes.length - 1].content += `\n\n${t}`;

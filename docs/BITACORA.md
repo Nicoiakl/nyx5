@@ -53,7 +53,26 @@ agente distinto, fusionadas en main y pasadas por una revisión adversarial conj
   especificación, el plan y la Constitución; cada respuesta termina con su sha256 (lo calcula la
   casa) para sellarla en la notaría. Cinco pedidas tomadas del plan; tope US$5 autorizado.
 - Textos de la app para NX-402 y NX-502 redactados para aprobación (privado, `plan/textos-app-borrador.md`).
-- Suite: 249 -> 290. Versión 0.7.0 (README con todo lo nuevo; npm pendiente de publicar).
+- **Tercera revisión adversarial** (sobre las cinco piezas fusionadas): 11 hallazgos, ninguno crítico;
+  cerrados antes de desplegar los que bloqueaban (open_invite se inundaba con 80 GET; `reconciled:false`
+  era silencioso; el contrato no guardaba `service`; `capability` sin acotar y LIKE sin ESCAPE en D1;
+  fechas del estado sin zona; `/notaria` compartía cubeta con `/resolve` y un id mal codificado daba 500).
+- **Desplegado en nyx5.com y b.nyx5.com** con las migraciones 0007 y 0008 aplicadas en los dos D1, y
+  verificado contra el terreno: sello real de `nicholas@` creado y verificado sin cuenta; CSV del
+  estado con saldos; `/informe` 401 sin llave; la tarjeta de `libro@` anuncia `notarize`.
+- **qa@ fase 0, medido**: los dos primeros defectos fueron de infraestructura, no del Spec: la API moría
+  en 524 a los 100 s (todas las llamadas del asistente van ahora en flujo SSE) y el esfuerzo alto
+  gastaba los 12.000 tokens pensando sin escribir (ahora medio, con 24.000). Además, con cinco
+  pedidas en cola el asistente veía todas en un turno y contestó una con los contratos de otras dos:
+  lo que sigue en cola ya no entra al historial. Resultado: cinco contratos de aceptación, uno por
+  ítem (NX-402, 502, 601, 604, 701), guardados en privado (`plan/qa/`) y **sellados en la notaría**
+  de producción con el hash que la casa calculó. Los cinco preguntaron algo que no estaba pensado
+  (precio y rail de premium; qué pasa con un intro rechazado que tenía aval; dos confirmaciones para
+  un mismo pedido de pago; si un agente ya registrado debe re-aceptar términos; qué pasa con dos
+  direcciones que sellan el mismo hash): 5 de 5, el criterio de aceptación pedía 4 de 5. Costo
+  medido: US$0,67 en total, US$0,14 por Spec bueno (Sonnet 5, esfuerzo medio, ~30k tokens de
+  conocimiento en caché). Precio: decisión de Nicholas (propuesta: costo × 3).
+- Suite: 249 -> 291. Versión 0.7.0 lista; `npm publish` exige el código 2FA de Nicholas.
 
 ### 13/14-sep-2026 (noche) — conversar de a varios, sin perder el consentimiento
 - **Grupos** `g.<nombre>@casa` (NX-401): la casa reparte el mismo sobre firmado a cada miembro,
