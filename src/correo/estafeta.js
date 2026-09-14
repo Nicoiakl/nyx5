@@ -42,6 +42,7 @@ import { ICONOS } from '../plataformas/iconos.js';
 import { Agent } from './agente.js';
 import { eventoDeCobro } from './cobro.js';
 import { atenderAsistentes, PRECIOS, MEDIA_GATE } from './asistente.js';
+import { atenderIdeas, paginaDeIdeas, puertaIdeas, LOCAL as IDEAS_LOCAL, VIA as IDEAS_VIA } from './ideas.js';
 import { validarFiltros, puntajeDe, precioMinimo, FILTROS } from './indice.js';
 
 const now = () => Date.now();
@@ -73,7 +74,7 @@ export class Estafeta {
     port = 4000, host = '127.0.0.1', publicUrl,
     hosts = {}, fetchImpl = globalThis.fetch,
     policy = {}, retry = {}, workerIntervalMs = 1000, libro = {},
-    index = {}, email = {}, verifica = {}, eventos = true, tareas = {}, terms = null, remoto = {}, asistente = {},
+    index = {}, email = {}, verifica = {}, eventos = true, tareas = {}, terms = null, remoto = {}, asistente = {}, ideas = {},
     extensions = null,
     log = (...a) => console.log(`[estafeta ${domain}]`, ...a),
   }) {
@@ -141,6 +142,10 @@ export class Estafeta {
     // Asistentes (src/correo/asistente.js): existen sólo si la casa tiene una clave de la API de
     // Anthropic. La clave no se guarda aparte: sólo el asistente la usa, al llamar.
     this.asistente = asistente.apiKey ? { apiKey: asistente.apiKey, fetch: (...a) => (asistente.fetchImpl || this.fetch)(...a) } : null;
+    // ideas@ (src/correo/ideas.js): el buzón que registra y confirma, nunca ejecuta. Se enciende por
+    // casa (NYX5_IDEAS=on) y exige la bóveda: su llave vive ahí, como la de un asistente de sistema.
+    // `cupo` sólo para pruebas (no sale de ninguna variable de entorno): el límite es de código.
+    this.ideas = { enabled: !!(ideas.enabled && this.boveda), cupo: ideas.cupo || undefined };
     this._ready = null;
     this._domainCardCache = null; // { value, until }
     this._pushes = [];            // avisos por webhook en vuelo (los espera flushPushes)
@@ -255,7 +260,8 @@ export class Estafeta {
     return !(await this.store.getAgent(local));
   }
   // `qa` es de la casa (NX-606): sólo un asistente de sistema puede vivir ahí, nunca un registro.
-  static RESERVED = new Set(['postmaster', 'libro', 'verifica', 'tareas', 'casa', 'admin', 'root', 'abuse', 'security', 'hostmaster', 'noreply', 'no-reply', 'support', 'estafeta', 'nyx5', 'indice', 'historial', 'qa']);
+  // `ideas` igual: sólo el buzón de vacaciones (POST /admin/ideas) puede ocuparlo.
+  static RESERVED = new Set(['postmaster', 'libro', 'verifica', 'tareas', 'casa', 'admin', 'root', 'abuse', 'security', 'hostmaster', 'noreply', 'no-reply', 'support', 'estafeta', 'nyx5', 'indice', 'historial', 'qa', 'ideas']);
 
   // ---------- servicio de registro ----------
   // Invitaciones: la casa emite códigos con usos y vencimiento; un agente los presenta al inscribirse.
@@ -875,6 +881,61 @@ export class Estafeta {
     await this._evento('assistant_created', card.address, { budget_usd: cfg.budget_usd, system: true, price_tokens: cfg.price_tokens });
     return { status: 201, body: { address: card.address, custody: card.custody, system: true, config: { ...cfg, persona: `${cfg.persona.length} chars`, persona_gate: `${cfg.persona_gate.length} chars` } } };
   }
+  // Alta del buzón de vacaciones ideas@ (src/correo/ideas.js): dirección raíz de la casa con llaves
+  // propias en la bóveda, tarjeta `custody.via = ideas`, buzón por lista (el dueño y quien él diga) y
+  // sin cuenta que valga nada (nace sin regalo y nunca opera el Libro). Con el buzón ya dado de alta,
+  // un cuerpo sin `keys` sólo cambia la lista: la llave no se reemplaza por esta puerta.
+  async _altaBuzonIdeas(b) {
+    const l = IDEAS_LOCAL;
+    // La confirmación tiene que poder VOLVER: un Claude conectado sólo acepta a su dueño (lista), y
+    // la confirmación de ideas@ le rebotaría en silencio. A cada dirección de la lista que sea de
+    // esta casa y filtre por lista se le agrega ideas@ (lo mismo que hace /admin/contacts).
+    const abrirVuelta = async (allow) => {
+      const propia = `${l}@${this.domain}`;
+      for (const dir of allow) {
+        const p = parseAddress(dir);
+        if (p.domain !== this.domain || p.local === l) continue;
+        const rec = await this.store.getAgent(p.local);
+        if (rec?.inbox?.policy === 'allowlist' && !(rec.inbox.allowlist || []).includes(propia)) { await this.agregarContactos(p.local, [propia]); this.resolver.invalidate(`agent:${dir}`); }
+      }
+    };
+    let owner;
+    try { const p = parseAddress(String(b.owner || '')); owner = `${p.local}@${p.domain}`; } catch { return { status: 400, body: { reason: 'owner must be an address' } }; }
+    const allow = [];
+    for (const x of Array.isArray(b.allow) ? b.allow : []) {
+      let dir; try { const p = parseAddress(String(x)); dir = `${p.local}@${p.domain}`; } catch { return { status: 400, body: { reason: `allow: ${String(x).slice(0, 80)} is not an address` } }; }
+      if (!allow.includes(dir)) allow.push(dir);
+    }
+    if (!allow.includes(owner)) allow.unshift(owner);
+    if (allow.length > 20) return { status: 400, body: { reason: 'allow: at most 20 addresses' } };
+    const previo = await this.store.getAgent(l);
+    const since = iso();
+    if (previo) {
+      if (previo.custody?.via !== IDEAS_VIA) return { status: 409, body: { reason: `${l}@${this.domain} already exists and is not the ideas mailbox` } };
+      if (b.keys) return { status: 409, body: { reason: `${l}@${this.domain} already exists; send only owner and allow to change its list` } };
+      const { certification: _c, webhook, notify_email, ...cuerpo } = previo;
+      const card = signObject({ ...cuerpo, inbox: { policy: 'allowlist', allowlist: allow } }, this.keys, 'certification');
+      await this.store.putAgent(l, { ...card, webhook, notify_email });
+      this.resolver.invalidate(`agent:${l}@${this.domain}`);
+      await this.store.kvPut('ideas', '_config', { owner, allow, updated: since });
+      await abrirVuelta(allow);
+      return { status: 200, body: { address: card.address, owner, allow } };
+    }
+    const k = b.keys || {};
+    if (![k.sig, k.sigPriv, k.enc, k.encPriv].every((x) => typeof x === 'string' && x)) return { status: 400, body: { reason: 'keys must bring sig, sigPriv, enc and encPriv' } };
+    let posee = false; try { posee = verifyObject(signObject({ nyx5: '1', prueba: l }, k), k.sig); } catch { posee = false; }
+    if (!posee) return { status: 400, body: { reason: 'sigPriv does not match sig' } };
+    let card;
+    try {
+      card = await this.registerAgent({ local: l, sig: k.sig, enc: k.enc, system: true, welcome: 0, inbox: { policy: 'allowlist', allowlist: allow },
+        capabilities: { accepts: ['text/plain', 'application/json'], listed: false }, custody: { keys: 'house', via: IDEAS_VIA, since } });
+    } catch (e) { return { status: e.status || 400, body: { reason: e.message } }; }
+    await this.store.kvPut('boveda', l, { sellado: this.boveda.sellar({ sig: k.sig, sigPriv: k.sigPriv, enc: k.enc, encPriv: k.encPriv }, l), root: null, since });
+    await this.store.kvPut('ideas', '_config', { owner, allow, created: since });
+    await abrirVuelta(allow);
+    await this._evento('ideas_created', card.address, { owner, allow: allow.length });
+    return { status: 201, body: { address: card.address, custody: card.custody, owner, allow } };
+  }
   async _adminAsistente(rx, local, accion) {
     const b = rx.body || {};
     const indice = async () => (await this.store.kvGet('asistente', '_indice')) || [];
@@ -1075,6 +1136,7 @@ export class Estafeta {
     // petición no tiene por qué pagarlo.
     if (programado) await this._liberarVencidos();
     if (programado) { try { await atenderAsistentes(this); } catch (e) { this.log(`asistentes: ${e.message}`); } }
+    if (programado && this.ideas.enabled) { try { await atenderIdeas(this); } catch (e) { this.log(`ideas: ${e.message}`); } }
     await this.flushPushes();
   }
   async _deliver(job) {
@@ -1347,6 +1409,12 @@ export class Estafeta {
       if (!rec || !await this._visibleA(rec, env.from)) { rejected.push({ to, code: 404, reason: 'no such agent' }); continue; }
       const p = applyInboxPolicy(env, rec, senderCard._domain);
       if (!p.ok) { rejected.push({ to, ...p, ok: undefined }); continue; }
+      // ideas@ tiene su propia puerta (src/correo/ideas.js): sólo su lista, con cupo diario. Ni el
+      // intro ni el aval de la política general entran: nadie los leería, y el buzón no se borra.
+      if (local === IDEAS_LOCAL && this.ideas.enabled && rec.custody?.via === IDEAS_VIA) {
+        const veto = await puertaIdeas(this, env, rec, this.ideas.cupo ? { cupo: this.ideas.cupo } : {});
+        if (veto) { rejected.push({ to, ...veto }); continue; }
+      }
       try {
         if (local === 'libro') {
           // Operación del Libro: se ejecuta (idempotente por id de sobre), no se almacena;
@@ -1629,6 +1697,10 @@ export class Estafeta {
     // la casa no manda correo a una dirección que no verificó (nada de backscatter).
     const pol = applyEmailPolicy(rec, from);
     if (!pol.ok) return { ok: false, code: pol.code, reason: pol.reason };
+    // Un correo nunca es una idea (no va firmado): se rechaza en la puerta, y el remitente recibe el
+    // rebote de su propio proveedor. Antes entraba con `From:` de la lista y el tick lo cerraba en
+    // silencio: quien escribía desde su correo creía que había quedado anotado.
+    if (this.ideas.enabled && local === IDEAS_LOCAL && rec.custody?.via === IDEAS_VIA) return { ok: false, code: 403, reason: 'the ideas mailbox records only signed envelopes; email is not recorded' };
     // Y un buzón abierto tampoco es un embudo infinito: se limita por dominio del remitente.
     if (!await this.rate.allow(`email:${String(from).slice(String(from).lastIndexOf('@') + 1).toLowerCase()}`)) {
       return { ok: false, code: 429, reason: 'rate limit for the sending domain' };
@@ -1697,6 +1769,26 @@ export class Estafeta {
       if ((m = /^\/admin\/assistants(?:\/([^/]+))?(?:\/(knowledge|config|pause|resume))?$/.exec(path))) {
         if ((rx.headers.authorization || '') !== `Bearer ${this.adminToken}`) return send(401, { reason: 'only the house configures assistants' });
         return this._adminAsistente(rx, m[1] ? dec(m[1]).toLowerCase() : null, m[2] || null);
+      }
+      // ----- ideas@: alta por la casa; el registro lo lee su dueño (o la casa) -----
+      if (this.ideas.enabled && rx.method === 'POST' && path === '/admin/ideas') {
+        if ((rx.headers.authorization || '') !== `Bearer ${this.adminToken}`) return send(401, { reason: 'only the house configures the ideas mailbox' });
+        const r = await this._altaBuzonIdeas(rx.body || {});
+        return send(r.status, r.body);
+      }
+      if (this.ideas.enabled && rx.method === 'GET' && path === '/ideas') {
+        // Sin nombre en la ruta no hay oráculo de existencia: quien no es el dueño recibe 403, y
+        // quien no firma, 401, exista o no el buzón. La lista no dice quién más está en ella.
+        if ((rx.headers.authorization || '') !== `Bearer ${this.adminToken}`) {
+          const who = await this._authenticate(rx, path);
+          const cfg = await this.store.kvGet('ideas', '_config');
+          if (!cfg || who.address !== cfg.owner) return send(403, { reason: 'only the owner of the ideas mailbox reads it' });
+        }
+        // Paginado: `?after=<n>` sigue desde ese número; `next` dice desde dónde sigue la página
+        // siguiente (antes la lista se cortaba en 1.000 en silencio y `total` decía 1.000).
+        const after = rx.query.get('after');
+        if (after != null && !/^\d{1,9}$/.test(after)) return send(400, { reason: 'after must be a non-negative integer' });
+        return send(200, { address: `${IDEAS_LOCAL}@${this.domain}`, ...(await paginaDeIdeas(this, { after: Number(after) || 0 })) });
       }
       // ----- Ficha pública: la edita el dueño de la dirección o el dueño de su delegación -----
       if (rx.method === 'POST' && (m = /^\/agents\/([^/]+)\/profile$/.exec(path))) {

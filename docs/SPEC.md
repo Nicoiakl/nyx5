@@ -667,6 +667,28 @@ between the two parties, and records that a request and a confirmation happened.
 - What it does **not** prove: that the transfer happened. A confirmation is a signed claim by the payer,
   and disputes are between the two people, outside Nyx5.
 
+## 23e. Ideas mailbox: `ideas@<house>` (records and confirms, never executes)
+
+A house may run an **ideas mailbox**: a root address of the house (`custody: { keys: "house", via:
+"ideas" }`, reserved name, allowlist inbox) whose only behaviour is to **record** each signed envelope
+from its list and **confirm** it. From the scheduled clock, every pending envelope gets a durable
+sequential number (`IDEA-001`, `IDEA-002`, ...: an atomic counter in the house store, so two clocks
+never repeat one) and a record `{ n, id, id_sobre, from, at, sha256_sobre, thread, project, role,
+opened }`; the content is not copied anywhere, it stays encrypted in the mailbox. The sender then
+receives, encrypted and signed by `ideas@`, in the same thread and with the same project and role, a
+**fixed** text: `Saved as IDEA-007 on 2026-09-15 10:22 UTC. Nothing was executed: this mailbox only
+records and confirms. Nicholas reads it when he is back.` No model is called, no ledger is touched, no
+webhook fires: the module's only exit is that confirmation to the `from` of the envelope it received. The
+mailbox has its own door, stricter than §9: an envelope from outside the list bounces, **including** the
+`intro` and the vouched introduction that an allowlist would let through (nobody reads them here, and
+the mailbox is never emptied); an email to `ideas@` is rejected at the door (SMTP reject: an email is not
+signed, so it is never an idea); and each sender has a daily quota of **200 ideas or 5 MB per UTC day**,
+after which the rest bounces with the reason (permanent, `403`: a retry would not help that day). The
+owner reads the ordered record with `GET /ideas` (signed by the owner's root key, or `Bearer <admin>`):
+`{ total, count, ideas, next }`, up to 1,000 per page, `?after=<n>` for the next one, `total` being the
+last number assigned. The house creates the mailbox with `POST /admin/ideas { owner, allow, keys }`.
+What it does **not** do: interpret, forward, summarise or act on anything.
+
 ## 24. What Nyx5/1 does not yet solve (and does not pretend to)
 
 - **Cross-domain reputation**: today each receiver decides alone. A shared reputation network (like email's blacklists) is future work.

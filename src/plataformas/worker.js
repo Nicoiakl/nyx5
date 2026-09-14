@@ -13,6 +13,7 @@
 //   NYX5_FEE_BPS       fee de la casa en basis points (default 1000 = 10%)
 //   NYX5_INDEX         'on' para operar el índice federado (default off)
 //   NYX5_EMAIL         'on' para habilitar el puente de correo
+//   NYX5_IDEAS         'on' para el buzón ideas@ (registra y confirma, nunca ejecuta; exige NYX5_VAULT_KEY)
 //   DB                    binding D1
 
 import { Estafeta } from '../correo/estafeta.js';
@@ -78,6 +79,8 @@ function estafetaDesde(env) {
     remoto: { enabled: cfg('MCP_REMOTE') === 'on', vaultKey: env.NYX5_VAULT_KEY, dias: Number(cfg('REMOTE_DAYS')) || 30 },
     // Asistentes que contestan solos (src/correo/asistente.js). Sin clave de la API, no existen.
     asistente: { apiKey: env.ANTHROPIC_API_KEY },
+    // ideas@ (src/correo/ideas.js): el buzón de vacaciones. Se enciende por casa y usa la bóveda.
+    ideas: { enabled: cfg('IDEAS') === 'on' },
     log: (...a) => console.log(...a),
   });
   return instancia;

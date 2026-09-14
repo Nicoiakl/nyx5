@@ -125,6 +125,25 @@ son únicos; las 13 de mensajería existen. Automatizado: `tools-tope`. Prueba: 
 **[manual]** una herramienta nueva: ¿está en `MENSAJERIA` sólo si un Claude de sólo mensajes puede
 usarla sin tocar el Libro?
 
+## 14. ideas@ (14-sep-2026, antes de desplegar el buzón de vacaciones)
+
+Ocho ataques, cada uno con script en `scripts/revision-ideas/` (casa local sobre D1 local, sin red):
+`a1-inundacion.mjs` (500 sobres de la lista + 2.000 intros de 20 extraños: cuántos entran, duración
+del tick, en qué tick sale la idea legítima), `a2-from-falso.mjs` (otra llave por `/inbound`, correo con
+`From:` de la lista, delegado reconocido por su dirección y no por la del padre), `a3-tamanos.mjs`
+(1,1 MB; 120 sobres de ~1 MB por minuto y el crecimiento de `nyx5_mailbox`), `a4-mutantes.sh` (diez
+salidas escondidas VIVAS en `ideas.js`; la suite tiene que fallar con cada una), `a5-oraculos.mjs`
+(`GET /ideas` y `/admin/ideas` con y sin firma, ajena, foránea, delegado; apagado = 404 byte a byte),
+`a6-idempotencia.mjs` (dos relojes, sobre reentregado antes y después del tick), `a7-texto.mjs` (el texto
+exacto, un solo lugar, ASCII), `a9-grito-arreglos.sh` (cada arreglo revertido tiene que hacer fallar
+la suite). Lo que se encontró la primera vez: intros y correo entraban al buzón y se cerraban en
+silencio; sin tope diario (112 MB/min desde una dirección de la lista); una idea podía confirmarse sin
+registro si el reloj caía a medio camino; `GET /ideas` cortaba en 1.000 sin avisar; y cuatro mutantes
+(`putMail`, `_push`, `emailOut`, `inbound`) pasaban la inspección de la fuente. Todo arreglado con
+grito y silencio en `test/ideas.test.js`.
+**[manual]** el recorrido en workerd real (`wrangler dev --test-scheduled`): alta, un sobre, el cron
+por `/__scheduled`, la confirmación en el buzón del remitente.
+
 ## 13. Lo que el script NO cubre
 
 - Nada que necesite dos isolates reales (ver 8) ni el tope de subpeticiones del edge (se mide en

@@ -44,6 +44,10 @@ NYX5_MCP_REMOTE = "on"
 # Días que dura un Claude conectado antes de pedir reconectar. Eran 30 (uno de los tres límites que
 # aprobó Nicholas el 10-sep); el 12-sep pidió que su Claude cubriera el viaje entero, hasta el 31-oct.
 NYX5_REMOTE_DAYS = "50"
+# ideas@nyx5.com, el buzón automático de vacaciones (14-sep-2026): registra cada sobre de su lista
+# con un número IDEA-### y confirma con un texto fijo. Nunca ejecuta nada ni llama a ningún modelo.
+# Sólo en esta casa; el alta es POST /admin/ideas (docs/ARQUITECTURA.md §4.7).
+NYX5_IDEAS = "on"
 
 # Casa oficial en el D1 "nyx5" (limpio). El D1 viejo "chsq" (ca773156…) queda abandonado a propósito.
 [[d1_databases]]
