@@ -249,8 +249,10 @@ export class Agent {
 
   // Búsqueda en un índice federado (urn:nyx5:ext:indice): por casa que lo opera o URL directa.
   // El índice es una pista: cada tarjeta se re-verifica por la cadena normal al usarla.
-  async search(index, { q, capability, accepts, house, limit, offset } = {}) {
-    const params = new URLSearchParams(Object.entries({ q, capability, accepts, house, limit, offset }).filter(([, v]) => v != null));
+  // Filtros: q, tag, lang, capability, accepts, house, price_max, min_score, limit; y `cursor`
+  // (el next_cursor de la página anterior). No hay offset: el índice lo rechaza con 400.
+  async search(index, { q, tag, lang, capability, accepts, house, price_max, min_score, limit, cursor } = {}) {
+    const params = new URLSearchParams(Object.entries({ q, tag, lang, capability, accepts, house, price_max, min_score, limit, cursor }).filter(([, v]) => v != null));
     const base = index.startsWith('http') ? index.replace(/\/$/, '') : (await this.resolver.domainCard(index))._estafeta;
     const res = await this.fetch(`${base}/index/agents?${params}`, { signal: AbortSignal.timeout(10_000) });
     const json = await res.json().catch(() => ({}));

@@ -158,6 +158,24 @@ export class Libro {
     }
     // Fianzas todavía en pie: no son historial cumplido, pero sí tokens en juego ahora mismo.
     for (const c of mios) if (c.kind === 'bond' && c.state === 'posted' && c.seller === address) sumar(h.afirmando.fianzas_vigentes, Number(c.amount) || 0);
+    // Arbitrados por la casa (NX-302): sólo los contratos en que este agente VENDÍA, el árbitro
+    // era `verifica@<casa>` y el veredicto terminal (release / refund / forfeit) lo dio ese
+    // árbitro, no una parte. Es la porción del historial que dos cómplices no pueden fabricar
+    // entre sí: para sumar aquí hay que pasar una prueba determinista que corre la casa. Un
+    // escrow liberado por el comprador, o por silencio (`expire`), queda fuera aunque el
+    // contrato nombrara a verifica@ de árbitro. Campo ADITIVO: la forma anterior no cambia.
+    const arbitro = `verifica@${this.domain}`;
+    h.arbitrados = { arbitro, liberados: cuenta(), devueltos: cuenta(), ejecutadas: cuenta() };
+    for (const c of mios) {
+      if (c.seller !== address || c.arbiter !== arbitro) continue;
+      if (!(Libro.TERMINALES[c.kind] || []).includes(c.state)) continue;
+      const veredicto = (c.history || []).filter((x) => ['release', 'refund', 'forfeit'].includes(x.op)).at(-1);
+      if (!veredicto || veredicto.by !== arbitro) continue;
+      const monto = Number(c.amount) || 0;
+      if (veredicto.op === 'release') sumar(h.arbitrados.liberados, monto);
+      else if (veredicto.op === 'refund') sumar(h.arbitrados.devueltos, monto);
+      else sumar(h.arbitrados.ejecutadas, monto);
+    }
     // El resumen es lo que un agente lee para decidir en una línea; el detalle queda arriba.
     const entregadas = h.vendiendo.entregas_aceptadas.n + h.vendiendo.ventas_directas.n;
     const falladas = h.vendiendo.entregas_devueltas.n;
@@ -170,6 +188,8 @@ export class Libro {
       // Sin historial no hay tasa: cero de cero no es 100%, es "todavía nada". Lo decimos así.
       cumplimiento: entregadas + falladas > 0 ? Number((entregadas / (entregadas + falladas)).toFixed(4)) : null,
       veracidad: afirmaciones > 0 ? Number((h.afirmando.fianzas_sostenidas.n / afirmaciones).toFixed(4)) : null,
+      // Lo que el índice federado usa para ordenar (§13): ponderado por tokens, null sin historial arbitrado.
+      puntaje_arbitrado: puntajeArbitrado(h.arbitrados),
     };
     return h;
   }
@@ -339,4 +359,16 @@ export class Libro {
     } catch (e) { this._abort(); throw e; }
     });
   }
+}
+
+// Puntaje de reputación arbitrada: tokens liberados sobre tokens decididos por verifica@
+// (liberados + devueltos + fianzas ejecutadas). Ponderado por monto, no por cuenta: una entrega
+// de 5.000 pesa más que diez de 10. `null` cuando no hay nada decidido: cero de cero no es 100 %.
+// UNA definición: la usan `historial` (resumen.puntaje_arbitrado) y el índice federado.
+export function puntajeArbitrado(arbitrados) {
+  if (!arbitrados || typeof arbitrados !== 'object') return null;
+  const t = (k) => Number(arbitrados[k]?.tokens) || 0;
+  const total = t('liberados') + t('devueltos') + t('ejecutadas');
+  if (total <= 0) return null;
+  return Number((t('liberados') / total).toFixed(4));
 }
