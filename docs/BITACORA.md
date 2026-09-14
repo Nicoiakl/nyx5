@@ -26,6 +26,7 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 | | Qué | Desde |
 |---|---|---|
+| ☐ | **Al retomar tras el mes de Nicholas (Mac apagado, nada corre)**: leer el buzón de nicholas@ (recordatorios semanales y sus respuestas por nico@); fusionar y desplegar la rama `proyectos` (8d39fb7, en revisión al cortar); terminar la maqueta v2 (`plan/maquetas/auditoria-v1.md` es el contrato); luego la app real (NX-408/409) | 14-sep |
 | ☐ | Los ~20 hallazgos medios/bajos de la revisión adversarial | 5-sep |
 | ☐ | Ancla DNS TXT `_nyx5.<dominio>` en producción | 5-sep |
 | ☐ | Reclamar el listado de glama.ai con OAuth de GitHub | 8-sep |
