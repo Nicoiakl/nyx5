@@ -7,13 +7,13 @@
     "url": "https://github.com/Nicoiakl/nyx5",
     "source": "github"
   },
-  "version": "0.6.0",
+  "version": "0.7.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@nyx5/nyx5",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
