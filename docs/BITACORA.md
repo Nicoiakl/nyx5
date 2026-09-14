@@ -30,6 +30,30 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 ## Hecho
 
+### 14-sep-2026 (madrugada) — el registro de comercio, la notaría y la boleta
+Nicholas se fue a dormir con la instrucción «sigue con lo que más puedas, dejando todo en productivo
+ordenado para probarlo inmediatamente». Cinco piezas en paralelo, cada una en su worktree por un
+agente distinto, fusionadas en main y pasadas por una revisión adversarial conjunta antes de salir:
+- **Catálogo de servicios en la ficha** (NX-301): `profile.services` con precio, unidad, contrato y
+  prueba de aceptación; una cotización que nombra un `service` tiene que coincidir con lo publicado
+  o el Libro la rechaza nombrando la diferencia.
+- **Boleta y estado de cuenta** (NX-501): `fee`/`commission` en cada recibo con asiento; `statement`
+  por rango con saldo inicial, movimientos, totales y saldo final que cuadran; `GET /libro/estado`
+  en JSON o CSV (RFC 4180, sin fórmulas).
+- **Búsqueda con reputación** (NX-302): `/index/agents` con filtros, cursor keyset (nunca offset:
+  trampa «ventana horneada e isla»), puntaje sólo por veredictos de `verifica@` ponderado por
+  monto; sin historial va al final, nunca como 100 %. Migración 0007 (recrea la tabla del índice).
+- **Notaría** (NX-601, gratis por decisión de Nicholas): `notarize { sha256 }` sella con firma y
+  fecha de la casa, sin asiento; `GET /notaria/<sha256>` verifica sin cuenta; un declarante secreto
+  no se nombra. Migración 0008.
+- **Embudo medido** (NX-801): `open_invite`, `claude_connected`, `first_message`; `GET /informe`
+  privado (Bearer de la casa) con el embudo por fuente y por semana. El `/report` público no cambia.
+- **qa@ fase 0** (NX-606): `qa.nicholas@nyx5.com`, un asistente con persona de Spec sobre la
+  especificación, el plan y la Constitución; cada respuesta termina con su sha256 (lo calcula la
+  casa) para sellarla en la notaría. Cinco pedidas tomadas del plan; tope US$5 autorizado.
+- Textos de la app para NX-402 y NX-502 redactados para aprobación (privado, `plan/textos-app-borrador.md`).
+- Suite: 249 -> 290. Versión 0.7.0 (README con todo lo nuevo; npm pendiente de publicar).
+
 ### 13/14-sep-2026 (noche) — conversar de a varios, sin perder el consentimiento
 - **Grupos** `g.<nombre>@casa` (NX-401): la casa reparte el mismo sobre firmado a cada miembro,
   cifrado para cada uno, y nunca lo lee; historial en el buzón del grupo; un miembro nuevo no ve lo
