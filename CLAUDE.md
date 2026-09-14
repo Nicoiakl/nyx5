@@ -38,26 +38,28 @@ src/nucleo/almacen-d1.js D1Store: la misma interfaz sobre Cloudflare D1; atomici
 src/nucleo/d1-local.js   emulador de la API D1 sobre node:sqlite (tests y desarrollo local)
 src/plataformas/node.js  adaptador node:http (start() lo usa)
 src/plataformas/worker.js adaptador Cloudflare Workers (fetch + scheduled); config por env
-migrations/000{2..8}*.sql   esquema D1, candado, pins, eventos, 0006: nyx5_kv (OAuth + bóveda) e índice de historial, 0007: índice con reputación y precio (recrea nyx5_indice_agentes), 0008: nyx5_notaria
+migrations/000{2..9}*.sql   esquema D1, candado, pins, eventos, 0006: nyx5_kv (OAuth + bóveda) e índice de historial, 0007: índice con reputación y precio (recrea nyx5_indice_agentes), 0008: nyx5_notaria, 0009: índice por estado de contrato
 bin/nyx5.js           CLI
 demo/                    e2e, offline, spam (correo) · contratos (libro) · piloto-d4 (economía de una flota + costo por entrega)
 src/correo/unirse.js     join (alta en un paso) y mandate (tope del humano) como funciones testeables
 src/correo/indice.js     búsqueda del índice (NX-302): columnas de la tarjeta, puntaje arbitrado, cursor opaco por generación, filtros; UNA definición para FileStore y D1Store
-src/libro/verifica.js    evaluador de referencia: http_status | sha256 | exit_0; veredicto y "indeciso"
+src/libro/verifica.js    evaluador de referencia: http_status | sha256 | json_path | regex | size | header | exit_0; veredicto y "indeciso"
 src/libro/tareas.js      trabajo sembrado: catálogo, cupos por agente/día, y que la cotización coincida
 src/puentes/x402.js      adaptador x402 v2: PAYMENT-REQUIRED / PAYMENT-SIGNATURE / PAYMENT-RESPONSE, /x402/supported
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria -> `npm test` (291)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · historial-lote · revision -> `npm test` (307)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
+scripts/revision-adversarial.{md,mjs}  el guion adversarial por versión (NX-903) y su parte automatizable
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
 ```
 
 ## Comandos
 
 ```
-npm test                 # 291 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 307 pruebas, todas deben pasar antes de cualquier commit
+npm run revision         # revisión adversarial automatizable contra una casa local (scripts/revision-adversarial.md)
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
 npm run demo             # correo: tarea cifrada, respuesta, acuse
@@ -442,3 +444,22 @@ sello vuelve como recibo y cualquiera lo verifica sin cuenta en `GET /notaria/<s
 `let puerto = N` + `puerto++`. El guard sólo veía constantes, y una suite nueva en 4231 chocaba con
 el contador de aval (4230–4232): parecía una prueba "inestable". Ahora el guard reserva el bloque
 del contador. Si agregas una suite, usa un puerto libre FUERA de 4300–4339 (bloques de contadores).
+
+**Tres piezas de fondo (14-sep-2026, rama `fondo`):**
+- **verifica@ con siete pruebas** (NX-602): `json_path` acepta `a.b[0].c` y `exists`; nuevas
+  `regex` (1 MB, patrón acotado por SINTAXIS, no por tiempo: `patronSeguro` rechaza referencias
+  hacia atrás y cuantificador sobre grupo con cuantificador o alternancia), `size` (cuenta bytes que
+  llegan, no `content-length`) y `header`. La lista `PRUEBAS` es una: la ficha (`acceptance.kind`) y
+  la tarjeta de `verifica@` la importan. SPEC §22.
+- **NX-905**: `libroListContracts({ state })` en los dos almacenes (migración 0009: índice de
+  expresión sobre `json_extract(doc,'$.state')`; sin columna nueva) y el reloj pide sólo
+  held/delivered. `GET /agents/historial?addresses=…` (público, tope 50, por IP, `null` para
+  inexistente/ajeno/secreto sin distinción) y el rastreo del índice lo usa por lotes, cayendo al de
+  a uno sólo ante 404. `historial` pasó a nombre reservado. `handleRequest` decodifica con `dec()`:
+  un segmento como `%E0%A4%A` ya no da 500 (daba 500 en cinco rutas). `first_message` se queda
+  contando al encolar: la etiqueta del informe dice «sent».
+- **NX-903**: `scripts/revision-adversarial.md` (el guion) y `npm run revision` (lo automatizable,
+  con tres estados: ok / falla / indecisa). `test/revision.test.js` lo corre en cada `npm test` y
+  además le inyecta tres defectos para comprobar que grita. Abierto que dejó a la vista: la cubeta
+  de registro cuenta sólo después de verificar la firma (un POST sin firma cuesta una verificación
+  Ed25519 sin límite).

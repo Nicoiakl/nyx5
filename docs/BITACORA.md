@@ -31,6 +31,30 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 ## Hecho
 
+### 14-sep-2026 (día) — tres piezas de fondo, en la rama `fondo` (sin fusionar ni desplegar)
+- **verifica@ con siete pruebas** (NX-602): `json_path` acepta `a.b[0].c` y `exists`; nuevas `regex`
+  (primer MB, patrón acotado por sintaxis: sin referencias hacia atrás ni cuantificador sobre grupo
+  con cuantificador o alternancia; falso positivo visible, nunca silencioso), `size` (bytes que
+  llegan, no `content-length`) y `header`. Cada una pasa/falla/indecisa como las demás; probadas
+  contra un servidor local y por mutación. La ficha y la tarjeta de verifica@ las toman de la misma
+  lista. SPEC §22 y README.
+- **Hallazgos medios de las tres revisiones** (NX-905): (a) `first_message` se queda contando al
+  encolar; el informe ya lo etiqueta «First message sent». (b) el reloj de la casa leía la tabla de
+  contratos entera en cada tick: `libroListContracts({ state })` en FileStore y D1, con índice de
+  expresión (migración 0009, **pendiente de aplicar en los dos D1 al desplegar**), y una prueba que
+  exige que el plan lo use. (c) el rastreo del índice hacía 1+N subpeticiones por casa ajena:
+  `GET /agents/historial?addresses=…` (público, tope 50, por IP, mismo `null` para inexistente,
+  ajeno y secreto) y el rastreo lo usa por lotes. (d) y (e) ya estaban cerrados.
+- **Revisión adversarial por versión** (NX-903): `scripts/revision-adversarial.md` con los trece
+  puntos de las tres revisiones y cómo se ejercita cada uno; `npm run revision` corre los
+  automatizables contra una casa local con tres estados (ok/falla/indecisa) y `test/revision.test.js`
+  lo hace en cada `npm test`, inyectando tres defectos para comprobar que grita. La primera corrida
+  encontró **cinco rutas que daban 500** ante `%E0%A4%A` (la tercera revisión había cerrado una):
+  ahora `handleRequest` decodifica con `dec()` y todas caen al mismo 404/400 que un inexistente.
+- Abierto que dejó a la vista: la cubeta de tasa del registro cuenta sólo después de verificar la
+  firma; un POST sin firmar cuesta una verificación Ed25519 y no se limita.
+- Suite: 291 -> 307.
+
 ### 14-sep-2026 (madrugada) — el registro de comercio, la notaría y la boleta
 Nicholas se fue a dormir con la instrucción «sigue con lo que más puedas, dejando todo en productivo
 ordenado para probarlo inmediatamente». Cinco piezas en paralelo, cada una en su worktree por un

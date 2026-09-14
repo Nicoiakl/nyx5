@@ -64,7 +64,8 @@
     "build:app": "node scripts/build-app-html.mjs",
     "build:home": "node scripts/build-home.mjs",
     "reporte": "node scripts/reporte-libro.mjs",
-    "auditar": "bash scripts/auditar-produccion.sh"
+    "auditar": "bash scripts/auditar-produccion.sh",
+    "revision": "node scripts/revision-adversarial.mjs"
   },
   "mcpName": "io.github.Nicoiakl/nyx5"
 }

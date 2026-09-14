@@ -121,8 +121,10 @@ export class Libro {
   //   bond   released | forfeited         afirmación sostenida | derribada
   static TERMINALES = { spot: ['settled'], escrow: ['released', 'refunded'], bond: ['released', 'forfeited'], metered: [] };
 
-  async historial(address) {
-    const todos = await this.store.libroListContracts();
+  // `contratos`: la lista ya leída, para que un lote de historiales (la ruta en lote, el rastreo
+  // del índice) no vuelva a leer la tabla por cada dirección.
+  async historial(address, { contratos = null } = {}) {
+    const todos = contratos ?? await this.store.libroListContracts();
     const mios = todos.filter((c) => [c.seller, c.buyer].includes(address));
     const cuenta = () => ({ n: 0, tokens: 0 });
     const h = {

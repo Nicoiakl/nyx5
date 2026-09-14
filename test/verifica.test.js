@@ -10,7 +10,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { Estafeta } from '../src/correo/estafeta.js';
 import { join } from '../src/correo/unirse.js';
-import { correrPrueba, veredicto, pruebasDe, pruebasDisponibles } from '../src/libro/verifica.js';
+import { correrPrueba, veredicto, pruebasDe, pruebasDisponibles, PRUEBAS, patronSeguro, segmentosDe, CUERPO_MAX, PATRON_MAX } from '../src/libro/verifica.js';
 import { sha256hex } from '../src/nucleo/crypto.js';
 
 const P = 4161;
@@ -18,12 +18,16 @@ const hosts = { 'v.test': { url: `http://127.0.0.1:${P}` } };
 let tmp, casa;
 
 // Un servidor de mentira que responde lo que se le pida: es el "mundo" que la prueba mira.
-let mundo, mundoPort, estado = 200, cuerpo = 'ok';
+let mundo, mundoPort, estado = 200, cuerpo = 'ok', cabeceras = {};
 const url = (p = '/health') => `http://127.0.0.1:${mundoPort}${p}`;
+// Las pruebas exigen https; el mundo local habla http. Se sustituye el esquema al pedir, como
+// hace la casa en las pruebas de abajo (`casa.fetch`).
+const mundoFetch = (u, o) => fetch(String(u).replace('https://127.0.0.1', 'http://127.0.0.1'), o);
+const segura = (p) => url(p).replace('http://', 'https://');
 
 before(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nyx5-verifica-'));
-  mundo = http.createServer((req, res) => { res.writeHead(estado, { 'content-type': 'text/plain' }); res.end(cuerpo); });
+  mundo = http.createServer((req, res) => { res.writeHead(estado, { 'content-type': 'text/plain', ...cabeceras }); res.end(cuerpo); });
   await new Promise((r) => mundo.listen(0, '127.0.0.1', r));
   mundoPort = mundo.address().port;
   casa = new Estafeta({
@@ -348,7 +352,7 @@ test('la detección de shell prueba a cargar el módulo, no a mirar una variable
   assert.match(src, /Cloudflare-Workers/, 'la detección debe reconocer el runtime del edge');
   assert.match(src, /export const conShell = !enWorkers/, 'la detección es una expresión, no E/S');
   // Y en Node, donde sí hay, la lista completa está disponible.
-  assert.deepEqual(pruebasDisponibles(), ['http_status', 'sha256', 'json_path', 'exit_0']);
+  assert.deepEqual(pruebasDisponibles(), ['http_status', 'sha256', 'json_path', 'regex', 'size', 'header', 'exit_0']);
 });
 
 // Un 52x lo emite la infraestructura que hay delante, no el servidor que se comprueba. Nació de
@@ -379,4 +383,173 @@ test('el catálogo sembrado no se verifica contra la propia casa', async () => {
       assert.ok(!/nyx5\.com/.test(v.url), `la tarea "${t.id}" se verifica contra la propia casa (${v.url}): nunca podrá pasar`);
     }
   }
+});
+
+// ---------- NX-602: más pruebas deterministas ----------
+// Cada una decide igual dos veces sobre el mismo mundo, dice qué vio, y queda indecisa (no falsa)
+// cuando no pudo mirar. Se corren contra el servidor local de arriba, no contra dobles.
+
+test('json_path: acepta a.b[0].c además de a.b.0.c, y exists decide por presencia', async () => {
+  const doc = { data: [{ id: 'a7', nulo: null }], flag: false };
+  const con = (p) => correrPrueba(p, { fetchImpl: async () => ({ ok: true, status: 200, text: async () => JSON.stringify(doc) }) });
+  assert.equal((await con({ type: 'json_path', url: 'https://x/', path: 'data[0].id', expect: 'a7' })).pasa, true);
+  assert.equal((await con({ type: 'json_path', url: 'https://x/', path: 'data[0].id', equals: 'a7' })).pasa, true, 'equals es alias de expect');
+  assert.equal((await con({ type: 'json_path', url: 'https://x/', path: 'data[1].id', expect: 'a7' })).pasa, false);
+  assert.deepEqual(segmentosDe('data[0].id'), ['data', '0', 'id']);
+  assert.equal(segmentosDe('a..b'), null);
+  assert.equal(segmentosDe('a[x]'), null);
+  // exists: un campo presente con valor null EXISTE; uno ausente, no.
+  assert.equal((await con({ type: 'json_path', url: 'https://x/', path: 'data[0].nulo', exists: true })).pasa, true);
+  assert.equal((await con({ type: 'json_path', url: 'https://x/', path: 'data[0].otro', exists: true })).pasa, false);
+  assert.equal((await con({ type: 'json_path', url: 'https://x/', path: 'data[0].otro', exists: false })).pasa, true);
+  assert.equal((await con({ type: 'json_path', url: 'https://x/', path: 'flag', exists: false })).pasa, false, 'false es un valor, no una ausencia');
+  // Un campo ausente no pasa por igualar null con null (expect: null).
+  const ausente = await con({ type: 'json_path', url: 'https://x/', path: 'no.existe', expect: null });
+  assert.equal(ausente.pasa, false);
+  assert.match(ausente.razon, /missing/);
+  // exists y expect a la vez es ambiguo; exists tiene que ser booleano.
+  assert.match((await con({ type: 'json_path', url: 'https://x/', path: 'flag', expect: 1, exists: true })).razon, /not both/);
+  assert.match((await con({ type: 'json_path', url: 'https://x/', path: 'flag', exists: 'yes' })).razon, /true or false/);
+});
+
+test('regex: casa contra el cuerpo real, dice qué patrón, y no acepta más de 1 MB ni patrones peligrosos', async () => {
+  estado = 200; cuerpo = 'Estado: listo (version 3)';
+  const con = (p) => correrPrueba({ type: 'regex', url: segura('/r'), ...p }, { fetchImpl: mundoFetch });
+  const ok = await con({ pattern: 'version [0-9]+' });
+  assert.equal(ok.pasa, true, ok.razon);
+  assert.equal(ok.evidencia.truncated, false);
+  const mayus = await con({ pattern: '^estado', flags: 'i' });
+  assert.equal(mayus.pasa, true);
+  const no = await con({ pattern: 'version 4' });
+  assert.equal(no.pasa, false);
+  assert.match(no.razon, /does not match/);
+  // Un cuerpo de más de 1 MB se lee hasta el tope y el veredicto lo declara.
+  cuerpo = 'a'.repeat(CUERPO_MAX + 10) + 'FIN';
+  const grande = await con({ pattern: 'FIN' });
+  assert.equal(grande.pasa, false, 'lo que está después del MB no se miró');
+  assert.equal(grande.evidencia.truncated, true);
+  assert.equal(grande.evidencia.bytes_read, CUERPO_MAX);
+  assert.match(grande.razon, /only the first/);
+  cuerpo = 'ok';
+  // Sin cuerpo que leer (404): falla diciendo el código, no indecisa.
+  estado = 404;
+  const cuatro = await con({ pattern: 'ok' });
+  assert.equal(cuatro.pasa, false); assert.ok(!cuatro.indeciso); assert.match(cuatro.razon, /404/);
+  estado = 200;
+  // Red caída: indeciso.
+  const caida = await correrPrueba({ type: 'regex', url: 'https://x/', pattern: 'a' }, { fetchImpl: async () => { throw new Error('ENOTFOUND'); } });
+  assert.equal(caida.indeciso, true);
+  // http en vez de https: no se verifica sobre un canal alterable.
+  assert.match((await correrPrueba({ type: 'regex', url: url('/r'), pattern: 'a' })).razon, /https/);
+});
+
+test('patronSeguro: rechaza las formas que retroceden exponencialmente y acepta las lineales', () => {
+  const malos = ['(a+)+$', '(a|aa)*b', '(\\d+)*x', '(?:x*)?y', '(a|b)+c', '(ab|a)*', '(x)\\1', '(?<n>a)\\k<n>', 'a'.repeat(PATRON_MAX + 1), '(a', 'a)'];
+  for (const p of malos) assert.equal(patronSeguro(p).ok, false, `debió rechazar ${p}`);
+  const buenos = ['[ab]+c', '(ab)+', '^version [0-9]+$', '(?:foo|bar)', '(?<year>\\d{4})-\\d{2}', 'a{2,4}b', '\\(x\\)+', '[(]+', '(?=a)b', '(?<=a)b'];
+  for (const p of buenos) assert.equal(patronSeguro(p).ok, true, `debió aceptar ${p}: ${patronSeguro(p).razon}`);
+  assert.equal(patronSeguro('a', 'g').ok, false, 'g no está entre las banderas admitidas');
+  assert.equal(patronSeguro('a', 'imsu').ok, true);
+  assert.equal(patronSeguro('[', '').ok, false, 'un patrón inválido se rechaza al validar, no al correr');
+  // Y en la prueba misma: el patrón peligroso se rechaza ANTES de pedir nada.
+  return correrPrueba({ type: 'regex', url: 'https://x/', pattern: '(a+)+$' }, { fetchImpl: async () => { throw new Error('no debía pedir'); } })
+    .then((r) => { assert.equal(r.pasa, false); assert.ok(!r.indeciso); assert.match(r.razon, /backtrack/); });
+});
+
+test('size: cuenta los bytes que llegan y decide por max_bytes y/o min_bytes', async () => {
+  estado = 200; cuerpo = 'x'.repeat(1000);
+  const con = (p) => correrPrueba({ type: 'size', url: segura('/s'), ...p }, { fetchImpl: mundoFetch });
+  assert.equal((await con({ max_bytes: 1000 })).pasa, true);
+  assert.equal((await con({ max_bytes: 999 })).pasa, false);
+  assert.equal((await con({ min_bytes: 1000 })).pasa, true);
+  assert.equal((await con({ min_bytes: 1001 })).pasa, false);
+  assert.equal((await con({ min_bytes: 500, max_bytes: 2000 })).pasa, true);
+  const fuera = await con({ min_bytes: 500, max_bytes: 999 });
+  assert.equal(fuera.pasa, false);
+  assert.match(fuera.razon, /1000 bytes, expected at most 999 and at least 500/);
+  assert.equal(fuera.evidencia.bytes, 1000);
+  // Un cuerpo mayor que el tope de lectura: se sabe que supera el máximo sin descargarlo entero.
+  cuerpo = 'x'.repeat(CUERPO_MAX + 50);
+  const enorme = await con({ max_bytes: 100 });
+  assert.equal(enorme.pasa, false);
+  assert.match(enorme.razon, /more than/);
+  const minimo = await con({ min_bytes: 100 });
+  assert.equal(minimo.pasa, true, 'más que el tope sigue siendo más que el mínimo');
+  cuerpo = 'ok';
+  // Parámetros: al menos uno, enteros no negativos, min ≤ max.
+  assert.match((await con({})).razon, /max_bytes and\/or min_bytes/);
+  assert.match((await con({ max_bytes: -1 })).razon, /non-negative/);
+  assert.match((await con({ max_bytes: '10' })).razon, /non-negative/);
+  assert.match((await con({ min_bytes: 5, max_bytes: 2 })).razon, /cannot exceed/);
+  // Nada que medir en un 500 del servidor comprobado: falla, no indecisa.
+  estado = 500;
+  const quinientos = await con({ max_bytes: 10 });
+  assert.equal(quinientos.pasa, false); assert.ok(!quinientos.indeciso);
+  estado = 200;
+});
+
+test('header: compara una cabecera exacta y distingue ausente de distinta', async () => {
+  estado = 200; cuerpo = 'ok'; cabeceras = { 'x-version': '3', 'cache-control': 'no-store' };
+  const con = (p) => correrPrueba({ type: 'header', url: segura('/h'), ...p }, { fetchImpl: mundoFetch });
+  assert.equal((await con({ name: 'X-Version', equals: '3' })).pasa, true, 'el nombre no distingue mayúsculas');
+  const otra = await con({ name: 'x-version', equals: '4' });
+  assert.equal(otra.pasa, false);
+  assert.match(otra.razon, /sends x-version: 3, expected 4/);
+  const falta = await con({ name: 'x-nada', equals: '1' });
+  assert.equal(falta.pasa, false);
+  assert.match(falta.razon, /does not send/);
+  assert.equal(falta.evidencia.seen, null);
+  // El valor esperado es texto exacto: 3 (número) no es "3".
+  assert.match((await con({ name: 'x-version', equals: 3 })).razon, /as a string/);
+  assert.match((await con({ equals: '3' })).razon, /needs a name/);
+  assert.match((await con({ name: 'x version', equals: '3' })).razon, /needs a name/);
+  // La cabecera se mira aunque el código no sea 2xx: lo que se comprueba es la cabecera.
+  estado = 404;
+  assert.equal((await con({ name: 'cache-control', equals: 'no-store' })).pasa, true);
+  estado = 200; cabeceras = {};
+  // Un 52x del borde deja indeciso, como en las demás.
+  const borde = await correrPrueba({ type: 'header', url: 'https://x/', name: 'a', equals: 'b' }, { fetchImpl: async () => ({ status: 522, headers: new Headers() }) });
+  assert.equal(borde.indeciso, true);
+});
+
+// La lista de pruebas es UNA: lo que verifica@ sabe correr es lo que la ficha puede prometer como
+// `acceptance.kind` y lo que la tarjeta del verificador anuncia. Si alguien agrega una prueba y
+// olvida un lugar, esto lo dice.
+test('las pruebas nuevas entran solas al catálogo de servicios y a la tarjeta de verifica@', async () => {
+  const { validarServicio } = await import('../src/correo/politica.js');
+  for (const kind of ['regex', 'size', 'header', 'json_path']) {
+    const r = validarServicio({ id: 'svc', name: 'x', price: { tokens: 10 }, unit: 'job', contract: 'escrow', acceptance: { kind, template: 'la prueba' } });
+    assert.ok(r.servicio, `acceptance.kind=${kind} debió aceptarse: ${r.error}`);
+  }
+  assert.match(validarServicio({ id: 'svc', name: 'x', price: { tokens: 10 }, unit: 'job', contract: 'escrow', acceptance: { kind: 'opinion', template: 'x' } }).error || '', /verifica@ can run/);
+  const card = await casa.agentCard('verifica');
+  for (const p of PRUEBAS) assert.ok(card.capabilities.verifica.pruebas.includes(p), `la tarjeta no anuncia ${p}`);
+});
+
+// El ciclo entero con una prueba nueva: el escrow se libera por lo que la cabecera dijo, no por
+// la palabra del vendedor. Con `header` porque es la más barata de montar sobre el mundo local.
+test('el escrow se decide con header: se libera si la cabecera es la pactada y se devuelve si no', async () => {
+  cabeceras = { 'x-build': 'v2' }; estado = 200; cuerpo = 'ok';
+  casa.fetch = mundoFetch;
+  const partes = [];
+  for (const [nombre, esperado] of [['cumplidor', 'v2'], ['incumplidor', 'v3']]) {
+    const vendedor = await join({ house: 'v.test', hosts, name: nombre });
+    const comprador = await join({ house: 'v.test', hosts, name: `${nombre}-cliente` });
+    await vendedor._agente.quote({
+      to: comprador.address, contract: 'escrow', price: 40, concept: `x-build ${esperado}`, arbiter: 'verifica@v.test',
+      terms: { acceptance: `la cabecera x-build vale ${esperado}`, verify: { type: 'header', url: segura('/build'), name: 'x-build', equals: esperado } },
+    });
+    const s = await comprador._agente.waitFor((e) => e.from === vendedor.address && e.type === 'message', { timeoutMs: 5000 });
+    await comprador._agente.awaitReceipt((await comprador._agente.accept((await comprador._agente.open(s.envelope)).content.body)).id);
+    const c = (await comprador._agente.balance()).contracts.find((x) => x.kind === 'escrow' && x.amount === 40);
+    await vendedor._agente.awaitReceipt((await vendedor._agente.deliver('v.test', c.id, { note: 'listo' })).id);
+    partes.push({ vendedor, id: c.id });
+  }
+  await casa.tick();
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal((await partes[0].vendedor._agente.contract('v.test', partes[0].id)).state, 'released');
+  const devuelto = await partes[1].vendedor._agente.contract('v.test', partes[1].id);
+  assert.equal(devuelto.state, 'refunded');
+  assert.match(devuelto.history.find((h) => h.op === 'refund').note, /sends x-build: v2, expected v3/);
+  cabeceras = {};
 });
