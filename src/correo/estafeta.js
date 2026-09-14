@@ -1115,7 +1115,7 @@ export class Estafeta {
       // Solo se verifica lo que ya se declaró entregado, salvo que el contrato pida verificar
       // desde el arranque (terms.verify_on: 'accept'), útil para un endpoint que ya debía estar en pie.
       if (c.state === 'held' && (c.terms?.verify_on || 'deliver') !== 'accept') continue;
-      const v = await veredicto(pruebasDe(c), { fetchImpl: this.fetch, timeoutMs: this.verifica.timeoutMs, entregado: c.evidence ?? null, entregadoSha256: c.evidence_sha256 ?? null });
+      const v = await veredicto(pruebasDe(c), { fetchImpl: this.fetch, timeoutMs: this.verifica.timeoutMs, privados: this.verifica.privados === true, entregado: c.evidence ?? null, entregadoSha256: c.evidence_sha256 ?? null });
       if (v.indeciso) { this.log(`verifica ${c.id}: sin veredicto (${v.razon})`); continue; }
       // La decisión viaja como sobre firmado a libro@ y entra por `inbound`, la MISMA puerta
       // que usa cualquier agente (invariante 2). No se toca el Libro por dentro: si la firma

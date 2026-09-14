@@ -63,7 +63,7 @@ before(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nyx5-busqueda-'));
   const casa = (domain, port, extra = {}) => new Estafeta({
     domain, port, dataDir: path.join(tmp, domain), adminToken: 't', hosts, workerIntervalMs: 999_999, log: () => {},
-    policy: { registration: 'open', registrations_per_minute: 500 }, libro: { welcome: 1000, feeBps: 1000 }, verifica: { enabled: true }, ...extra,
+    policy: { registration: 'open', registrations_per_minute: 500 }, libro: { welcome: 1000, feeBps: 1000 }, verifica: { enabled: true, privados: true }, ...extra,
   });
   // El índice corre sobre D1 cuando hay node:sqlite (así el rastreo y la búsqueda SQL se ejercen
   // por HTTP); sin él, sobre archivos. Las dos implementaciones se prueban además a nivel de almacén.

@@ -64,7 +64,7 @@ test('libroListContracts({ state }) filtra igual en FileStore y en D1, y sin fil
 });
 
 test('el reloj de la casa pide sólo los estados que le importan, no la tabla entera', async () => {
-  const casa = new Estafeta(cfg('reloj-lote.test', 4755, { verifica: { enabled: true } }));
+  const casa = new Estafeta(cfg('reloj-lote.test', 4755, { verifica: { enabled: true, privados: true } }));
   await casa.init();
   const pedidos = [];
   const original = casa.store.libroListContracts.bind(casa.store);

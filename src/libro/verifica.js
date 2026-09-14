@@ -38,11 +38,21 @@ export const pruebasDisponibles = () => (conShell ? PRUEBAS : PRUEBAS.filter((p)
 // Tope de lo que se descarga para mirar un cuerpo (regex, size). Un cuerpo más grande no se lee
 // entero: el verificador no es un espejo, y un servidor hostil no puede hacerle tragar gigas.
 export const CUERPO_MAX = 1_048_576;
+// regex mira menos: 256 KB y líneas de 2 KB, porque su costo depende del patrón (ver patronSeguro).
+export const REGEX_MAX = 262_144;
+export const REGEX_LINEA = 2048;
 export const PATRON_MAX = 256;
 const BANDERAS = /^[imsu]{0,4}$/;
 
 const recorta = (s, n = 300) => (typeof s === 'string' && s.length > n ? `${s.slice(0, n)}…` : s);
-const esHttps = (u) => /^https:\/\//.test(u || '');
+// Sólo https y nunca hacia adentro: verifica@ hace la petición desde la casa, y una URL que apunte
+// a loopback, a una red privada o a la metadata de la nube convertiría a la casa en un diputado
+// confundido (revisión del 14-sep-2026). Los redirects no se siguen por la misma razón.
+const HOST_PRIVADO = /^(localhost|.*\.localhost|.*\.local|.*\.internal|0\.0\.0\.0|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|169\.254\.\d+\.\d+|\[?::1\]?|\[?f[cd][0-9a-f]{2}:.*|\[?fe80:.*|metadata\.google\.internal)$/i;
+// `privados: true` sólo en pruebas locales (la casa lo decide en su config, nunca el contrato).
+let permitirPrivados = false;
+const esHttps = (u) => { try { const x = new URL(String(u || '')); return x.protocol === 'https:' && (permitirPrivados || !HOST_PRIVADO.test(x.hostname)) && !x.username && !x.password; } catch { return false; } };
+const metodoDe = (p) => { const m = String(p.method || 'GET').toUpperCase(); return m === 'GET' || m === 'HEAD' ? m : null; };
 
 // Lee el cuerpo de una respuesta hasta `max` bytes y dice si había más. Con un cuerpo en flujo
 // (fetch real) corta la descarga; con un doble de pruebas que sólo tiene `text()` recorta lo leído.
@@ -115,6 +125,17 @@ export function patronSeguro(pattern, flags = '') {
     if (cuant(c) && pila.length) pila.at(-1).cuant = true;
   }
   if (pila.length) return { ok: false, razon: 'unbalanced parentheses' };
+  // Revisión del 14-sep-2026 (ALTO probado): `a*a*b` o `\\w*\\w*x` pasaban el guardia de grupos y
+  // colgaban más de 20 s sobre 1 MB: dos cuantificadores hermanos sobre lo mismo son polinómicos,
+  // y en el edge eso congela la verificación de toda la casa. Regla acotada por CONSTRUCCIÓN, no
+  // por medición: un solo cuantificador sin tope en todo el patrón, los con tope hasta {n,64}, y no
+  // más de cuatro cuantificadores en total. Además el texto se prueba línea por línea (ver regex).
+  const sinClases = pattern.replace(/\\./g, '__').replace(/\[[^\]]*\]/g, 'C');
+  const sinTope = (sinClases.match(/[*+]|\{\d+,\}/g) || []).length;
+  const conTope = [...sinClases.matchAll(/\{(\d+)(?:,(\d+))?\}/g)].filter((m) => m[2] !== undefined || !m[0].endsWith(',}'));
+  if (sinTope > 1) return { ok: false, razon: 'only one unbounded quantifier (*, + or {n,}) per pattern: two of them over overlapping text backtrack polynomially over a large body' };
+  if (conTope.some((m) => Number(m[2] ?? m[1]) > 64)) return { ok: false, razon: 'bounded quantifiers may repeat at most 64 times' };
+  if (sinTope + conTope.length + (sinClases.match(/\?/g) || []).length > 4) return { ok: false, razon: 'at most four quantifiers per pattern' };
   try { new RegExp(pattern, flags); } catch (e) { return { ok: false, razon: `invalid pattern: ${e.message}` }; }
   return { ok: true };
 }
@@ -123,7 +144,8 @@ export function patronSeguro(pattern, flags = '') {
  * Corre UNA prueba y devuelve un veredicto con su evidencia.
  * @returns {Promise<{pasa:boolean, prueba:string, razon:string, evidencia:object, indeciso?:boolean}>}
  */
-export async function correrPrueba(prueba, { fetchImpl = globalThis.fetch, timeoutMs = 10_000, entregado = null, entregadoSha256 = null } = {}) {
+export async function correrPrueba(prueba, { fetchImpl = globalThis.fetch, timeoutMs = 10_000, entregado = null, entregadoSha256 = null, privados = false } = {}) {
+  permitirPrivados = privados === true;
   const tipo = prueba?.type;
   if (!PRUEBAS.includes(tipo)) {
     return { pasa: false, prueba: tipo || '(sin tipo)', razon: `prueba desconocida: ${tipo}. Las que este verificador acepta: ${pruebasDisponibles().join(', ')}`, evidencia: {} };
@@ -142,8 +164,9 @@ export async function correrPrueba(prueba, { fetchImpl = globalThis.fetch, timeo
   try {
     if (tipo === 'http_status') {
       const esperado = Number(prueba.expect ?? 200);
-      if (!esHttps(prueba.url)) return falla('la URL a verificar debe ser https', { url: prueba.url });
-      const res = await fetchImpl(prueba.url, { method: prueba.method || 'GET', redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
+      if (!esHttps(prueba.url)) return falla('the URL to verify must be https and public', { url: prueba.url });
+      if (!metodoDe(prueba)) return falla(`method must be GET or HEAD, not ${String(prueba.method)}`, { url: prueba.url });
+      const res = await fetchImpl(prueba.url, { method: metodoDe(prueba), redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
       const borde = delBorde(res); if (borde) return borde;
       const pasa = res.status === esperado;
       return { pasa, prueba: tipo, razon: pasa ? `${prueba.url} responded ${res.status}` : `${prueba.url} responded ${res.status}, expected ${esperado}`, evidencia: { url: prueba.url, status: res.status, expect: esperado } };
@@ -162,7 +185,7 @@ export async function correrPrueba(prueba, { fetchImpl = globalThis.fetch, timeo
       let texto = entregado;
       if (prueba.url) {
         if (!esHttps(prueba.url)) return falla('la URL a verificar debe ser https', { url: prueba.url });
-        const res = await fetchImpl(prueba.url, { signal: AbortSignal.timeout(timeoutMs) });
+        const res = await fetchImpl(prueba.url, { redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
         const borde = delBorde(res); if (borde) return borde;
         if (!res.ok) return falla(`${prueba.url} respondió ${res.status}: no hay qué hashear`, { url: prueba.url, status: res.status });
         texto = await res.text();
@@ -179,7 +202,7 @@ export async function correrPrueba(prueba, { fetchImpl = globalThis.fetch, timeo
       // es literal y sin comodines: `a.b.0.c` o `a.b[0].c`. Nada de expresiones — una consulta
       // que hay que interpretar deja de ser determinista, y este verificador solo acepta lo que
       // decide igual dos veces.
-      if (!esHttps(prueba.url)) return falla('the URL to verify must be https', { url: prueba.url });
+      if (!esHttps(prueba.url)) return falla('the URL to verify must be https and public', { url: prueba.url });
       const segmentos = segmentosDe(prueba.path);
       if (!segmentos) return falla('json_path needs a path: literal, for example "status", "data.0.id" or "data[0].id"');
       const conValor = 'expect' in prueba || 'equals' in prueba;
@@ -188,7 +211,7 @@ export async function correrPrueba(prueba, { fetchImpl = globalThis.fetch, timeo
       if (!conValor && !conExiste) return falla('json_path needs an expect value to compare against, or exists: true|false');
       if (conExiste && typeof prueba.exists !== 'boolean') return falla('json_path exists must be true or false');
       const esperado = 'expect' in prueba ? prueba.expect : prueba.equals;
-      const res = await fetchImpl(prueba.url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) });
+      const res = await fetchImpl(prueba.url, { headers: { accept: 'application/json' }, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
       const borde = delBorde(res); if (borde) return borde;
       if (!res.ok) return falla(`${prueba.url} responded ${res.status}: nothing to read`, { url: prueba.url, status: res.status });
       let doc;
@@ -212,25 +235,28 @@ export async function correrPrueba(prueba, { fetchImpl = globalThis.fetch, timeo
     if (tipo === 'regex') {
       // Sobre el primer MB del cuerpo, con un patrón acotado (ver patronSeguro). Si el cuerpo
       // era más largo, el veredicto lo dice: lo que se miró es lo que se descargó.
-      if (!esHttps(prueba.url)) return falla('the URL to verify must be https', { url: prueba.url });
+      if (!esHttps(prueba.url)) return falla('the URL to verify must be https and public', { url: prueba.url });
       const flags = prueba.flags ?? '';
       const seguro = patronSeguro(prueba.pattern, flags);
       if (!seguro.ok) return falla(seguro.razon, { pattern: recorta(String(prueba.pattern ?? ''), 80) });
-      const res = await fetchImpl(prueba.url, { signal: AbortSignal.timeout(timeoutMs) });
+      const res = await fetchImpl(prueba.url, { redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
       const borde = delBorde(res); if (borde) return borde;
       if (!res.ok) return falla(`${prueba.url} responded ${res.status}: nothing to read`, { url: prueba.url, status: res.status });
-      const { texto, bytes, truncado } = await leerCuerpo(res, CUERPO_MAX);
-      const pasa = new RegExp(prueba.pattern, flags).test(texto);
-      const alcance = truncado ? ` (only the first ${CUERPO_MAX} bytes were read)` : '';
+      const { texto, bytes, truncado } = await leerCuerpo(res, REGEX_MAX);
+      // Línea por línea y cada línea recortada a 2 KB: con un solo cuantificador sin tope el peor
+      // caso es cuadrático sobre 2 KB, no sobre 1 MB. Un patrón no puede casar a través de líneas.
+      const re = new RegExp(prueba.pattern, flags.replace('s', ''));
+      const pasa = texto.split('\n').some((l) => re.test(l.length > REGEX_LINEA ? l.slice(0, REGEX_LINEA) : l));
+      const alcance = truncado ? ` (only the first ${REGEX_MAX} bytes were read)` : '';
       return { pasa, prueba: tipo, razon: pasa ? `the body of ${prueba.url} matches /${prueba.pattern}/${flags}${alcance}` : `the body of ${prueba.url} does not match /${prueba.pattern}/${flags}${alcance}`, evidencia: { url: prueba.url, pattern: prueba.pattern, flags, bytes_read: bytes, truncated: truncado } };
     }
     if (tipo === 'size') {
-      if (!esHttps(prueba.url)) return falla('the URL to verify must be https', { url: prueba.url });
+      if (!esHttps(prueba.url)) return falla('the URL to verify must be https and public', { url: prueba.url });
       const max = prueba.max_bytes, min = prueba.min_bytes;
       const entero = (v) => v === undefined || (Number.isInteger(v) && v >= 0);
       if (!entero(max) || !entero(min) || (max === undefined && min === undefined)) return falla('size needs max_bytes and/or min_bytes as non-negative integers');
       if (max !== undefined && min !== undefined && min > max) return falla('size: min_bytes cannot exceed max_bytes');
-      const res = await fetchImpl(prueba.url, { signal: AbortSignal.timeout(timeoutMs) });
+      const res = await fetchImpl(prueba.url, { redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
       const borde = delBorde(res); if (borde) return borde;
       if (!res.ok) return falla(`${prueba.url} responded ${res.status}: nothing to measure`, { url: prueba.url, status: res.status });
       // Se cuenta lo que llega, no lo que dice content-length (que puede faltar o mentir). Se
@@ -245,7 +271,7 @@ export async function correrPrueba(prueba, { fetchImpl = globalThis.fetch, timeo
       return { pasa, prueba: tipo, razon: pasa ? `${prueba.url} is ${visto} bytes (${limites})` : `${prueba.url} is ${visto} bytes, expected ${limites}`, evidencia: { url: prueba.url, bytes: truncado ? null : bytes, more_than: truncado ? tope - 1 : null, max_bytes: max ?? null, min_bytes: min ?? null } };
     }
     if (tipo === 'header') {
-      if (!esHttps(prueba.url)) return falla('the URL to verify must be https', { url: prueba.url });
+      if (!esHttps(prueba.url)) return falla('the URL to verify must be https and public', { url: prueba.url });
       if (typeof prueba.name !== 'string' || !/^[A-Za-z0-9-]{1,80}$/.test(prueba.name)) return falla('header needs a name (letters, digits and dashes)');
       if (typeof prueba.equals !== 'string') return falla('header needs equals: the exact value expected, as a string');
       const res = await fetchImpl(prueba.url, { method: prueba.method || 'GET', redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });

@@ -48,7 +48,7 @@ before(async () => {
   mundo = http.createServer((req, res) => { res.writeHead(estado, { 'content-type': 'text/plain' }); res.end('ok'); });
   await new Promise((r) => mundo.listen(0, '127.0.0.1', r));
   mundoPort = mundo.address().port;
-  casa = await new Estafeta({ domain: H, port: P, dataDir: path.join(tmp, H), adminToken: 't', hosts, workerIntervalMs: 60_000, libro: { welcome: 0, feeBps: 1000 }, verifica: { enabled: true }, log: () => {} }).start();
+  casa = await new Estafeta({ domain: H, port: P, dataDir: path.join(tmp, H), adminToken: 't', hosts, workerIntervalMs: 60_000, libro: { welcome: 0, feeBps: 1000 }, verifica: { enabled: true, privados: true }, log: () => {} }).start();
   // La URL de la prueba es https (verifica@ no acepta otra) y el mundo local es http: se sustituye.
   casa.fetch = async (u, o) => fetch(String(u).replace('https://127.0.0.1', 'http://127.0.0.1'), o);
   vende = Agent.create(`vende@${H}`, URL_CASA, { hosts });
@@ -251,4 +251,26 @@ test('herramientas: nyx5_hire mueve dinero (no está en el remoto), y un Claude 
   const nada = await llamar(vende, 'nyx5_quote', { service: 'informe', to: compra.address, in_reply_to: 'no-existe' });
   assert.equal(nada.isError, true);
   assert.match(nada.content[0].text, /no service request with id no-existe/);
+});
+
+// Cuarta revisión (14-sep-2026), ALTO probado: el vendedor cotizaba con el tipo de prueba correcto y
+// SU propia URL siempre-200; hire aceptaba, verifica@ miraba la URL del vendedor y cobraba sin
+// tocar el trabajo del comprador. Ahora la prueba ENTERA tiene que ser la publicada sobre este input.
+test('hire: una cotización cuya prueba apunta a otra URL que la del input no se acepta', async () => {
+  const antesC = await casa.libro.balance(compra.address);
+  const [r] = await Promise.all([
+    compra.hire({ agent: vende.address, service: 'informe', input: { url: urlMundo() }, wait: 10 }),
+    (async () => {
+      const p = await vende.waitFor((e) => e.from === compra.address, { timeoutMs: 8000 });
+      const pedido = await vende.open(p.envelope);
+      const s = (await vende.profile(vende.address)).profile.services.find((x) => x.id === 'informe');
+      // Misma forma, otra URL: la del vendedor.
+      const verify = { type: 'http_status', url: 'https://vende.example/siempre-200', expect: 200 };
+      await vende.quote({ to: compra.address, service: s.id, terms: { input: pedido.content.body.input, acceptance: s.acceptance.template, verify }, arbiter: `verifica@${H}`, house: H, thread: pedido.id, inReplyTo: pedido.id });
+    })(),
+  ]);
+  assert.equal(r.accepted, false);
+  assert.equal(r.status, 'rejected');
+  assert.match(r.reason, /test differs from the published one/);
+  assert.equal(await casa.libro.balance(compra.address), antesC, 'no se movió un token');
 });

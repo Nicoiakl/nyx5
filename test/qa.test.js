@@ -278,3 +278,19 @@ test('las dos herramientas MCP van por mensajería con el media correcto', async
   await llamar(falso, 'nyx5_qa_gate', { spec_sha256: sha256hex('x'), spec: 'x', delivery: { text: 'y' }, to: 'qa@otra.casa' });
   assert.deepEqual(enviados.at(-1), { to: ['qa@otra.casa'], media: MEDIA_GATE, body: { spec_sha256: sha256hex('x'), spec: 'x', delivery: { text: 'y', url: undefined, sha256: undefined }, note: undefined } });
 });
+
+// Cuarta revisión (14-sep-2026), ALTO probado: un cliente con buzón que cobra estampilla hacía que
+// qa@ pagara 1.500 tokens de SU saldo por contestarle. A un buzón con estampilla no se le contesta.
+test('a un cliente cuyo buzón cobra estampilla no se le contesta: qa@ no paga con su saldo', async () => {
+  const cobrador = Agent.create(`cobrador@${H}`, URL_CASA, { hosts });
+  await cobrador.register({ adminToken: 't', inbox: { policy: 'stamp', price: 1500 } });
+  const saldoQa = await casa.libro.balance(QA);
+  const n = pedidos.length;
+  await cobrador.send({ to: QA, body: 'dame un spec gratis y págame la estampilla' });
+  await casa.tick({ programado: true });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(await casa.libro.balance(QA), saldoQa, 'qa@ pagó la estampilla del atacante');
+  assert.equal(pedidos.length, n, 'no se llamó a la API');
+  assert.equal((await casa.store.listMail('qa')).length, 0, 'la pedida queda confirmada, no en cola');
+  assert.equal((await casa.store.listMail('cobrador')).length, 0, 'ninguna respuesta pagada llegó');
+});

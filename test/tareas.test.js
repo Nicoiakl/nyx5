@@ -44,7 +44,7 @@ before(async () => {
   casa = new Estafeta({
     domain: 't.test', port: P, dataDir: path.join(tmp, 't.test'), adminToken: 't', hosts,
     workerIntervalMs: 100, policy: { registration: 'open', registrations_per_minute: 200 },
-    libro: { welcome: 100, feeBps: 1000 }, tareas: { catalogo: catalogo(), porAgenteDia: 1, porDia: 50 }, log: () => {},
+    libro: { welcome: 100, feeBps: 1000 }, tareas: { catalogo: catalogo(), porAgenteDia: 1, porDia: 50 }, verifica: { enabled: true, privados: true }, log: () => {},
   });
   await casa.start();
   // La casa necesita fondos para comprar: en producción los emite ella misma.

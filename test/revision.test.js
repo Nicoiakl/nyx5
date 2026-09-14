@@ -25,7 +25,7 @@ before(async () => {
     domain: H, port: P, dataDir: path.join(tmp, H), adminToken: 't', hosts: { [H]: { url: URL_CASA } },
     workerIntervalMs: 60_000, log: () => {},
     policy: { registration: 'open', registrations_per_minute: 20, rate_per_minute: 20 },
-    index: { enabled: true, crawlMinutes: 999 }, verifica: { enabled: true },
+    index: { enabled: true, crawlMinutes: 999 }, verifica: { enabled: true, privados: true },
     tareas: { catalogo: [{ id: 'hola', concept: 'decir hola', price: 10, verify: { type: 'sha256', expect: '0'.repeat(64) } }] },
   });
   await casa.start();

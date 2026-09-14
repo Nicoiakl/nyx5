@@ -10,7 +10,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { Estafeta } from '../src/correo/estafeta.js';
 import { join } from '../src/correo/unirse.js';
-import { correrPrueba, veredicto, pruebasDe, pruebasDisponibles, PRUEBAS, patronSeguro, segmentosDe, CUERPO_MAX, PATRON_MAX } from '../src/libro/verifica.js';
+import { correrPrueba, veredicto, pruebasDe, pruebasDisponibles, PRUEBAS, patronSeguro, segmentosDe, CUERPO_MAX, REGEX_MAX, PATRON_MAX } from '../src/libro/verifica.js';
 import { sha256hex } from '../src/nucleo/crypto.js';
 
 const P = 4161;
@@ -33,7 +33,7 @@ before(async () => {
   casa = new Estafeta({
     domain: 'v.test', port: P, dataDir: path.join(tmp, 'v.test'), adminToken: 't', hosts,
     workerIntervalMs: 100, policy: { registration: 'open', registrations_per_minute: 200 },
-    libro: { welcome: 1000, feeBps: 1000 }, verifica: { enabled: true }, log: () => {},
+    libro: { welcome: 1000, feeBps: 1000 }, verifica: { enabled: true, privados: true }, log: () => {},
   });
   await casa.start();
 });
@@ -414,7 +414,7 @@ test('json_path: acepta a.b[0].c además de a.b.0.c, y exists decide por presenc
 
 test('regex: casa contra el cuerpo real, dice qué patrón, y no acepta más de 1 MB ni patrones peligrosos', async () => {
   estado = 200; cuerpo = 'Estado: listo (version 3)';
-  const con = (p) => correrPrueba({ type: 'regex', url: segura('/r'), ...p }, { fetchImpl: mundoFetch });
+  const con = (p) => correrPrueba({ type: 'regex', url: segura('/r'), ...p }, { fetchImpl: mundoFetch, privados: true, privados: true });
   const ok = await con({ pattern: 'version [0-9]+' });
   assert.equal(ok.pasa, true, ok.razon);
   assert.equal(ok.evidencia.truncated, false);
@@ -423,12 +423,12 @@ test('regex: casa contra el cuerpo real, dice qué patrón, y no acepta más de 
   const no = await con({ pattern: 'version 4' });
   assert.equal(no.pasa, false);
   assert.match(no.razon, /does not match/);
-  // Un cuerpo de más de 1 MB se lee hasta el tope y el veredicto lo declara.
-  cuerpo = 'a'.repeat(CUERPO_MAX + 10) + 'FIN';
+  // regex mira menos que las demás (256 KB): su costo depende del patrón. El veredicto lo declara.
+  cuerpo = "a".repeat(REGEX_MAX + 10) + "FIN";
   const grande = await con({ pattern: 'FIN' });
   assert.equal(grande.pasa, false, 'lo que está después del MB no se miró');
   assert.equal(grande.evidencia.truncated, true);
-  assert.equal(grande.evidencia.bytes_read, CUERPO_MAX);
+  assert.equal(grande.evidencia.bytes_read, REGEX_MAX);
   assert.match(grande.razon, /only the first/);
   cuerpo = 'ok';
   // Sin cuerpo que leer (404): falla diciendo el código, no indecisa.
@@ -458,7 +458,7 @@ test('patronSeguro: rechaza las formas que retroceden exponencialmente y acepta 
 
 test('size: cuenta los bytes que llegan y decide por max_bytes y/o min_bytes', async () => {
   estado = 200; cuerpo = 'x'.repeat(1000);
-  const con = (p) => correrPrueba({ type: 'size', url: segura('/s'), ...p }, { fetchImpl: mundoFetch });
+  const con = (p) => correrPrueba({ type: 'size', url: segura('/s'), ...p }, { fetchImpl: mundoFetch, privados: true, privados: true });
   assert.equal((await con({ max_bytes: 1000 })).pasa, true);
   assert.equal((await con({ max_bytes: 999 })).pasa, false);
   assert.equal((await con({ min_bytes: 1000 })).pasa, true);
@@ -490,7 +490,7 @@ test('size: cuenta los bytes que llegan y decide por max_bytes y/o min_bytes', a
 
 test('header: compara una cabecera exacta y distingue ausente de distinta', async () => {
   estado = 200; cuerpo = 'ok'; cabeceras = { 'x-version': '3', 'cache-control': 'no-store' };
-  const con = (p) => correrPrueba({ type: 'header', url: segura('/h'), ...p }, { fetchImpl: mundoFetch });
+  const con = (p) => correrPrueba({ type: 'header', url: segura('/h'), ...p }, { fetchImpl: mundoFetch, privados: true, privados: true });
   assert.equal((await con({ name: 'X-Version', equals: '3' })).pasa, true, 'el nombre no distingue mayúsculas');
   const otra = await con({ name: 'x-version', equals: '4' });
   assert.equal(otra.pasa, false);
@@ -552,4 +552,25 @@ test('el escrow se decide con header: se libera si la cabecera es la pactada y s
   assert.equal(devuelto.state, 'refunded');
   assert.match(devuelto.history.find((h) => h.op === 'refund').note, /sends x-build: v2, expected v3/);
   cabeceras = {};
+});
+
+// Cuarta revisión adversarial (14-sep-2026): el guardia de grupos dejaba pasar `a*a*b` (más de 20 s
+// sobre 1 MB); verifica@ seguía redirecciones a loopback y aceptaba cualquier método.
+test('regex acotada por construcción: un solo cuantificador sin tope, y línea por línea; hosts privados y métodos raros fuera', async () => {
+  for (const malo of ['a*a*b', '\\w*\\w*x', '.*.*=.*', '[a-z]*[a-z]*[a-z]*!', 'a{0,255}a{0,255}b', '(a+)+b']) assert.equal(patronSeguro(malo).ok, false, malo);
+  for (const bueno of ['\\d+\\.\\d{1,3}', '^ok$', 'error|warn', '[a-z]{2,8}-\\d*']) assert.equal(patronSeguro(bueno).ok, true, bueno);
+  // El peor caso permitido, medido: un cuantificador sin tope sobre líneas de 2 KB termina en menos de un segundo.
+  const cuerpo = ('a'.repeat(4000) + '\n').repeat(64);
+  const t0 = Date.now();
+  const r = await correrPrueba({ type: 'regex', url: 'https://ejemplo.invalid/x', pattern: 'a*b' }, { fetchImpl: async () => new Response(cuerpo, { status: 200 }) });
+  assert.equal(r.pasa, false); assert.ok(Date.now() - t0 < 1000, `tardó ${Date.now() - t0} ms`);
+  for (const u of ['https://127.0.0.1/x', 'https://localhost/x', 'https://10.1.2.3/x', 'https://192.168.1.1/x', 'https://169.254.169.254/latest', 'https://metadata.google.internal/x', 'https://user:pw@ejemplo.invalid/x', 'https://[::1]/x']) {
+    const p = await correrPrueba({ type: 'http_status', url: u }, { fetchImpl: async () => { throw new Error('no debía llamar'); } });
+    assert.match(p.razon, /https and public/, u);
+  }
+  const del = await correrPrueba({ type: 'http_status', url: 'https://ejemplo.invalid/x', method: 'DELETE' }, { fetchImpl: async () => { throw new Error('no debía llamar'); } });
+  assert.match(del.razon, /GET or HEAD/);
+  // Una redirección no se sigue: se ve el 302 tal cual.
+  const red = await correrPrueba({ type: 'regex', url: 'https://ejemplo.invalid/x', pattern: 'secreto' }, { fetchImpl: async (u, init) => { assert.equal(init.redirect, 'manual'); return new Response('', { status: 302, headers: { location: 'http://127.0.0.1/metadata' } }); } });
+  assert.equal(red.pasa, false); assert.match(red.razon, /302/);
 });

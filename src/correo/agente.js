@@ -271,6 +271,10 @@ export class Agent {
         const v = q.terms?.verify;
         if (q.arbiter !== `verifica@${q.house}`) return `the service publishes a ${s.acceptance.kind} test but the quote names ${q.arbiter || 'no'} arbiter instead of verifica@${q.house}`;
         if (!v || v.type !== s.acceptance.kind) return `the service publishes a ${s.acceptance.kind} test; the quote carries ${v?.type || 'none'}`;
+        // La prueba ENTERA tiene que ser la que sale de la ficha y de este input (revisión del 14-sep:
+        // un vendedor cotizaba con el tipo correcto y su propia URL siempre-200, y cobraba sin tocar el trabajo).
+        let esperada; try { esperada = pruebaDeAceptacion(s.acceptance, input); } catch (e) { return `the published test cannot be derived from your input: ${e.message}`; }
+        if (canonical(v) !== canonical(esperada)) return `the quote's test differs from the published one applied to your input: expected ${JSON.stringify(esperada)}, got ${JSON.stringify(v)}`;
       }
       return null;
     })();

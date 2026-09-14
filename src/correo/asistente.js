@@ -208,6 +208,13 @@ async function responder(est, local, cfg, m) {
   const de = m.envelope.from;
   const propia = `${local}@${est.domain}`;
   const hilo = { thread: m.envelope.thread || m.envelope.id, inReplyTo: m.envelope.id };
+  // Un cliente cuyo buzón cobra estampilla haría que el asistente pague con SU saldo por contestarle
+  // (revisión del 14-sep: 1.500 tokens de qa@ a un atacante). No se le contesta; se anota y se cierra.
+  try {
+    const { local: lDe, domain: dDe } = parseAddress(de);
+    const recDe = dDe === est.domain ? await est.store.getAgent(lDe) : null;
+    if (recDe?.inbox?.policy === 'stamp') { est.log(`asistente ${local}: ${de} cobra estampilla; no se le contesta`); await est.store.ackMail(local, m.envelope.id); return; }
+  } catch { /* remitente ilegible: lo rechaza la firma más abajo */ }
   const abierto = await agente.open(m.envelope);  // verifica la firma y descifra
   const esGate = abierto.content?.media === MEDIA_GATE;
   const pregunta = textoDe(abierto.content);
