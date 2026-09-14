@@ -221,6 +221,12 @@ export class Agent {
 
   // Lecturas directas (sin pasar por correo) en la casa indicada; por defecto, la propia estafeta.
   async balance(house) { return this._callAt(house, 'GET', `/libro/cuenta/${encodeURIComponent(this.address)}`); }
+  // Estado de cuenta por rango (NX-501), lectura directa firmada: opening + in − out = closing.
+  // `since`/`until` ISO-8601 ([since, until)); `limit` acota cuántos asientos, los más recientes.
+  async statement(house, { since, until, limit } = {}) {
+    const q = new URLSearchParams(Object.entries({ desde: since, hasta: until, limit }).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]));
+    return this._callAt(house, 'GET', `/libro/estado${q.size ? `?${q}` : ''}`);
+  }
   async contract(house, id) { return this._callAt(house, 'GET', `/libro/contrato/${encodeURIComponent(id)}`); }
   // Historial público de cualquier agente (por defecto, el propio): la reputación es el libro.
   async historial(address = this.address) {

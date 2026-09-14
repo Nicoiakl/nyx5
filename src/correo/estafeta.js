@@ -25,6 +25,7 @@ import { generateSigningKeys, signObject, verifyObject, signBytes, verifyBytes, 
 import { Libro, MEDIA, LibroError } from '../libro/libro.js';
 import { veredicto, pruebasDe, pruebasDisponibles } from '../libro/verifica.js';
 import { contratoPublico, ACP } from '../libro/contratos.js';
+import { estadoDeCuenta, csvDe, nombreCsv } from '../libro/estado.js';
 import { Tareas } from '../libro/tareas.js';
 import { datosInforme, datosEmbudo, informeHtml } from '../libro/informe.js';
 import { APP_HTML } from '../plataformas/app-html.js';
@@ -1853,6 +1854,19 @@ export class Estafeta {
         } catch (e) { return send(e.permanent ? 404 : 502, { reason: e.message }); }
       }
       // ----- Libro (lecturas directas; las operaciones van por correo a libro@) -----
+      // Estado de cuenta por rango (NX-501): ?desde&hasta ISO-8601, ?formato=json|csv, ?limit.
+      // La misma firma que /libro/cuenta; el dueño sólo ve su cuenta (?account= ajena → 403).
+      if (rx.method === 'GET' && path === '/libro/estado') {
+        const who = await this._authenticate(rx, path, { allowForeign: true });
+        const p = Object.fromEntries(rx.query || []);
+        const cuenta = String(p.account || who.address).toLowerCase();
+        if (cuenta !== who.address) return send(403, { reason: 'not your account' });
+        const formato = p.formato || 'json';
+        if (!['json', 'csv'].includes(formato)) return send(400, { reason: 'formato must be json or csv' });
+        const estado = await estadoDeCuenta(this.libro, cuenta, { since: p.desde, until: p.hasta, limit: p.limit, max: 1000 });
+        if (formato === 'json') return send(200, estado);
+        return { status: 200, contentType: 'text/csv; charset=utf-8', headers: { 'content-disposition': `attachment; filename="${nombreCsv(estado)}"` }, body: csvDe(estado) };
+      }
       if (rx.method === 'GET' && (m = /^\/libro\/cuenta\/([^/]+)$/.exec(path))) {
         const who = await this._authenticate(rx, path, { allowForeign: true });
         const address = decodeURIComponent(m[1]).toLowerCase();

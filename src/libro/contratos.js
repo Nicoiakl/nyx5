@@ -16,6 +16,7 @@ import { parseAddress } from '../correo/resolver.js';
 import { applyInboxPolicy } from '../correo/politica.js';
 
 import { LibroError } from './errores.js';
+import { estadoDeCuenta } from './estado.js';
 
 const iso = () => new Date().toISOString();
 const fail = (code, msg) => { throw new LibroError(code, msg); };
@@ -309,11 +310,13 @@ const ops = {
     const acc = await ctx.libro.account(ctx.from);
     return { result: acc, recibos: [{ to: [ctx.from], body: { account: acc.account, balance: acc.balance, contracts: acc.contracts.length, mandates: acc.mandates.length } }] };
   },
+  // Estado de cuenta (NX-501): `since`/`until` ISO-8601 acotan el rango, `limit` cuántos asientos
+  // (tope 200 por correo: el recibo viaja en un sobre). Devuelve saldo inicial, filas (fee y
+  // comisión como filas propias), saldo final y totales que cuadran. Ver estado.js.
   async statement(ctx) {
-    const raw = Number(ctx.body.limit);
-    const n = Number.isInteger(raw) && raw > 0 ? Math.min(raw, 200) : 20;
-    const entries = await ctx.libro.store.libroStatement(ctx.from, n);
-    return { result: { entries }, recibos: [{ to: [ctx.from], body: { entries } }] };
+    const { since, until, limit } = ctx.body;
+    const estado = await estadoDeCuenta(ctx.libro, ctx.from, { since, until, limit, max: 200 });
+    return { result: estado, recibos: [{ to: [ctx.from], body: estado }] };
   },
   async contract(ctx) {
     const c = await getContract(ctx.libro, ctx.body.contract);

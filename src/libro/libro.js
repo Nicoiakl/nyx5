@@ -28,6 +28,7 @@
 import { signObject, verifyObject, canonical, sha256hex, uuid } from '../nucleo/crypto.js';
 import { Resolver, parseAddress } from '../correo/resolver.js';
 import { CONTRATOS } from './contratos.js';
+import { boletaDe } from './estado.js';
 import { LibroError } from './errores.js';
 export { LibroError };
 
@@ -310,7 +311,11 @@ export class Libro {
         if (e instanceof LibroError) return { ok: false, code: e.code, reason: e.message };
         throw e;
       }
-      const out = { ok: true, code: 202, result: result.result, recibos: (result.recibos || []).map((r) => ({ ...r, body: { ...r.body, of: env.id, op: body.op, op_sha256: ctx.opHash, from: env.from } })), avisos: result.avisos || [] };
+      // Boleta (NX-501): todo recibo que lleva un asiento con reparto dice cuánto fue fee de la casa
+      // y cuánto comisión de referido, leído de las líneas del asiento (estado.js), en el único
+      // punto donde se arman los recibos.
+      const boleta = (b) => boletaDe(b.asiento, { casa: this.casa, feeBps: this.feeBps, share: b.contract?.referrer?.share ?? null });
+      const out = { ok: true, code: 202, result: result.result, recibos: (result.recibos || []).map((r) => ({ ...r, body: { ...r.body, ...boleta(r.body), of: env.id, op: body.op, op_sha256: ctx.opHash, from: env.from } })), avisos: result.avisos || [] };
       this.tx.op = { id: env.id, result: out };
       try { await this._commit(); }
       catch (e) {

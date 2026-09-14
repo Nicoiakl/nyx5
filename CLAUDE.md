@@ -25,6 +25,7 @@ src/correo/estafeta.js   servidor HTTP de un dominio: tarjetas, registro (admin|
 src/correo/agente.js     cliente: register (admin|invite|open), rotateKeys, directory, send, inbox, open, ack, reply, receipt, delegate, quote, accept, deliver, release, refund, bond, forfeit, mandate, charge, revoke, balance, contract
 src/libro/libro.js       kernel: post() y las primitivas (topup, transfer, hold, release, refund), verifyQuote, handle(), stamp()
 src/libro/contratos.js   máquinas de estado sobre el kernel: ops {accept, deliver, release, refund, bond, forfeit, mandate, charge, revoke, pay, balance, statement, contract}; CONTRATOS {spot, escrow, metered, bond}
+src/libro/estado.js      NX-501: boleta del asiento (fee y comisión leídos de las líneas) y estado de cuenta por rango, JSON o CSV
 src/libro/errores.js     LibroError(code, message)
 src/puentes/herramientas.js las 22 herramientas MCP, UN módulo para los dos puentes (MENSAJERIA = las 13 del remoto)
 src/puentes/mcp.js       puente MCP por stdio (la llave del agente en el disco del usuario)
@@ -46,7 +47,7 @@ src/puentes/x402.js      adaptador x402 v2: PAYMENT-REQUIRED / PAYMENT-SIGNATURE
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo -> `npm test` (255)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado -> `npm test` (265)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
 ```
@@ -54,7 +55,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 255 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 265 pruebas, todas deben pasar antes de cualquier commit
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
 npm run demo             # correo: tarea cifrada, respuesta, acuse
@@ -96,7 +97,7 @@ Sus invariantes no se cambian sin decisión explícita de Nicholas, anotada con 
 
 - **Nuevo contrato**: agrega la op a `contratos.js` (`ops.<nombre>`) y, si se cotiza, `CONTRATOS.<kind>` con `onAccept`. No toques `libro.js`. Agrega un test en `test/libro.test.js`.
 - **Nueva política de buzón**: `politica.js` (`applyInboxPolicy`) y, si necesita Libro, el bloque `p.stamp` en `estafeta.inbound` es el modelo.
-- **Otro almacenamiento**: implementa la misma interfaz async que `FileStore` (todos los métodos, incluidos `libro*`, `markSeenIfNew`, `claimDueJobs`, `useNonce`, `libroCommit`, `inboundCommit` y los `index*`) y pásala como `store` a `Estafeta`. Referencia: `src/nucleo/almacen-d1.js` + `migrations/0002_nyx5.sql`.
+- **Otro almacenamiento**: implementa la misma interfaz async que `FileStore` (todos los métodos, incluidos `libro*`, `markSeenIfNew`, `claimDueJobs`, `useNonce`, `libroCommit`, `inboundCommit` y los `index*`) y pásala como `store` a `Estafeta`. Referencia: `src/nucleo/almacen-d1.js` + `migrations/0002_nyx5.sql`. Del Libro, dos lecturas con contrato exacto: `libroStatementRange(account, { since, until, limit })` → `{ entries, total }` (rango `[since, until)` sobre `at` ya normalizado a ISO, los `limit` MÁS RECIENTES, `total` = cuántos hay en el rango) y `libroBalanceBefore(account, { n, at })` → suma de los deltas de la cuenta antes de ese asiento y/o fecha. `test/estado.test.js` compara FileStore y D1Store contra el mismo diario: un almacén nuevo tiene que pasar esa comparación.
 - **Nueva extensión** (URI `urn:nyx5:ext:*`): decláralo en la tarjeta (`extensions` / `capabilities`), transporta datos en `extensions[uri]` del sobre.
 
 ## Convenciones

@@ -199,11 +199,28 @@ export class D1Store {
     const r = await this.db.prepare(`SELECT id, name, ts, actor, data FROM nyx5_eventos WHERE ${cond.join(' AND ')} ORDER BY ts DESC LIMIT ?`).bind(...bind, Number(limit)).all();
     return r.results.map((x) => ({ ...x, data: JSON.parse(x.data) })).reverse();
   }
-  async libroStatement(account, limit) {
-    const r = await this.db.prepare(`
-      SELECT doc FROM nyx5_libro_diario WHERE n IN (SELECT DISTINCT n FROM nyx5_libro_lineas WHERE account = ?)
-      ORDER BY n DESC LIMIT ?`).bind(account, limit).all();
-    return r.results.map((row) => JSON.parse(row.doc)).reverse();
+  // Extracto por cuenta en [since, until) sobre `at` del asiento (json_extract sobre el doc: la
+  // fecha ya vive ahí, sin migración). Los `limit` más recientes y el total del rango.
+  _statementWhere(account, since, until) {
+    const cond = ['n IN (SELECT DISTINCT n FROM nyx5_libro_lineas WHERE account = ?)']; const binds = [account];
+    if (since) { cond.push("json_extract(doc, '$.at') >= ?"); binds.push(since); }
+    if (until) { cond.push("json_extract(doc, '$.at') < ?"); binds.push(until); }
+    return { where: cond.join(' AND '), binds };
+  }
+  async libroStatementRange(account, { since = null, until = null, limit = 20 } = {}) {
+    const { where, binds } = this._statementWhere(account, since, until);
+    const total = Number((await this.db.prepare(`SELECT COUNT(*) AS c FROM nyx5_libro_diario WHERE ${where}`).bind(...binds).first())?.c || 0);
+    const r = await this.db.prepare(`SELECT doc FROM nyx5_libro_diario WHERE ${where} ORDER BY n DESC LIMIT ?`).bind(...binds, limit).all();
+    return { entries: r.results.map((row) => JSON.parse(row.doc)).reverse(), total };
+  }
+  async libroStatement(account, limit) { return (await this.libroStatementRange(account, { limit })).entries; }
+  // Saldo de una cuenta antes del asiento `n` y/o de la fecha `at`, sumado de las líneas.
+  async libroBalanceBefore(account, { n = null, at = null } = {}) {
+    const cond = ['l.account = ?']; const binds = [account];
+    if (n != null) { cond.push('l.n < ?'); binds.push(n); }
+    if (at != null) { cond.push("json_extract(d.doc, '$.at') < ?"); binds.push(at); }
+    const row = await this.db.prepare(`SELECT COALESCE(SUM(l.delta), 0) AS s FROM nyx5_libro_lineas l JOIN nyx5_libro_diario d ON d.n = l.n WHERE ${cond.join(' AND ')}`).bind(...binds).first();
+    return Number(row?.s || 0);
   }
 
   // Un movimiento del Libro, atómico. El orden importa: el diario va primero (PK n = candado
