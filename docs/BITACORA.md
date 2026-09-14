@@ -12,7 +12,6 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 | | Qué | Desde |
 |---|---|---|
-| ☐ | **Leer y aprobar `docs/TERMS.md`**. Se sirven sólo si él los enciende: son declaraciones vinculantes en su nombre | 8-sep |
 | ☐ | **Cuenta prepago para el agente** (Mercado Pago empresa de Blue Tuna SpA, $30.000, logueada una vez en Chrome) para repetir la compra chilena con plata del agente | 14-sep |
 | ☐ | **Liberar el escrow** `ae65c82b` (500 tokens a compras@) cuando llegue el pedido de Mercado Libre; recordatorio en su buzón el 15-sep | 14-sep |
 | ☐ | **Marca INAPI** clase 42, en pausa hasta la vuelta (`marca/SOLICITUD-MARCA-NYX5.md`) | 13-sep |
