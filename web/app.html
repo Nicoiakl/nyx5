@@ -73,6 +73,16 @@ textarea.backup{font-family:ui-monospace,Menlo,monospace;font-size:.72rem;min-he
 .toast.show{opacity:1}.toast.err{background:var(--exposed)}
 .spin{display:inline-block;width:1em;height:1em;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:s .6s linear infinite;vertical-align:-.15em}
 @keyframes s{to{transform:rotate(360deg)}}
+select{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:12px;padding:.85rem 1rem;font:inherit;font-size:16px;-webkit-appearance:none;appearance:none}
+select:focus{outline:none;border-color:var(--faience)}
+.moneda{display:flex;gap:.5rem} .moneda select{width:6.5rem;flex-shrink:0}
+.msg.cobro{white-space:normal;max-width:92%}
+.cobro-t{font-weight:600;margin-bottom:.35rem}
+.cobro-l{font-size:.92rem;overflow-wrap:anywhere}
+.cobro-pie{font-size:.74rem;color:var(--dim);margin-top:.6rem;line-height:1.4}
+.cobro .btn-min{margin-right:.4rem}
+.cobro-conf label{margin:.6rem 0 .3rem} .cobro-conf input{padding:.55rem .8rem}
+#btn-cobrar{width:auto;margin:0 0 .6rem .4rem;padding:.45rem .95rem;border-radius:18px;font-size:.9rem;font-weight:500}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -155,12 +165,33 @@ textarea.backup{font-family:ui-monospace,Menlo,monospace;font-size:.72rem;min-he
   <section id="chat" class="col" hidden>
     <div class="feed" id="feed"></div>
     <div class="compose">
-      <button id="btn-tokens" class="btn2" hidden>Send tokens</button>
+      <button id="btn-tokens" class="btn2" hidden>Send tokens</button><button id="btn-cobrar" class="btn2" hidden>Request a payment</button>
       <div class="row">
         <textarea id="texto" placeholder="Write a message..." rows="1"></textarea>
         <button id="btn-enviar">Send</button>
       </div>
     </div>
+  </section>
+
+  <section id="cobrar" class="scroll" hidden>
+    <h1>Request a payment</h1>
+    <p class="sub mono" id="co-para"></p>
+    <label for="co-monto" id="co-monto-l">Amount (CLP)</label>
+    <div class="moneda"><input id="co-monto" inputmode="decimal" autocomplete="off" maxlength="18"><select id="co-moneda" aria-label="Currency"><option value="CLP">CLP</option><option value="USD">USD</option></select></div>
+    <label for="co-nombre">Name on the account</label>
+    <input id="co-nombre" autocomplete="off" maxlength="120">
+    <label for="co-rut">RUT</label>
+    <input id="co-rut" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="12" placeholder="12.345.678-5">
+    <label for="co-banco">Bank</label>
+    <input id="co-banco" autocomplete="off" maxlength="60">
+    <label for="co-tipo">Account type</label>
+    <select id="co-tipo"><option value="checking">Checking</option><option value="savings">Savings</option><option value="vista">Vista</option></select>
+    <label for="co-cuenta">Account number</label>
+    <input id="co-cuenta" inputmode="numeric" autocomplete="off" maxlength="30">
+    <label for="co-ref">Reference (what is this for)</label>
+    <input id="co-ref" autocomplete="off" maxlength="140">
+    <button id="btn-cobro-enviar" disabled>Send request</button>
+    <p class="hint">Nyx5 never touches the money. Pay from your own bank; this card only carries the details, encrypted, between the two of you.</p>
   </section>
 
   <section id="ajustes" class="scroll" hidden>
@@ -328,18 +359,23 @@ async function tarjeta(dir) {
   tarjetas.set(dir, j);
   return j;
 }
-async function enviar(to, texto) {
+async function enviar(to, texto) { return enviarSobre(to, { media: 'text/plain', body: texto }); }
+// One signed envelope. Encrypted when both sides have a key; with `cifrado: 'required'` it is
+// encrypted or it does not leave (a payment request never travels in the clear).
+async function enviarSobre(to, contenido, { type = 'message', thread = null, in_reply_to = null, extensions, cifrado = true } = {}) {
   const card = await tarjeta(to);
   if (card.inbox && card.inbox.policy === 'stamp') throw new Error('That mailbox charges per message, and this app cannot pay yet');
   if (card.inbox && card.inbox.policy === 'pow') throw new Error('That mailbox asks for proof of work, and this app cannot mint it yet');
-  const sobre = { nyx5: '1', id: crypto.randomUUID(), from: ID.address, to: [to], created: iso(), expires: null, thread: null, in_reply_to: null, type: 'message' };
-  const contenido = { media: 'text/plain', body: texto };
-  if (card.enc && ID.enc && await soportaX25519()) {
+  const sobre = { nyx5: '1', id: crypto.randomUUID(), from: ID.address, to: [to], created: iso(), expires: null, thread, in_reply_to, type };
+  if (extensions) sobre.extensions = extensions;
+  if (cifrado && card.enc && ID.enc && await soportaX25519()) {
     const lectores = [{ address: to, enc: card.enc }];
     if (to !== ID.address) lectores.push({ address: ID.address, enc: ID.enc });
     sobre.encrypted = await cifrar(contenido, lectores, canon({ id: sobre.id, from: sobre.from, to: sobre.to }));
-  } else sobre.content = contenido;
-  return api('POST', '/outbound', await firmaObjeto(sobre));
+  } else if (cifrado === 'required') throw new Error('That address has no encryption key, and this only travels encrypted');
+  else sobre.content = contenido;
+  await api('POST', '/outbound', await firmaObjeto(sobre));
+  return sobre;
 }
 // Tokens: a signed operation to libro@ of this house. Between people there is no fee.
 async function pagar(to, monto) {
@@ -367,10 +403,90 @@ function textoDe(c, de) {
   if (de === 'postmaster@' + DOMINIO && b && typeof b.reason === 'string') return 'Not done: ' + b.reason;
   return JSON.stringify(b, null, 1);
 }
-async function abrir(m) {
+async function abrir(m, contra) {
   const e = m.envelope || {};
-  if (e.encrypted) { try { return { texto: textoDe(await descifrar(e), e.from), cifrado: true }; } catch { return { texto: 'Encrypted, and this device has no key to open it.', cifrado: true, ilegible: true }; } }
-  return { texto: textoDe(e.content, e.from), cifrado: false };
+  if (e.encrypted) { try { const c = await descifrar(e); return { texto: textoDe(c, e.from), cifrado: true, cobro: cobroDe(c, true, contra) }; } catch { return { texto: 'Encrypted, and this device has no key to open it.', cifrado: true, ilegible: true }; } }
+  return { texto: textoDe(e.content, e.from), cifrado: false, cobro: cobroDe(e.content, false, contra) };
+}
+// ---------- payment request (real money, off-ledger) ----------
+// Same rules as src/correo/cobro.js: the house cannot check any of this (the content is encrypted),
+// so the check happens here, before signing. Only digits, dots, one dash and K make a RUT.
+const MEDIA_COBRO = 'application/nyx5.cobro+json', MEDIA_COBRO_CONF = 'application/nyx5.cobro-confirmacion+json', EXT_COBRO = 'urn:nyx5:ext:cobro';
+const TIPOS_CUENTA = { checking: 'Checking', savings: 'Savings', vista: 'Vista' };
+function dvRut(cuerpo) { let suma = 0, m = 2; for (let i = cuerpo.length - 1; i >= 0; i--) { suma += Number(cuerpo[i]) * m; m = m === 7 ? 2 : m + 1; } const r = 11 - (suma % 11); return r === 11 ? '0' : r === 10 ? 'K' : String(r); }
+function rutNormal(rut) { if (typeof rut !== 'string') return null; const m = /^(\d{7,8})-?([0-9K])$/.exec(rut.trim().toUpperCase().replace(/\./g, '')); if (!m) return null; return dvRut(m[1]) === m[2] ? m[1] + '-' + m[2] : null; }
+function rutValido(rut) { return rutNormal(rut) !== null; }
+function rutBonito(rut) { const n = rutNormal(rut); if (!n) return String(rut || ''); const [c, d] = n.split('-'); return c.replace(/\B(?=(\d{3})+(?!\d))/g, '.') + '-' + d; }
+// CLP: whole pesos (returns a number). USD: up to two decimals (returns the text). null otherwise.
+function montoNormal(amount, currency) {
+  const t = typeof amount === 'number' ? (Number.isFinite(amount) ? String(amount) : '') : typeof amount === 'string' ? amount.trim() : '';
+  if (currency === 'CLP') { if (!/^\d{1,15}$/.test(t)) return null; const n = Number(t); return Number.isSafeInteger(n) && n > 0 ? n : null; }
+  if (currency === 'USD') { if (!/^\d{1,15}(\.\d{1,2})?$/.test(t)) return null; return Number(t) > 0 ? t : null; }
+  return null;
+}
+function montoBonito(amount, currency) { return '$' + (currency === 'CLP' ? Number(amount).toLocaleString('es-CL') : String(amount)) + ' ' + currency; }
+// What arrived is a payment request or a confirmation ONLY if it came encrypted (the house could
+// not have read or altered it) and every field passes the same checks as when it is sent.
+// `contraparte` is the other side's card when known: an address whose key the house holds
+// (custody.keys = house) was signed and encrypted BY the house, so the house could have written or
+// altered the details. From there, nothing is a card (same rule as paymentConfirm in the client).
+// A text longer than its limit is not trimmed: it is not a card (the sender's client would have
+// refused it, and the server-side validator does).
+function cobroDe(c, cifrado, contraparte) {
+  if (!cifrado || !c || !c.body || typeof c.body !== 'object') return null;
+  if (contraparte && contraparte.custody && contraparte.custody.keys === 'house') return null;
+  const b = c.body, texto = (v, max) => { if (typeof v !== 'string') return ''; const t = v.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, '').trim(); return t.length > max ? null : t; };
+  if (typeof b.request_id !== 'string' || !/^[A-Za-z0-9._:-]{8,128}$/.test(b.request_id)) return null;
+  if (c.media === MEDIA_COBRO) {
+    const currency = b.currency === 'USD' ? 'USD' : b.currency === 'CLP' ? 'CLP' : null;
+    const amount = currency && montoNormal(b.amount, currency), rut = rutNormal(b.rut);
+    if (amount === null || !rut || typeof b.account_type !== 'string' || !Object.hasOwn(TIPOS_CUENTA, b.account_type) || !/^[0-9-]{1,30}$/.test(String(b.account_number || ''))) return null;
+    const name = texto(b.name, 120), bank = texto(b.bank, 60), reference = texto(b.reference, 140);
+    if (!name || !bank || reference === null) return null;
+    return { kind: 'request', request_id: b.request_id, amount, currency, name, rut, bank, account_type: b.account_type, account_number: String(b.account_number), reference };
+  }
+  if (c.media === MEDIA_COBRO_CONF) { const ref = texto(b.bank_reference, 80); return ref ? { kind: 'confirmation', request_id: b.request_id, bank_reference: ref } : null; }
+  return null;
+}
+// The lines of the card, in this order; also what Copy details puts on the clipboard.
+function lineasCobro(c) {
+  const l = ['Amount: ' + montoBonito(c.amount, c.currency), 'To: ' + c.name, 'RUT: ' + rutBonito(c.rut), 'Bank: ' + c.bank, 'Account: ' + TIPOS_CUENTA[c.account_type] + ' ' + c.account_number];
+  if (c.reference) l.push('Reference: ' + c.reference);
+  return l;
+}
+const PIE_COBRO = 'Nyx5 never touches the money. Pay from your own bank; this card only carries the details, encrypted, between the two of you.';
+// The card. `conf` is the bank reference once this request was confirmed (by me if it came in, by them if I sent it).
+function tarjetaCobro(id, c, mio, conf, meta) {
+  let h = '<div class="msg cobro ' + (mio ? 'mio' : 'suyo') + '"><div class="cobro-t">Payment request</div>';
+  for (const l of lineasCobro(c)) h += '<div class="cobro-l">' + escapar(l) + '</div>';
+  if (conf) h += (mio ? '' : '<div class="cobro-l" style="margin-top:.5rem">Confirmation sent. Nyx5 does not move money: it only carries your confirmation.</div>') + '<div class="cobro-l">' + escapar('Bank reference: ' + conf) + '</div>';
+  else if (!mio) h += '<div><button class="btn-min btn2" data-copiar="' + escapar(id) + '">Copy details</button><button class="btn-min btn2" data-pagado="' + escapar(id) + '">I paid \u2014 confirm</button></div><div class="cobro-conf" hidden><label>Bank reference</label><input maxlength="80" autocomplete="off"><button class="btn-min" data-confirmar="' + escapar(id) + '">Confirm</button></div>';
+  h += '<div class="cobro-pie">' + PIE_COBRO + '</div><div class="meta">' + escapar(meta) + '</div></div>';
+  return h;
+}
+// Requests seen in the open chat, by envelope id, for the buttons. Memory only: nothing is stored.
+const COBROS = new Map();
+function puedeCobrar(dir) {
+  if (!dir || dir === ID.address || !ID.enc || ['libro', 'postmaster', 'verifica', 'tareas', 'qa'].includes(localDe(dir))) return Promise.resolve(false);
+  return tarjeta(dir).then((c) => !!c.enc && !c.group && !(c.custody && c.custody.keys === 'house') && soportaX25519(), () => false);
+}
+async function enviarCobro(to, f) {
+  const currency = f.currency === 'USD' ? 'USD' : 'CLP';
+  const amount = montoNormal(f.amount, currency);
+  if (amount === null) throw new Error(currency === 'CLP' ? 'Amount must be a whole number of pesos.' : 'Amount must be a number of dollars with up to two decimals.');
+  const rut = rutNormal(f.rut);
+  if (!rut) throw new Error('RUT looks wrong (check the digit).');
+  if (!(await puedeCobrar(to))) throw new Error('That address cannot receive a payment request here');
+  const cobro = { request_id: crypto.randomUUID(), amount, currency, name: f.name.trim().slice(0, 120), rut, bank: f.bank.trim().slice(0, 60), account_type: TIPOS_CUENTA[f.account_type] ? f.account_type : 'checking', account_number: String(f.account_number).replace(/\s+/g, '').slice(0, 30), reference: f.reference.trim().slice(0, 140) };
+  if (!/^[0-9-]{1,30}$/.test(cobro.account_number)) throw new Error('Account number: digits and dashes only');
+  return enviarSobre(to, { media: MEDIA_COBRO, body: cobro }, { extensions: { [EXT_COBRO]: { kind: 'request', request_id: cobro.request_id, currency } }, cifrado: 'required' });
+}
+async function confirmarCobro(id, ref) {
+  const x = COBROS.get(id); if (!x) throw new Error('That request is no longer on screen');
+  const bank_reference = String(ref || '').trim().slice(0, 80);
+  if (!bank_reference) throw new Error('Bank reference');
+  const e = x.envelope;
+  return enviarSobre(e.from, { media: MEDIA_COBRO_CONF, body: { request_id: x.cobro.request_id, bank_reference } }, { type: 'result', thread: e.thread || e.id, in_reply_to: e.id, extensions: { [EXT_COBRO]: { kind: 'confirmation', request_id: x.cobro.request_id, currency: x.cobro.currency } }, cifrado: 'required' });
 }
 function hora(t) {
   const d = new Date(t); if (isNaN(d)) return '';
@@ -381,9 +497,9 @@ const ESTADOS = { delivered: 'delivered', queued: 'sending', inflight: 'sending'
 // ---------- screens ----------
 let ACTUAL = null, CON = null;
 function pantalla(n) {
-  for (const s of ['entrar', 'invitacion', 'autorizar', 'chats', 'chat', 'ajustes']) $(s).hidden = s !== n;
+  for (const s of ['entrar', 'invitacion', 'autorizar', 'chats', 'chat', 'cobrar', 'ajustes']) $(s).hidden = s !== n;
   ACTUAL = n;
-  $('atras').hidden = n !== 'chat';
+  $('atras').hidden = !(n === 'chat' || n === 'cobrar');
   $('tabs').hidden = !(n === 'chats' || n === 'ajustes');
   $('tab-chats').classList.toggle('on', n === 'chats');
   $('tab-ajustes').classList.toggle('on', n === 'ajustes');
@@ -406,6 +522,8 @@ async function abrirChat(dir) {
   $('titulo').textContent = dir; $('titulo').classList.add('dir');
   $('btn-tokens').hidden = true;
   recibeTokens(dir).then((si) => { if (CON === dir) $('btn-tokens').hidden = !si; });
+  $('btn-cobrar').hidden = true;
+  puedeCobrar(dir).then((si) => { if (CON === dir) $('btn-cobrar').hidden = !si; });
   $('feed').innerHTML = '<div class="vacio"><span class="spin"></span></div>';
   await refrescarChat();
 }
@@ -413,17 +531,37 @@ async function refrescarChat() {
   if (!CON) return;
   let msgs = [];
   try { msgs = (await api('GET', '/conversations/' + ID.local + '?with=' + encodeURIComponent(CON) + '&limit=200')).messages || []; } catch (e) { toast(e.message, true); return; }
-  const partes = [], pendientes = [];
-  for (const m of msgs) {
-    const a = await abrir(m);
+  const partes = [], pendientes = [], abiertos = [];
+  // A confirmation counts only for a request that is in THIS conversation and went the other way:
+  // they confirm what I sent, I confirm what they sent. Anything else stays as plain text.
+  const pedidos = new Map(), confirmados = new Map();
+  const contra = await tarjeta(CON).catch(() => null);
+  for (const m of msgs) { const a = await abrir(m, contra); abiertos.push([m, a]); if (a.cobro && a.cobro.kind === 'request') pedidos.set(a.cobro.request_id, m.dir); }
+  for (const [m, a] of abiertos) if (a.cobro && a.cobro.kind === 'confirmation' && pedidos.has(a.cobro.request_id) && pedidos.get(a.cobro.request_id) !== m.dir) confirmados.set(a.cobro.request_id, a.cobro.bank_reference);
+  COBROS.clear();
+  for (const [m, a] of abiertos) {
     const mio = m.dir === 'out';
     if (!mio && !m.acked) pendientes.push(m.id);
     const meta = [a.cifrado ? 'encrypted' : 'not encrypted', hora(m.at)];
     if (mio) meta.push(ESTADOS[m.status] || m.status || 'sent');
-    partes.push('<div class="msg ' + (mio ? 'mio' : 'suyo') + (a.ilegible ? ' ilegible' : '') + '">' + escapar(a.texto) + '<div class="meta">' + escapar(meta.join(' · ')) + '</div></div>');
+    const c = a.cobro;
+    if (c && c.kind === 'request') {
+      if (!mio) COBROS.set(m.id, { cobro: c, envelope: m.envelope, texto: lineasCobro(c).join('\n') });
+      partes.push(tarjetaCobro(m.id, c, mio, confirmados.get(c.request_id) || null, meta.join(' · ')));
+      continue;
+    }
+    const texto = c && c.kind === 'confirmation' && confirmados.get(c.request_id) === c.bank_reference ? 'Bank reference: ' + c.bank_reference : a.texto;
+    partes.push('<div class="msg ' + (mio ? 'mio' : 'suyo') + (a.ilegible ? ' ilegible' : '') + '">' + escapar(texto) + '<div class="meta">' + escapar(meta.join(' · ')) + '</div></div>');
   }
   const feed = $('feed');
   feed.innerHTML = partes.join('') || '<div class="vacio">No messages yet.<br>Write below to start.</div>';
+  for (const b of feed.querySelectorAll('[data-copiar]')) b.onclick = () => { const x = COBROS.get(b.dataset.copiar); if (x) navigator.clipboard.writeText(x.texto).then(() => toast('Copied.'), () => toast('Select the details and copy them', true)); };
+  for (const b of feed.querySelectorAll('[data-pagado]')) b.onclick = () => { const f = b.parentElement.nextElementSibling; f.hidden = !f.hidden; if (!f.hidden) f.querySelector('input').focus(); };
+  for (const b of feed.querySelectorAll('[data-confirmar]')) b.onclick = async () => {
+    if (b.disabled) return; b.disabled = true;
+    try { await confirmarCobro(b.dataset.confirmar, b.previousElementSibling.value); toast('Confirmation sent. Nyx5 does not move money: it only carries your confirmation.'); await refrescarChat(); }
+    catch (e) { toast(e.message, true); b.disabled = false; }
+  };
   feed.scrollTop = feed.scrollHeight;
   if (pendientes.length) api('POST', '/mailbox/' + ID.local + '/ack', { ids: pendientes }).catch(() => {});
 }
@@ -610,13 +748,34 @@ async function enviarTokens(dir) {
   if (!confirm('Send ' + n.toLocaleString() + ' tokens to ' + dir + '? It cannot be undone.')) return;
   try { await pagar(dir, n); toast('Sent. The receipt arrives from libro@' + DOMINIO); } catch (e) { toast(e.message, true); }
 }
+$('btn-cobrar').onclick = () => {
+  if (!CON) return;
+  pantalla('cobrar');
+  $('co-para').textContent = CON;
+  for (const id of ['co-monto', 'co-nombre', 'co-rut', 'co-banco', 'co-cuenta', 'co-ref']) $(id).value = '';
+  $('co-moneda').value = 'CLP'; $('co-tipo').value = 'checking';
+  $('co-monto-l').textContent = 'Amount (CLP)';
+  $('btn-cobro-enviar').disabled = true;
+};
+const cobroCompleto = () => ['co-monto', 'co-nombre', 'co-rut', 'co-banco', 'co-cuenta'].every((id) => $(id).value.trim());
+for (const id of ['co-monto', 'co-nombre', 'co-rut', 'co-banco', 'co-cuenta']) $(id).addEventListener('input', () => { $('btn-cobro-enviar').disabled = !cobroCompleto(); });
+$('co-moneda').onchange = () => { $('co-monto-l').textContent = 'Amount (' + $('co-moneda').value + ')'; };
+$('btn-cobro-enviar').onclick = async () => {
+  const dir = CON, btn = $('btn-cobro-enviar'); if (!dir || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    await enviarCobro(dir, { amount: $('co-monto').value, currency: $('co-moneda').value, name: $('co-nombre').value, rut: $('co-rut').value, bank: $('co-banco').value, account_type: $('co-tipo').value, account_number: $('co-cuenta').value, reference: $('co-ref').value });
+    toast('Request sent, encrypted. You will get a message when they confirm.');
+    await abrirChat(dir);
+  } catch (e) { toast(e.message, true); btn.disabled = !cobroCompleto(); }
+};
 $('btn-nuevo').onclick = async () => {
   const d = (prompt('Who do you want to write to? (full address)') || '').trim().toLowerCase();
   if (!d) return;
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(d)) return toast('That is not an address', true);
   try { await tarjeta(d); abrirChat(d); } catch (err) { toast(err.message, true); }
 };
-$('atras').onclick = () => { CON = null; verChats(); };
+$('atras').onclick = () => { if (ACTUAL === 'cobrar' && CON) return abrirChat(CON); CON = null; verChats(); };
 $('tab-chats').onclick = () => verChats();
 $('tab-ajustes').onclick = () => verAjustes();
 $('btn-copiar-dir').onclick = () => navigator.clipboard.writeText(ID.address).then(() => toast('Copied'), () => {});

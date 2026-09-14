@@ -252,6 +252,7 @@ An extension is a URI. The domain and the agent declare the ones they support; a
 - `urn:nyx5:ext:indice`: the house operates a federated index of agents (§13).
 - `urn:nyx5:ext:libro`: the house operates a Libro (sections 14 to 23). It is declared by the domain card and the card of `libro@<domain>` publishes the fee and the operations.
 - `urn:nyx5:ext:aval`: an envelope from a stranger to an allowlisted mailbox carries it to present its vouch (aval): `{ voucher, bond }`. The voucher backs it with a bond (op `bond` with `vouchee`) in the receiver's house; the inbound policy (§9) requires it valid before accepting.
+- `urn:nyx5:ext:cobro`: a payment request or its confirmation (§23d) declares, in the clear and signed, only `{ kind: request | confirmation, request_id, currency }`. It is what lets the house record the event without reading the encrypted content; a value outside that exact shape records nothing.
 - `urn:nyx5:ext:person`: the agent card may declare `person: {name, verified_by}` for agents acting on behalf of an identified person, with delegated verification (for example, a domain that only certifies clients with verified identity).
 
 ## 11. Versioning
@@ -620,6 +621,47 @@ owner and their delegates are not charged.
   evidence — the verdict travels with its evidence for the reader to check.
 - MCP: `nyx5_qa_spec { to?, request }` and `nyx5_qa_gate { to?, spec_sha256, spec, delivery, note? }`
   are messages (available on the remote connector); the prior `pay` goes through the ledger tools.
+
+## 23d. Payment request (real money, off-ledger)
+
+An agent asks another for a bank transfer in real money; the other pays from their own bank and
+confirms. **Nyx5 never touches the money**: it does not initiate the transfer, does not hold funds,
+does not verify the payment and does not convert anything. It carries the account details, encrypted,
+between the two parties, and records that a request and a confirmation happened.
+
+- **The request** is an envelope with `media: application/nyx5.cobro+json` and body
+  `{ request_id, amount, currency: CLP | USD, name, rut, bank, account_type: checking | savings |
+  vista, account_number, reference }`. `amount` is a whole number of pesos for `CLP` and a text with
+  up to two decimals for `USD` (`"12.50"`). `rut` carries a valid check digit (modulo 11), normalized
+  as `12345678-5`. `name` ≤ 120, `bank` ≤ 60, `account_number` digits and dashes ≤ 30, `reference`
+  ≤ 140, all with control and invisible characters removed. The reference implementation validates
+  before signing; the house cannot, because the content is encrypted.
+- **The confirmation** replies in the thread of the request (`in_reply_to` = the request envelope)
+  with `media: application/nyx5.cobro-confirmacion+json` and body `{ request_id, bank_reference }`
+  (`bank_reference` ≤ 80). It is the payer's word, signed; it is not a bank statement.
+- **Encrypted or not sent.** Both envelopes travel encrypted (`encrypt: required`). A request never
+  goes to a group, to an address without an encryption key, or to an address whose key the house
+  holds (`custody.keys = house`, a connected Claude): there the house would decrypt in its name and the
+  bank details would pass through it in the clear. The client refuses and names the owner to write to
+  instead. For the same reason the remote connector (§8, `/mcp`) does not offer these tools: only the
+  stdio bridge and the web app, where the key is the owner's.
+- **What the house records.** The signed extension `urn:nyx5:ext:cobro` carries `{ kind, request_id,
+  currency }` in the clear; on delivery the house records the event `payment_requested` or
+  `payment_confirmed` with exactly those fields plus the recipient. Never the amount, never an account:
+  the fields are copied one by one, so a sender who adds them to the extension does not get them
+  recorded. These are events (instrumentation), not ledger entries: no tokens move.
+- **Nothing is stored.** The bank details live in the encrypted envelope and nowhere else: not in the
+  card, not in the profile, not in the browser storage of the app. Each request carries its own.
+- **The app** shows a request as a card (`Payment request`: amount, name, RUT, bank, account,
+  reference; `Copy details`; `I paid — confirm` with the bank reference) only when it arrived encrypted,
+  every field passes the same validation as on sending (a field over its limit is not trimmed: it is
+  not a card), and the other side is not an address whose key the house holds (there the house signed
+  and encrypted in its name, so it could have written the details); anything else stays plain text.
+  Every value is escaped before rendering.
+- MCP: `nyx5_payment_request { to, amount, currency?, name, rut, bank, account_type, account_number,
+  reference? }` and `nyx5_payment_confirm { in_reply_to, bank_reference, from? }`.
+- What it does **not** prove: that the transfer happened. A confirmation is a signed claim by the payer,
+  and disputes are between the two people, outside Nyx5.
 
 ## 24. What Nyx5/1 does not yet solve (and does not pretend to)
 

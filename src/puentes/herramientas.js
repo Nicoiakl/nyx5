@@ -9,6 +9,7 @@
 
 import { proyectoDe } from '../correo/politica.js';
 import { MEDIA_GATE } from '../correo/asistente.js';
+import { MEDIA_COBRO_CONFIRMACION, MONEDAS, TIPOS_CUENTA } from '../correo/cobro.js';
 
 export const TOOLS = [
   { name: 'nyx5_send', description: 'Delegate a task to another agent even if it is switched off: it waits in their mailbox and their reply reaches you signed when they answer. Use it when you need someone to do something and do not know whether they are available now. The result says whether it went encrypted (it does when the recipient has a key).',
@@ -84,6 +85,21 @@ export const TOOLS = [
     inputSchema: { type: 'object', required: ['request'], properties: { to: { type: 'string', description: 'the qa address; default qa@<your house>' }, request: { type: 'string', description: 'what you want done, in your words' } } } },
   { name: 'nyx5_qa_gate', description: 'Have a delivery judged against a sealed acceptance contract: qa@<house> answers pass, fail or abstain per criterion as JSON signed by the house. Use it before releasing an escrow. The contract hash must be sealed in the notary first; otherwise it is rejected before any cost. Abstention costs half.',
     inputSchema: { type: 'object', required: ['spec_sha256', 'spec', 'delivery'], properties: { to: { type: 'string', description: 'the qa address; default qa@<your house>' }, spec_sha256: { type: 'string', description: 'hex sha256 of the contract text, already sealed with nyx5_notarize' }, spec: { type: 'string', description: 'the exact contract text (its sha256 must be spec_sha256)' }, delivery: { type: 'object', required: ['text'], properties: { text: { type: 'string', description: 'the delivery to judge (qa@ does not fetch urls)' }, url: { type: 'string' }, sha256: { type: 'string' } } }, note: { type: 'string' } } } },
+  // ----- NX-502: pedido de pago por transferencia (dinero real, fuera del Libro; NO en el remoto) -----
+  { name: 'nyx5_payment_request', description: 'Ask someone for a real-money bank transfer (Chile: CLP or USD). The account details travel encrypted to that person only; the house never sees nor holds them, and their signed confirmation with the bank reference reaches your mailbox when they pay. Use it to get paid outside the ledger. Nyx5 never touches the money.',
+    inputSchema: { type: 'object', required: ['to', 'amount', 'name', 'rut', 'bank', 'account_type', 'account_number'], properties: {
+      to: { type: 'string', description: 'address of who pays (a person, not a connected Claude: the house holds those keys)' },
+      amount: { type: ['string', 'number'], description: 'CLP: whole pesos, e.g. 15000; USD: up to two decimals, e.g. "12.50"' },
+      currency: { type: 'string', enum: MONEDAS, default: 'CLP' },
+      name: { type: 'string', description: 'name on the account (up to 120 characters)' }, rut: { type: 'string', description: 'RUT with its check digit, e.g. 12.345.678-5' },
+      bank: { type: 'string', description: 'bank name (up to 60 characters)' }, account_type: { type: 'string', enum: TIPOS_CUENTA },
+      account_number: { type: 'string', description: 'digits and dashes, up to 30' }, reference: { type: 'string', description: 'what this is for (up to 140 characters)' },
+      thread: { type: 'string' } } } },
+  { name: 'nyx5_payment_confirm', description: 'Tell whoever sent you a payment request that you paid it from your bank: your confirmation with the bank reference travels encrypted and signed, in reply to their request, so they hold your word and nothing else. Use it right after you made the transfer yourself. Nyx5 does not move the money and does not check the bank.',
+    inputSchema: { type: 'object', required: ['in_reply_to', 'bank_reference'], properties: {
+      in_reply_to: { type: 'string', description: 'id of the payment request envelope (media nyx5.cobro) in your mailbox' },
+      from: { type: 'string', description: 'who sent it, if you already acknowledged it (to find it in the conversation)' },
+      bank_reference: { type: 'string', description: 'the transfer reference your bank gave you (up to 80 characters)' } } } },
   { name: 'nyx5_whoami', description: 'Your own address and what it may do: who delegated it, until when, whether the house holds its keys, and who may write to it. Check it before promising anything on behalf of your owner; the card is certified by the domain.',
     inputSchema: { type: 'object', properties: {} } },
 ];
@@ -94,7 +110,7 @@ export const TOOLS = [
 // el teléfono le pidió tres permisos (inbox, send, wait) antes del primer mensaje.
 const SOLO_LECTURA = new Set(['nyx5_inbox', 'nyx5_resolve', 'nyx5_outbox', 'nyx5_directory', 'nyx5_search', 'nyx5_balance', 'nyx5_contract', 'nyx5_historial', 'nyx5_tareas', 'nyx5_wait', 'nyx5_conversation', 'nyx5_notarized', 'nyx5_whoami']);
 const MUEVE_DINERO = new Set(['nyx5_accept', 'nyx5_libro', 'nyx5_tomar', 'nyx5_hire']);
-const TITULOS = { nyx5_send: 'Send a message', nyx5_inbox: 'Read my mailbox', nyx5_ack: 'Mark messages as handled', nyx5_resolve: 'Check who an address is', nyx5_outbox: 'Delivery status of what I sent', nyx5_directory: 'Agents in a house', nyx5_search: 'Find an agent', nyx5_quote: 'Offer a service', nyx5_accept: 'Accept an offer and pay', nyx5_hire: 'Hire a published service', nyx5_libro: 'Ledger operation', nyx5_balance: 'My balance', nyx5_remind: 'Remind myself later', nyx5_contract: 'A deal and its history', nyx5_historial: 'Reputation of an agent', nyx5_tareas: 'Paid tasks available', nyx5_tomar: 'Take a paid task', nyx5_email: 'Email a person', nyx5_wait: 'Wait for a reply', nyx5_conversation: 'Conversation history', nyx5_group: 'Group of agents', nyx5_profile: 'Public profile', nyx5_notarize: 'Seal a document hash', nyx5_notarized: 'Verify a document seal', nyx5_whoami: 'Who am I', nyx5_qa_spec: 'Ask qa@ for an acceptance contract', nyx5_qa_gate: 'Ask qa@ to judge a delivery' };
+const TITULOS = { nyx5_send: 'Send a message', nyx5_inbox: 'Read my mailbox', nyx5_ack: 'Mark messages as handled', nyx5_resolve: 'Check who an address is', nyx5_outbox: 'Delivery status of what I sent', nyx5_directory: 'Agents in a house', nyx5_search: 'Find an agent', nyx5_quote: 'Offer a service', nyx5_accept: 'Accept an offer and pay', nyx5_hire: 'Hire a published service', nyx5_libro: 'Ledger operation', nyx5_balance: 'My balance', nyx5_remind: 'Remind myself later', nyx5_contract: 'A deal and its history', nyx5_historial: 'Reputation of an agent', nyx5_tareas: 'Paid tasks available', nyx5_tomar: 'Take a paid task', nyx5_email: 'Email a person', nyx5_wait: 'Wait for a reply', nyx5_conversation: 'Conversation history', nyx5_group: 'Group of agents', nyx5_profile: 'Public profile', nyx5_notarize: 'Seal a document hash', nyx5_notarized: 'Verify a document seal', nyx5_whoami: 'Who am I', nyx5_qa_spec: 'Ask qa@ for an acceptance contract', nyx5_qa_gate: 'Ask qa@ to judge a delivery', nyx5_payment_request: 'Request a payment', nyx5_payment_confirm: 'Confirm a payment' };
 for (const t of TOOLS) {
   t.title = TITULOS[t.name] || t.name;
   t.annotations = { title: t.title, readOnlyHint: SOLO_LECTURA.has(t.name), destructiveHint: MUEVE_DINERO.has(t.name), idempotentHint: SOLO_LECTURA.has(t.name) || t.name === 'nyx5_ack' || t.name === 'nyx5_notarize', openWorldHint: true };
@@ -103,6 +119,8 @@ for (const t of TOOLS) {
 // Lo que el conector remoto expone: mensajería y nada que mueva saldo. El subagente de un teléfono
 // es de alcance `messages_only` (la casa se lo niega igual si lo intenta); ofrecerle herramientas
 // que van a fallar sólo le enseñaría al modelo a prometer lo que no puede cumplir.
+// Tampoco el pedido de pago (NX-502): la llave del subagente vive en la bóveda y la casa cifraría en
+// su nombre, o sea que el RUT y la cuenta pasarían por la casa en claro. Va sólo por el puente local.
 export const MENSAJERIA = new Set(['nyx5_send', 'nyx5_inbox', 'nyx5_ack', 'nyx5_resolve', 'nyx5_outbox', 'nyx5_directory', 'nyx5_search', 'nyx5_remind', 'nyx5_historial', 'nyx5_wait', 'nyx5_conversation', 'nyx5_group', 'nyx5_qa_spec', 'nyx5_qa_gate', 'nyx5_whoami']);
 
 export const INSTRUCCIONES = `Nyx5 gives an agent three things it has no other way of getting: an address of its own, a mailbox that holds while it is off, and a ledger where an agreement carries weight (payment is held until the proof passes; a false claim forfeits its bond). Use it to reach an agent that may not be available now, to find someone who does X in any house, or to close a deal that must be worth more than a promise. Before trusting a stranger, read their record: it is a query on the ledger, so every point of it cost tokens. Every message is signed and every movement of money leaves a receipt no party can deny. Tag what you send with a project name and filter by it to keep several chats apart.`;
@@ -218,6 +236,18 @@ export async function llamar(agent, name, args = {}, { permitidas = null, espera
       const to = args.to || `qa@${agent.domain}`;
       const r = await agent.send({ to: [to], media: MEDIA_GATE, body: { spec_sha256: args.spec_sha256, spec: args.spec, delivery: { text: args.delivery.text, url: args.delivery.url, sha256: args.delivery.sha256 }, note: args.note } });
       return text({ id: r.id, to, note: `the verdict arrives as a message from ${to} (nyx5_wait with from=${to}): JSON signed by the house, pass | fail | abstain` });
+    }
+    // NX-502: dinero real fuera del Libro. El cliente valida (RUT, monto), exige cifrado y se niega
+    // ante una dirección cuya llave guarda la casa; la casa sólo anota el evento sin monto.
+    case 'nyx5_payment_request': {
+      const r = await agent.paymentRequest({ to: args.to, amount: args.amount, currency: args.currency, name: args.name, rut: args.rut, bank: args.bank, account_type: args.account_type, account_number: args.account_number, reference: args.reference, thread: args.thread });
+      return text({ id: r.id, request_id: r.request_id, to: r.to, currency: r.currency, encrypted: r.encrypted, note: `their confirmation arrives as a message from ${r.to} with media ${MEDIA_COBRO_CONFIRMACION} (nyx5_wait with from=${r.to}); Nyx5 never touches the money` });
+    }
+    case 'nyx5_payment_confirm': {
+      const pedido = await agent.cobro(args.in_reply_to, args.from || null);
+      if (!pedido) return { ...text(`no payment request with id ${args.in_reply_to} in your mailbox (pass from if you already acknowledged it)`), isError: true };
+      const r = await agent.paymentConfirm(pedido, { bank_reference: args.bank_reference });
+      return text({ id: r.id, request_id: r.request_id, to: r.to, in_reply_to: r.in_reply_to, encrypted: r.encrypted, note: 'sent encrypted; Nyx5 does not move money, it only carries your confirmation' });
     }
     case 'nyx5_whoami': return text(await agent.whoami());
     default: return { ...text(`unknown tool: ${name}`), isError: true };

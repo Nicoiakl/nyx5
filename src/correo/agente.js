@@ -7,6 +7,7 @@ import { EXT_PROYECTO, proyectoDe, rolDe, nombreDeProyecto } from './politica.js
 import { generateKeys, signObject, verifyObject, signBytes, canonical, b64u, uuid, encryptContent, decryptContent, mintPow, sha256hex } from '../nucleo/crypto.js';
 import { Libro, MEDIA } from '../libro/libro.js';
 import { pruebaDeAceptacion } from '../libro/verifica.js';
+import { MEDIA_COBRO, MEDIA_COBRO_CONFIRMACION, cobroValido, confirmacionValida, extensionDeCobro, razonParaNoCobrar } from './cobro.js';
 
 const iso = (t = Date.now()) => new Date(t).toISOString();
 
@@ -286,6 +287,46 @@ export class Agent {
     const c = r.receipt.contract;
     return { ...base, accepted: true, status: 'hired', quote_id: q.id, contract: c, price: c.amount, verification: c.arbiter && c.terms?.verify ? { arbiter: c.arbiter, verify: c.terms.verify, when: 'after the seller delivers (nyx5_libro op=deliver), verifica@ runs the test and releases or refunds' } : null };
   }
+  // ---------- NX-502: pedido de pago por transferencia (dinero real, fuera del Libro) ----------
+  // Manda a UNA persona un cobro cifrado (monto, moneda, nombre, RUT, banco, cuenta, referencia).
+  // Se valida antes de firmar (RUT módulo 11, monto por moneda); el sobre va cifrado o no va; y
+  // nunca a una dirección cuya llave guarda la casa (razonParaNoCobrar). Lo que la casa ve es la
+  // extensión en claro { kind, request_id, currency }: con eso anota `payment_requested`, sin monto.
+  async paymentRequest({ to, thread, ...datos } = {}) {
+    if (typeof to !== 'string' || !to) throw new Error('paymentRequest needs to: the address of who pays');
+    const cobro = cobroValido({ ...datos, request_id: datos.request_id ?? uuid() });
+    this.resolver.invalidate(`agent:${String(to).toLowerCase()}`);
+    const card = await this.resolver.agentCard(to, { onBehalfOf: this.address });
+    const razon = razonParaNoCobrar(card);
+    if (razon) throw new Error(razon);
+    const r = await this.send({ to: card.address, type: 'message', media: MEDIA_COBRO, body: cobro, encrypt: 'required', thread, extensions: extensionDeCobro('request', cobro) });
+    return { id: r.id, request_id: cobro.request_id, to: card.address, currency: cobro.currency, encrypted: r.encrypted, jobs: r.jobs };
+  }
+  // Un cobro recibido, por id de sobre: en la bandeja o, si ya se confirmó, en la conversación con `from`.
+  async cobro(id, from = null) {
+    let m = (await this.inbox({ limit: 200 })).find((x) => x.envelope?.id === id);
+    if (!m && from) m = (await this.conversation(from, { limit: 200 })).find((x) => x.dir === 'in' && x.envelope?.id === id);
+    if (!m) return null;
+    const o = await this.open(m.envelope);
+    if (!o.encrypted) throw new Error(`envelope ${id} arrived in the clear: a payment request only counts encrypted`);
+    if (o.content?.media !== MEDIA_COBRO) throw new Error(`envelope ${id} is not a payment request (media ${o.content?.media || '(none)'})`);
+    return o;
+  }
+  // Quien pagó desde su banco le contesta a quien pidió, en el hilo del pedido, con la referencia
+  // bancaria. Cifrado o nada, y con la misma regla de destino que el pedido. `pedido` es el sobre
+  // abierto (lo que devuelve `cobro`). Nyx5 no comprueba el pago: lleva la palabra del pagador.
+  async paymentConfirm(pedido, { bank_reference } = {}) {
+    if (pedido?.content?.media !== MEDIA_COBRO) throw new Error(`not a payment request: media is ${pedido?.content?.media || '(none)'}, expected ${MEDIA_COBRO}`);
+    if (!pedido.to.includes(this.address)) throw new Error(`payment request ${pedido.id} was not addressed to ${this.address}`);
+    const confirmacion = confirmacionValida({ request_id: pedido.content.body?.request_id, bank_reference });
+    const card = await this.resolver.agentCard(pedido.from, { onBehalfOf: this.address });
+    const razon = razonParaNoCobrar(card);
+    if (razon) throw new Error(razon);
+    const currency = pedido.content.body?.currency;
+    const r = await this.send({ to: card.address, type: 'result', media: MEDIA_COBRO_CONFIRMACION, body: confirmacion, encrypt: 'required', thread: pedido.thread || pedido.id, inReplyTo: pedido.id, extensions: extensionDeCobro('confirmation', { request_id: confirmacion.request_id, currency }) });
+    return { id: r.id, request_id: confirmacion.request_id, to: card.address, in_reply_to: pedido.id, encrypted: r.encrypted, jobs: r.jobs };
+  }
+
   // Operación genérica: sobre firmado, sin cifrar, a libro@<casa>. La respuesta llega como recibo.
   libroOp(house, body, opts = {}) {
     return this.send({ to: `libro@${house}`, type: 'task', media: MEDIA.op, body, encrypt: false, ...opts });

@@ -40,6 +40,7 @@ import { atenderMcp } from '../puentes/mcp-remoto.js';
 import { abrirBoveda } from '../nucleo/boveda.js';
 import { ICONOS } from '../plataformas/iconos.js';
 import { Agent } from './agente.js';
+import { eventoDeCobro } from './cobro.js';
 import { atenderAsistentes, PRECIOS, MEDIA_GATE } from './asistente.js';
 import { validarFiltros, puntajeDe, precioMinimo, FILTROS } from './indice.js';
 
@@ -239,6 +240,11 @@ export class Estafeta {
       if (await this.store.kvPutIfAbsent('primer_mensaje', raiz, { ts: iso(), via })) await this._evento('first_message', raiz, { via });
       this._primeros.add(raiz);
     } catch (e) { this.log(`first_message ${raiz} no registrado: ${e.message}`); }
+  }
+  // `eventoDeCobro` copia campo por campo: aunque el remitente meta `amount` en la extensión, no entra.
+  async _eventoDeCobro(env, local) {
+    const ev = eventoDeCobro(env);
+    if (ev) await this._evento(ev.name, env.from, { ...ev.data, to: `${local}@${this.domain}` });
   }
   isSystem(local) { return ['postmaster', 'libro', 'verifica', 'tareas'].includes(local); }
   // ¿Podría alguien registrarse HOY con este nombre? Mismas reglas que registerAgent, sin registrar nada.
@@ -1387,6 +1393,10 @@ export class Estafeta {
         mails, libro: libroBundles,
       });
       for (const m of mails) { this._push(m.local, env); this._notifyEmail(m.local, env); }
+      // NX-502: un pedido de pago o su confirmación declaran EN CLARO { kind, request_id, currency }
+      // (extensión firmada); el contenido con el monto y la cuenta va cifrado y la casa no lo ve.
+      // Se anota como evento, nunca como asiento: es dinero real fuera del Libro.
+      if (mails.length) await this._eventoDeCobro(env, mails[0].local);
     }
     for (const rc of recibosPendientes) await this._systemSend('libro', rc.to, { in_reply_to: env.id, thread: rc.thread || env.thread || null, content: { media: MEDIA.recibo, body: rc.body } });
     // Avisos de plazo: sobres del Libro programados para el futuro (un escrow que llega a su
