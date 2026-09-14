@@ -58,9 +58,13 @@ const entero = (v, nombre) => {
   return s;
 };
 
+// La entrada de TOKEN_USD para una red, o null. `Object.hasOwn`: una red llamada `constructor` o
+// `__proto__` no es una red, y `TOKEN_USD[red]` la encontraría en el prototipo.
+const tokenDe = (network) => (typeof network === 'string' && Object.hasOwn(TOKEN_USD, network)) ? TOKEN_USD[network] : null;
+
 // El dominio EIP-712 del contrato de USDC en una red. Sale de la tabla leída de los contratos.
 export function dominioDe(network) {
-  const t = TOKEN_USD[network];
+  const t = tokenDe(network);
   if (!t) throw new Error(`x402 pagador: no sé pagar en ${network}; conozco: ${Object.keys(TOKEN_USD).join(', ')}`);
   const m = /^eip155:(\d+)$/.exec(network);
   if (!m) throw new Error(`x402 pagador: ${network} no es una red EVM`);
@@ -134,7 +138,7 @@ export function elegirRequisito(pr, { redes } = {}) {
   const motivos = [];
   for (const a of pr.accepts) {
     if (a?.scheme !== 'exact') { motivos.push(`${a?.network}: scheme ${a?.scheme}`); continue; }
-    const t = TOKEN_USD[a.network];
+    const t = tokenDe(a.network);
     if (!t) { motivos.push(`${a.network}: red que no sé pagar`); continue; }
     if (permitidas && !permitidas.has(a.network)) { motivos.push(`${a.network}: fuera de las redes permitidas`); continue; }
     if (String(a.asset).toLowerCase() !== t.asset.toLowerCase()) { motivos.push(`${a.network}: asset ${a.asset} no es el USDC de esa red`); continue; }
@@ -154,8 +158,11 @@ export function armarPago({ requisito, privKey, tope, ahora = Math.floor(Date.no
   const limite = BigInt(entero(tope, 'tope'));
   const monto = BigInt(entero(requisito?.amount, 'amount'));
   if (monto > limite) throw new Error(`x402 pagador: el precio (${monto}) supera el tope (${limite}); no se firma`);
-  if (!TOKEN_USD[requisito.network]) throw new Error(`x402 pagador: no sé pagar en ${requisito.network}`);
-  const vigencia = Math.min(Number(requisito.maxTimeoutSeconds) || VIGENCIA_MAX_S, VIGENCIA_MAX_S);
+  if (!tokenDe(requisito.network)) throw new Error(`x402 pagador: no sé pagar en ${requisito.network}`);
+  // La vigencia que pide el servidor sólo puede ACORTAR los 5 minutos: un `maxTimeoutSeconds`
+  // negativo, no numérico o fraccionario no se obedece (un negativo firmaba un cheque ya vencido).
+  const pedida = Number(requisito.maxTimeoutSeconds);
+  const vigencia = Number.isFinite(pedida) && pedida >= 1 ? Math.min(Math.floor(pedida), VIGENCIA_MAX_S) : VIGENCIA_MAX_S;
   const from = direccionDe(privKey);
   const { authorization, signature } = firmarAutorizacion({
     network: requisito.network,
@@ -180,7 +187,14 @@ async function leerCuerpo(r) {
 // ---- pagar ----
 // GET url → 402 con PAYMENT-REQUIRED → elegir → firmar → GET con PAYMENT-SIGNATURE → cuerpo y
 // PAYMENT-RESPONSE. Si la primera respuesta no es 402, se devuelve tal cual sin firmar nada.
-export async function pagar({ url, privKey, tope, fetch: fetchImpl = globalThis.fetch, redes, method = 'GET', headers = {}, body, timeoutMs = 30_000 }) {
+//
+// Se firma UNA vez, contra el primer 402. Si el servidor contesta con otro 402 (otro `payTo`, otro
+// precio, "sin fondos"), no se vuelve a firmar: se lanza. Y como la firma ya salió del proceso, es
+// un cheque que el servidor puede cobrar hasta que venza aunque haya dicho que no: todo error que
+// ocurra DESPUÉS de entregarla lleva `firmado: true`, `nonce`, `red`, `monto`, `destinatario` y
+// `pagador`, para que quien paga lo anote y concilie. `alFirmar(entregado)` se llama ANTES de
+// mandar la firma: es el sitio para escribir el registro antes del paso, no después.
+export async function pagar({ url, privKey, tope, fetch: fetchImpl = globalThis.fetch, redes, method = 'GET', headers = {}, body, timeoutMs = 30_000, alFirmar = null }) {
   if (!url) throw new Error('x402 pagador: falta url');
   if (tope == null) throw new Error('x402 pagador: tope (unidades atómicas) es obligatorio');
   const pedir = (extra = {}) => fetchImpl(url, { method, headers: { ...headers, ...extra }, body, signal: AbortSignal.timeout(timeoutMs) });
@@ -194,26 +208,31 @@ export async function pagar({ url, privKey, tope, fetch: fetchImpl = globalThis.
   try { pr = deB64(cabecera); } catch { throw new Error('x402 pagador: PAYMENT-REQUIRED no es JSON en base64'); }
   const requisito = elegirRequisito(pr, { redes });
   const pago = armarPago({ requisito, privKey, tope });
-
-  const segunda = await pedir({ 'PAYMENT-SIGNATURE': b64(pago) });
-  const cuerpo = await leerCuerpo(segunda);
-  let liquidacion = null;
-  const respuesta = segunda.headers.get('payment-response');
-  if (respuesta) { try { liquidacion = deB64(respuesta); } catch { liquidacion = null; } }
-  if (segunda.status === 402) {
-    let motivo = '';
-    try { motivo = deB64(segunda.headers.get('payment-required') || '').error || ''; } catch { /* sin motivo */ }
-    throw new Error(`x402 pagador: el servidor rechazó el pago${motivo ? `: ${motivo}` : ''}`);
-  }
-  return {
-    pagado: true,
-    status: segunda.status,
-    body: cuerpo,
-    liquidacion,
+  const entregado = {
+    firmado: true,
     red: requisito.network,
     monto: requisito.amount,
     destinatario: requisito.payTo,
     pagador: pago.payload.authorization.from,
     nonce: pago.payload.authorization.nonce,
+    validBefore: pago.payload.authorization.validBefore,
   };
+  if (alFirmar) await alFirmar(entregado);
+
+  try {
+    const segunda = await pedir({ 'PAYMENT-SIGNATURE': b64(pago) });
+    const cuerpo = await leerCuerpo(segunda);
+    let liquidacion = null;
+    const respuesta = segunda.headers.get('payment-response');
+    if (respuesta) { try { liquidacion = deB64(respuesta); } catch { liquidacion = null; } }
+    if (segunda.status === 402) {
+      let motivo = '';
+      try { motivo = deB64(segunda.headers.get('payment-required') || '').error || ''; } catch { /* sin motivo */ }
+      throw new Error(`x402 pagador: el servidor rechazó el pago${motivo ? `: ${motivo}` : ''}`);
+    }
+    return { pagado: true, status: segunda.status, body: cuerpo, liquidacion, ...entregado };
+  } catch (e) {
+    const err = e instanceof Error ? e : new Error(String(e));
+    throw Object.assign(err, entregado);
+  }
 }

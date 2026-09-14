@@ -43,6 +43,9 @@ try {
   r = await pagar({ url, privKey, tope, redes: red ? [red] : undefined });
 } catch (e) {
   // El mensaje de error del pagador nunca contiene la llave: sólo direcciones, montos y redes.
+  // Si la firma ya había salido, es un cheque vigente hasta `validBefore` aunque el servidor haya
+  // dicho que no: se imprime para poder conciliarlo contra la cadena.
+  if (e.firmado) console.error(`ATENCIÓN: la autorización ya se entregó (red ${e.red}, ${e.monto} unidades a ${e.destinatario}, nonce ${e.nonce}, vence ${e.validBefore}); el servidor puede liquidarla igual`);
   salir(`no se pagó: ${e.message}`);
 }
 privKey = null;

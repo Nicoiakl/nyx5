@@ -52,7 +52,7 @@ src/nucleo/keccak.js     Keccak-256 (el de Ethereum, NO sha3-256) en JS puro; sr
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador -> `npm test` (357)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador -> `npm test` (362)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 scripts/revision-adversarial.{md,mjs}  el guion adversarial por versión (NX-903) y su parte automatizable
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
@@ -61,7 +61,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 357 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 362 pruebas, todas deben pasar antes de cualquier commit
 npm run revision         # revisión adversarial automatizable contra una casa local (scripts/revision-adversarial.md)
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
@@ -525,3 +525,13 @@ Cuatro cosas que hay que saber para no romperlo:
 - `demo/x402-pagar.mjs` lee la llave de un archivo y nunca la imprime; MUEVE DINERO si la llave
   tiene fondos. Ejercitado sólo contra un servidor local. Correrlo contra algo real exige el OK de
   Nicholas (§8).
+- **Revisión adversarial (14-sep, cuatro medios arreglados con grito y silencio):** una llave
+  malformada ya no se cita en el error (`deHex` repetía 20 caracteres = 72 bits del secreto); un
+  `maxTimeoutSeconds` negativo firmaba un cheque ya vencido, ahora sólo acorta; una red llamada
+  `constructor` reventaba con TypeError en vez de rechazarse (`tokenDe` con `Object.hasOwn`); y
+  todo error DESPUÉS de entregar la firma lleva `firmado`, `nonce`, `red`, `monto`, `destinatario`
+  y `validBefore` (el servidor puede liquidar ese cheque aunque haya dicho que no), con `alFirmar`
+  para escribir el registro antes del paso. Se comprobó en vivo (`eth_call` a un RPC público, sólo
+  lectura) que `DOMAIN_SEPARATOR()` del USDC de Ethereum es el que calcula `separadorDeDominio`.
+  **Qué NO cubre**: un timeout en la segunda petición no distingue "no llegó" de "llegó y no
+  contestó"; el nonce del error sirve para mirar la cadena, no para saber sin mirarla.

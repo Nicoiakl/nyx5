@@ -387,3 +387,90 @@ test('pagar: si la casa rechaza el pago firmado, se dice el motivo y no se devue
   await assert.rejects(pagador.pagar({ url: 'http://x/y', privKey: LLAVE_1, tope: '10000', fetch: terco }), /rechazó el pago: settlement failed: sin fondos/);
   assert.equal(n, 2);
 });
+
+// ---------- revisión adversarial (14-sep-2026): lo que la primera pasada no cubría ----------
+
+test('ATAQUE · el dominio de otra red con el MISMO asset (sólo chainId difiere) recupera otra dirección', () => {
+  // La prueba de "otra red" de arriba cambia chainId Y contrato a la vez. Aquí sólo el chainId: si
+  // el separador dejara de incluirlo, una firma de Base Sepolia valdría en cualquier cadena con el
+  // mismo contrato (bridges y forks los tienen).
+  const auth = { from: DIR_1, to: COBRA, value: '1', validAfter: '0', validBefore: '10', nonce: '0x' + '44'.repeat(32) };
+  const a = pagador.firmarAutorizacion({ network: RED, ...auth, privKey: LLAVE_1 });
+  const dom = pagador.dominioDe(RED);
+  assert.equal(secp.recuperarDireccion(pagador.digestAutorizacion({ dominio: dom, ...a.authorization }), a.signature), DIR_1, 'SILENCIO: con el dominio correcto recupera');
+  assert.notEqual(secp.recuperarDireccion(pagador.digestAutorizacion({ dominio: { ...dom, chainId: dom.chainId + 1n }, ...a.authorization }), a.signature), DIR_1);
+  assert.notEqual(secp.recuperarDireccion(pagador.digestAutorizacion({ dominio: { ...dom, chainId: 1n }, ...a.authorization }), a.signature), DIR_1);
+});
+
+test('ATAQUE · maxTimeoutSeconds negativo, no numérico, fraccionario o enorme: la vigencia queda en (0, 300]', () => {
+  // Un servidor con maxTimeoutSeconds: -100 conseguía una autorización con validBefore en el
+  // pasado: un cheque ya vencido, firmado igual. Ahora el servidor sólo puede ACORTAR los 5 min.
+  const ahora = 1_800_000_000;
+  for (const mts of [-100, '-100', -1e9, 'abc', null, {}, 0, 0.5, Infinity, NaN, 1e9, '1e9', 3600]) {
+    const p = pagador.armarPago({ requisito: requisitoDe({ maxTimeoutSeconds: mts }), privKey: LLAVE_1, tope: '10000', ahora });
+    const vida = Number(p.payload.authorization.validBefore) - ahora;
+    assert.ok(vida >= 1 && vida <= pagador.VIGENCIA_MAX_S, `maxTimeoutSeconds=${JSON.stringify(mts)} dio una vigencia de ${vida} s`);
+  }
+  assert.equal(Number(pagador.armarPago({ requisito: requisitoDe({ maxTimeoutSeconds: 61.9 }), privKey: LLAVE_1, tope: '10000', ahora }).payload.authorization.validBefore), ahora + 61, 'SILENCIO: 61,9 se redondea hacia abajo, no falla');
+  assert.equal(Number(pagador.armarPago({ requisito: requisitoDe({ maxTimeoutSeconds: 1 }), privKey: LLAVE_1, tope: '10000', ahora }).payload.authorization.validBefore), ahora + 1);
+});
+
+test('ATAQUE · una llave malformada no se repite en el error, y la llave = n se rechaza como fuera de rango', () => {
+  // `deHex` cita los primeros 20 caracteres de lo que recibió: con una llave de 64 hex más un
+  // carácter de basura, eso eran 72 bits del secreto en un log.
+  const casi = '0xzz' + 'a1b2c3d4e5f6a7b8c9d0'.repeat(3) + 'ab';
+  for (const fn of [() => secp.direccionDe(casi), () => secp.firmar(keccak256('x'), casi), () => pagador.armarPago({ requisito: requisitoDe(), privKey: casi, tope: '10000' })]) {
+    let msg = null; try { fn(); } catch (e) { msg = e.message; }
+    assert.ok(msg, 'tiene que fallar');
+    assert.ok(!msg.includes('a1b2'), `el error repite la llave: ${msg}`);
+    assert.match(msg, /no es hex de 32 bytes/);
+  }
+  assert.throws(() => secp.direccionDe('0x' + secp.N.toString(16)), /fuera de rango/);
+  assert.equal(secp.direccionDe('0x' + (secp.N - 1n).toString(16)).length, 42, 'SILENCIO: n−1 es válida');
+});
+
+test('ATAQUE · una red llamada como una propiedad del prototipo se rechaza con motivo, no con un TypeError', () => {
+  // `TOKEN_USD['constructor']` es truthy (Object): el pagador seguía hasta reventar en `.toLowerCase`.
+  for (const net of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+    assert.throws(() => pagador.elegirRequisito({ x402Version: 2, accepts: [requisitoDe({ network: net })] }), /red que no sé pagar/, net);
+    assert.throws(() => pagador.dominioDe(net), /no sé pagar/, net);
+    assert.throws(() => pagador.armarPago({ requisito: requisitoDe({ network: net }), privKey: LLAVE_1, tope: '10000' }), /no sé pagar/, net);
+  }
+});
+
+test('ATAQUE · el payTo cambia en la segunda respuesta: se firmó UNA vez para el primero, no se vuelve a firmar, y el error dice qué cheque quedó afuera', async () => {
+  let n = 0; const firmas = [];
+  const pr1 = { x402Version: 2, resource: { url: 'u' }, accepts: [requisitoDe()] };
+  const pr2 = { x402Version: 2, resource: { url: 'u' }, accepts: [requisitoDe({ payTo: DIR_2 })], error: 'wrong payee' };
+  const f = async (u, o) => {
+    n++;
+    const s = o?.headers?.['PAYMENT-SIGNATURE'];
+    if (s) firmas.push(abrir(s));
+    return new Response('{}', { status: 402, headers: { 'PAYMENT-REQUIRED': b64(n === 1 ? pr1 : pr2) } });
+  };
+  const antes = [];
+  const e = await pagador.pagar({ url: 'http://x/y', privKey: LLAVE_1, tope: '10000', fetch: f, alFirmar: (x) => antes.push(x) }).then(() => null, (err) => err);
+  assert.match(e.message, /rechazó el pago: wrong payee/);
+  assert.equal(n, 2, 'dos peticiones y ninguna más');
+  assert.equal(firmas.length, 1, 'una sola firma');
+  assert.equal(firmas[0].payload.authorization.to, COBRA, 'firmada para el payTo del PRIMER 402');
+  // La firma ya salió: es un cheque hasta que venza. El error lo dice, para conciliar.
+  assert.equal(e.firmado, true);
+  assert.equal(e.nonce, firmas[0].payload.authorization.nonce);
+  assert.equal(e.red, RED); assert.equal(e.monto, '10000'); assert.equal(e.destinatario, COBRA); assert.equal(e.pagador, DIR_1);
+  assert.equal(e.validBefore, firmas[0].payload.authorization.validBefore);
+  // `alFirmar` corrió ANTES de mandar la firma, con los mismos datos: el registro antes del paso.
+  assert.equal(antes.length, 1); assert.equal(antes[0].nonce, e.nonce);
+  // Un fallo de red DESPUÉS de entregar la firma también lo dice.
+  let m = 0;
+  const caido = async (u, o) => { m++; if (!o?.headers?.['PAYMENT-SIGNATURE']) return new Response('{}', { status: 402, headers: { 'PAYMENT-REQUIRED': b64(pr1) } }); throw new TypeError('fetch failed'); };
+  const e2 = await pagador.pagar({ url: 'http://x/y', privKey: LLAVE_1, tope: '10000', fetch: caido }).then(() => null, (err) => err);
+  assert.match(e2.message, /fetch failed/); assert.equal(e2.firmado, true); assert.match(e2.nonce, /^0x[0-9a-f]{64}$/);
+  // SILENCIO: un error ANTES de firmar no lleva `firmado` (no hay cheque afuera).
+  const e3 = await pagador.pagar({ url: 'http://x/y', privKey: LLAVE_1, tope: '1', fetch: f }).then(() => null, (err) => err);
+  assert.match(e3.message, /supera el tope/); assert.equal(e3.firmado, undefined);
+  // Y la respuesta buena lleva los mismos campos (misma definición, no dos).
+  const bueno = async (u, o) => o?.headers?.['PAYMENT-SIGNATURE'] ? new Response('{"ok":1}', { status: 200 }) : new Response('{}', { status: 402, headers: { 'PAYMENT-REQUIRED': b64(pr1) } });
+  const r = await pagador.pagar({ url: 'http://x/y', privKey: LLAVE_1, tope: '10000', fetch: bueno });
+  assert.equal(r.pagado, true); assert.equal(r.firmado, true); assert.equal(r.destinatario, COBRA); assert.match(r.nonce, /^0x[0-9a-f]{64}$/);
+});

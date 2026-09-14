@@ -100,7 +100,11 @@ const aBig = (bytes) => { let r = 0n; for (const b of bytes) r = (r << 8n) | Big
 const a32 = (n) => deHex(n.toString(16).padStart(64, '0'));
 
 function llavePrivada(privKey) {
-  const bytes = privKey instanceof Uint8Array ? privKey : deHex(privKey);
+  // Una llave malformada NO se repite en el error: `deHex` cita los primeros 20 caracteres de lo
+  // que recibió, y en una llave con un carácter de más eso son 72 bits del secreto en un log.
+  let bytes;
+  try { bytes = privKey instanceof Uint8Array ? privKey : deHex(privKey); }
+  catch { throw new Error('secp256k1: la llave privada no es hex de 32 bytes'); }
   if (bytes.length !== 32) throw new Error('secp256k1: la llave privada son 32 bytes');
   const d = aBig(bytes);
   if (d === 0n || d >= N) throw new Error('secp256k1: llave privada fuera de rango');
