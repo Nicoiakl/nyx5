@@ -22,11 +22,23 @@ let tmp, casa, duena, pregunton, extrano, asis;
 const pedidos = [];
 let proxima = null; // lo que responde la API simulada la próxima vez
 const USO = { input_tokens: 100, cache_creation_input_tokens: 5000, cache_read_input_tokens: 0, output_tokens: 200 };
+// La API se simula como la real: en flujo (SSE) cuando el cuerpo lo pide y la respuesta es 200; un
+// error viene como JSON. Así se prueba el lector del flujo, no una forma que la API ya no usa.
+const sse = (j) => {
+  const partes = [`event: message_start\ndata: ${JSON.stringify({ type: 'message_start', message: { usage: { input_tokens: j.usage.input_tokens, cache_creation_input_tokens: j.usage.cache_creation_input_tokens || 0, cache_read_input_tokens: j.usage.cache_read_input_tokens || 0 } } })}`];
+  for (const b of j.content || []) if (b.type === 'text') for (const trozo of b.text.match(/.{1,5}/g) || []) partes.push(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: trozo } })}`);
+  partes.push(`event: message_delta\ndata: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: j.stop_reason }, usage: { output_tokens: j.usage.output_tokens } })}`);
+  partes.push('event: message_stop\ndata: {"type":"message_stop"}');
+  return partes.join('\n\n') + '\n\n';
+};
 const apiFalsa = async (url, init) => {
-  pedidos.push({ url, headers: init.headers, body: JSON.parse(init.body) });
+  const body = JSON.parse(init.body);
+  pedidos.push({ url, headers: init.headers, body });
   const r = proxima || { status: 200, json: { content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: `respuesta ${pedidos.length}` }], stop_reason: 'end_turn', usage: USO } };
   proxima = null;
-  return new Response(JSON.stringify(r.json), { status: r.status, headers: { 'content-type': 'application/json' } });
+  assert.equal(body.stream, true, 'toda llamada va en flujo');
+  if (r.status !== 200) return new Response(JSON.stringify(r.json), { status: r.status, headers: { 'content-type': 'application/json' } });
+  return new Response(sse(r.json), { status: 200, headers: { 'content-type': 'text/event-stream' } });
 };
 const admin = (metodo, ruta, body) => fetch(`${URL_CASA}${ruta}`, { method: metodo, headers: { authorization: 'Bearer t', 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(async (r) => ({ status: r.status, body: await r.json() }));
 const respuestaA = (quien, desde) => quien.waitFor((e) => e.from === asis.address && Date.parse(e.created) > desde, { timeoutMs: 8000 });

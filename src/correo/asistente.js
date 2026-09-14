@@ -41,6 +41,22 @@ export function costoDe(modelo, u = {}) {
   return ((u.input_tokens || 0) * p.entrada + (u.cache_creation_input_tokens || 0) * p.escrituraCache
     + (u.cache_read_input_tokens || 0) * p.lecturaCache + (u.output_tokens || 0) * p.salida) / 1e6;
 }
+// Lee el flujo SSE de la API y devuelve la misma forma que una respuesta sin flujo:
+// { content: [{ type: 'text', text }], stop_reason, usage }. Un evento `error` corta con su mensaje.
+export async function leerFlujo(r) {
+  const texto = await r.text();
+  const out = { content: [{ type: 'text', text: '' }], stop_reason: null, usage: {} };
+  for (const bloque of texto.split('\n\n')) {
+    const linea = bloque.split('\n').find((l) => l.startsWith('data:'));
+    if (!linea) continue;
+    let ev; try { ev = JSON.parse(linea.slice(5).trim()); } catch { continue; }
+    if (ev.type === 'message_start') Object.assign(out.usage, ev.message?.usage || {});
+    else if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') out.content[0].text += ev.delta.text;
+    else if (ev.type === 'message_delta') { out.stop_reason = ev.delta?.stop_reason ?? out.stop_reason; Object.assign(out.usage, ev.usage || {}); }
+    else if (ev.type === 'error') throw new Error(`la API cortó el flujo: ${ev.error?.message || 'sin detalle'}`);
+  }
+  return out;
+}
 function textoDe(c) {
   const b = c?.body;
   if (typeof b === 'string') return b;
@@ -128,13 +144,17 @@ async function responder(est, local, cfg, m) {
   // devolver un rechazo; un rechazo final llega igual como stop_reason "refusal".
   const respaldo = CON_RESPALDO.has(cuerpo.model);
   if (respaldo) cuerpo.fallbacks = 'default';
+  // Siempre en streaming (14-sep-2026): una respuesta larga (qa@ con esfuerzo alto) tardaba más de
+  // 100 s y el fetch del edge volvía con 524 antes de que la API terminara. Con el flujo abierto
+  // no hay ese tope; el texto se arma con los deltas y el usage llega en el último evento.
+  cuerpo.stream = true;
   const r = await est.asistente.fetch(API_MENSAJES, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': est.asistente.apiKey, 'anthropic-version': '2023-06-01', ...(respaldo ? { 'anthropic-beta': 'server-side-fallback-2026-07-01' } : {}) },
     body: JSON.stringify(cuerpo),
   });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`la API respondió ${r.status}: ${j?.error?.message || 'sin detalle'}`);
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(`la API respondió ${r.status}: ${e?.error?.message || 'sin detalle'}`); }
+  const j = (r.headers.get('content-type') || '').includes('text/event-stream') ? await leerFlujo(r) : await r.json();
   const usd = costoDe(cuerpo.model, j.usage);
   gasto.usd += usd; gasto.llamadas += 1;
   await est.store.kvPut('asistente-gasto', clave, gasto);
