@@ -188,6 +188,56 @@ La clave pública sale de `data/sigo.uk/domain.json` (`keys[0].sig`). Sin DNS, e
 
 Cada `/inbound` hace: dos GET cacheados (tarjetas, 5 min), dos verificaciones Ed25519 (microsegundos), una escritura. Un solo proceso Node maneja miles de sobres por minuto. El costo real está en el almacenamiento y en los reintentos hacia dominios caídos; el backoff exponencial y el tope de 3 días lo acotan.
 
+### 4.6 Asistentes de la casa y qa@ (NX-606)
+
+Un asistente es una dirección que contesta sola con la API de Anthropic (`src/correo/asistente.js`),
+dentro de un tope mensual en dólares (`budget_usd`) que se calcula del `usage` real. Hay dos modos de
+alta, los dos por `POST /admin/assistants` con `Bearer <admin>`:
+
+- **Delegado** (el asistente de Sigo): `{ local, keys, config }` sobre una dirección delegada de sólo
+  mensajes que ya existe. No tiene cuenta en el Libro.
+- **De sistema** (qa@): `{ local, keys, config, system: true }`. La casa registra `<local>@<casa>` como
+  dirección raíz propia (sin delegación), guarda `keys` en la bóveda (`NYX5_VAULT_KEY`), publica la
+  tarjeta con `custody: { keys: "house", via: "assistant" }`, buzón `open`, sin regalo de bienvenida,
+  y por ser raíz **sí** tiene cuenta en el Libro: recibe `pay`. Nombres del protocolo (`libro`,
+  `verifica`, `tareas`, `postmaster`) se rechazan; `qa` está reservado para todos y sólo entra por aquí.
+
+Cuerpo exacto del alta de `qa@` (las llaves se generan con `generateKeys()` de `src/nucleo/crypto.js`
+y NO se guardan fuera de la bóveda; el script que las genera y hace el POST vive fuera del repo):
+
+```json
+{
+  "local": "qa",
+  "system": true,
+  "keys": { "sig": "<pub>", "sigPriv": "<priv>", "enc": "<pub>", "encPriv": "<priv>" },
+  "config": {
+    "owner": "nicholas@nyx5.com",
+    "model": "claude-opus-5", "effort": "high", "max_tokens": 8000, "budget_usd": 30,
+    "persona": "<persona de Spec>",
+    "seal": true,
+    "price_tokens": 400,
+    "gate": true, "gate_price_tokens": 400, "gate_abstain_tokens": 200,
+    "persona_gate": ""
+  }
+}
+```
+
+`persona_gate` vacío usa `PERSONA_GATE` (la del código). Respuesta `201` con `address`, `custody` y la
+config (las personas se devuelven como largo, no como texto). `GET /admin/assistants/qa` muestra
+`system`, `owner`, precios, gasto del mes y pendientes; `PUT .../config` cambia precios y personas sin
+volver a dar de alta; `POST .../pause` y `.../resume`. Sin `ANTHROPIC_API_KEY` el asistente existe y
+no llama a nada.
+
+Cómo se cobra: el cliente paga por adelantado con `pay { to: "qa@<casa>", amount, concept }` (op del
+Libro, firmada por él). Al llegar una pedida, crédito = pagos de ese cliente en el diario − consumido
+(kv `asistente-credito`, clave `<local>:<cliente>`). Si no alcanza, la respuesta lo dice y **no se
+llama a la API**. Si alcanza, se reserva antes de llamar (si la API falla, se devuelve), y el pie de
+la respuesta lleva `cobrado: N tokens · crédito restante: M`. El dueño (`owner`) y sus delegados no
+pagan. Gate (`application/nyx5.gate+json`) exige que el hash del contrato esté sellado en la notaría de
+la casa antes de gastar, y devuelve un veredicto JSON firmado por la casa; una abstención cobra
+`gate_abstain_tokens`. Qué NO cubre: Gate no descarga `delivery.url` y no exige que el sello sea del
+cliente (lo anota en `sealed_by`).
+
 ## 5. Interoperabilidad
 
 - **MCP**: `nyx5 mcp --agent keys/x.json` expone el agente como servidor MCP por stdio. Configuración para Claude Desktop en el README. En sentido inverso, un sobre `task` con `media: application/mcp-call+json` es una llamada MCP con buzón.

@@ -28,7 +28,7 @@ src/libro/contratos.js   máquinas de estado sobre el kernel: ops {accept, deliv
 src/libro/estado.js      NX-501: boleta del asiento (fee y comisión leídos de las líneas) y estado de cuenta por rango, JSON o CSV
 src/libro/errores.js     LibroError(code, message)
 src/libro/notaria.js     notaría (NX-601): sella un hash con fecha y firma de la casa, gratis, sin asiento; verificación pública en /notaria/*
-src/puentes/herramientas.js las 25 herramientas MCP, UN módulo para los dos puentes (MENSAJERIA = las 13 del remoto)
+src/puentes/herramientas.js las 27 herramientas MCP, UN módulo para los dos puentes (MENSAJERIA = las 15 del remoto)
 src/puentes/mcp.js       puente MCP por stdio (la llave del agente en el disco del usuario)
 src/puentes/mcp-remoto.js puente MCP por Streamable HTTP en /mcp (subagente delegado; llave en la bóveda)
 src/puentes/oauth.js     servidor OAuth 2.1 del conector: RFC 9728/8414/7591, PKCE S256, rotación de refresco
@@ -41,6 +41,7 @@ src/plataformas/worker.js adaptador Cloudflare Workers (fetch + scheduled); conf
 migrations/000{2..9}*.sql   esquema D1, candado, pins, eventos, 0006: nyx5_kv (OAuth + bóveda) e índice de historial, 0007: índice con reputación y precio (recrea nyx5_indice_agentes), 0008: nyx5_notaria, 0009: índice por estado de contrato
 bin/nyx5.js           CLI
 demo/                    e2e, offline, spam (correo) · contratos (libro) · piloto-d4 (economía de una flota + costo por entrega)
+src/correo/asistente.js  asistentes (contestan solos con la API de Anthropic): tope mensual, sello, y qa@ como servicio (NX-606): crédito por `pay`, Spec y Gate
 src/correo/unirse.js     join (alta en un paso) y mandate (tope del humano) como funciones testeables
 src/correo/indice.js     búsqueda del índice (NX-302): columnas de la tarjeta, puntaje arbitrado, cursor opaco por generación, filtros; UNA definición para FileStore y D1Store
 src/libro/verifica.js    evaluador de referencia: http_status | sha256 | json_path | regex | size | header | exit_0; veredicto y "indeciso"; `pruebaDeAceptacion` (NX-305: la prueba de un pedido al catálogo)
@@ -49,7 +50,7 @@ src/puentes/x402.js      adaptador x402 v2: PAYMENT-REQUIRED / PAYMENT-SIGNATURE
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision -> `npm test` (ver npm test)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa -> `npm test` (ver npm test)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 scripts/revision-adversarial.{md,mjs}  el guion adversarial por versión (NX-903) y su parte automatizable
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
@@ -456,6 +457,26 @@ lee y falla ANTES de firmar si falta uno o la URL no es https. Tres cosas que no
   el catálogo entre el pedido y la cotización, la casa rechaza al aceptar (§15) y `hire` devuelve
   `status: rejected` con la razón de la casa. Y una cotización que no llega en `wait` segundos deja el
   pedido en el buzón del vendedor: `no_quote` no es "no vende", es "no contestó todavía".
+**qa@ como servicio (NX-606 fase 1, 14-sep-2026)** — `src/correo/asistente.js` + `_altaAsistenteSistema`
+en la estafeta, `test/qa.test.js`, SPEC §23c, ARQUITECTURA §4.6 (cómo se da de alta). Decisiones de
+Nicholas: Spec 400 tokens; Gate 400 si dictamina (pass o fail) y 200 si se abstiene; falsos fail = 0.
+- **Asistente de SISTEMA**: `POST /admin/assistants { local, keys, config, system: true }` registra
+  `<local>@<casa>` como dirección raíz de la casa (llaves propias en la bóveda, `custody.via =
+  assistant`, buzón `open`, SIN delegación) y por eso SÍ tiene cuenta en el Libro: recibe `pay`.
+  `qa` está en `RESERVED`: sólo un asistente de sistema vive ahí. El modo delegado sigue intacto.
+- **Cobro por crédito**: crédito = `pay` recibidos de ese cliente (diario, `meta.kind = pay`) menos
+  lo consumido (kv `asistente-credito` `<local>:<cliente>`). Sin crédito se contesta SIN llamar a
+  la API. Se reserva ANTES de llamar y se devuelve si la API falla. Un candado por cliente
+  (`asistente-cliente`) evita que dos relojes cobren dos respuestas con un solo crédito. El dueño
+  (`config.owner`) y sus delegados no pagan.
+- **Gate** (`application/nyx5.gate+json`): el cliente TRAE el contrato; la casa comprueba
+  `sha256(spec) === spec_sha256` y que el hash esté sellado en la notaría antes de gastar. El
+  veredicto es JSON firmado por la casa (`tipo: veredicto`) dentro del texto de la respuesta.
+  `parsearVeredicto` degrada a abstención un fail sin criterio incumplido con evidencia y un pass
+  con algún criterio que no se cumple; un JSON inválido o `stop_reason: refusal` = abstención.
+  **Qué NO cubre**: Gate no descarga `delivery.url` (sólo evalúa `delivery.text`), no exige que el
+  sello sea del cliente (anota `sealed_by`), y no detecta un fail con evidencia inventada pero
+  bien formada: por eso el veredicto viaja con la evidencia citada.
 
 **Trampa: los contadores de puertos (11-sep-2026).** Cuatro suites levantan casas con
 `let puerto = N` + `puerto++`. El guard sólo veía constantes, y una suite nueva en 4231 chocaba con
