@@ -60,6 +60,10 @@ const rutaCors = (p) => p.startsWith('/.well-known/oauth-') || p === '/oauth/reg
 // del usuario a los siete días sin abrirla.
 const MANIFIESTO = { name: 'Nyx5', short_name: 'Nyx5', start_url: '/app', scope: '/', display: 'standalone', background_color: '#FFFFFF', theme_color: '#12A594', icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }] };
 
+// Direcciones por petición en GET /agents/historial?addresses=… (NX-905). El rastreo del índice
+// pide lotes de este tamaño y una casa que no tenga la ruta (versión anterior) contesta 404.
+export const HISTORIAL_LOTE_MAX = 50;
+
 export class Estafeta {
   constructor({
     domain, dataDir, store, adminToken,
@@ -242,7 +246,7 @@ export class Estafeta {
     if (!local || Estafeta.RESERVED.has(local) || local.length < (this.policy.min_name_length || 0)) return false;
     return !(await this.store.getAgent(local));
   }
-  static RESERVED = new Set(['postmaster', 'libro', 'verifica', 'tareas', 'casa', 'admin', 'root', 'abuse', 'security', 'hostmaster', 'noreply', 'no-reply', 'support', 'estafeta', 'nyx5', 'indice']);
+  static RESERVED = new Set(['postmaster', 'libro', 'verifica', 'tareas', 'casa', 'admin', 'root', 'abuse', 'security', 'hostmaster', 'noreply', 'no-reply', 'support', 'estafeta', 'nyx5', 'indice', 'historial']);
 
   // ---------- servicio de registro ----------
   // Invitaciones: la casa emite códigos con usos y vencimiento; un agente los presenta al inscribirse.
@@ -1051,7 +1055,7 @@ export class Estafeta {
   async _verificarPendientes() {
     const arbitro = `verifica@${this.domain}`;
     let contratos;
-    try { contratos = await this.store.libroListContracts(); } catch { return; }
+    try { contratos = await this.store.libroListContracts({ state: ['held', 'delivered'] }); } catch { return; }
     const candidatos = contratos.filter((c) => c.kind === 'escrow' && ['held', 'delivered'].includes(c.state) && c.arbiter === arbitro && pruebasDe(c));
     for (const c of candidatos.slice(0, this.verifica.maxPorTick)) {
       // Solo se verifica lo que ya se declaró entregado, salvo que el contrato pida verificar
@@ -1085,7 +1089,7 @@ export class Estafeta {
   // comprobar las fechas; aquí sólo se elige a quién mirar.
   async _liberarVencidos() {
     let contratos;
-    try { contratos = await this.store.libroListContracts(); } catch { return; }
+    try { contratos = await this.store.libroListContracts({ state: 'delivered' }); } catch { return; }
     const ahora = now();
     const vencidos = contratos.filter((c) => {
       if (c.kind !== 'escrow' || c.state !== 'delivered') return false;
@@ -1459,24 +1463,45 @@ export class Estafeta {
   // tumba el rastreo: esa tarjeta entra sin puntaje (al final del orden), y el número queda escrito.
   async _indexReputacion(cards, dc, propia) {
     const cuenta = { pedidas: cards.length, con_puntaje: 0, sin_historial: 0, sin_arbitrados: 0, fallidas: 0 };
-    const LOTE = 4;
-    for (let i = 0; i < cards.length; i += LOTE) {
-      await Promise.all(cards.slice(i, i + LOTE).map(async (c) => {
-        c._score = null; c._jobs_done = null;
-        let hist;
+    const anotar = (c, hist) => { const r = puntajeDe(hist); c._score = r.score; c._jobs_done = r.jobs_done; if (r.motivo) cuenta[r.motivo] += 1; else cuenta.con_puntaje += 1; };
+    const localDe = (c) => String(c.address).slice(0, String(c.address).lastIndexOf('@'));
+    const fallo = (c, e) => { cuenta.fallidas += 1; this.log(`índice: sin historial de ${c.address}: ${e.message}`); };
+    for (const c of cards) { c._score = null; c._jobs_done = null; }
+    if (propia) {
+      // Local, y los contratos se leen una vez para todas las tarjetas.
+      const contratos = await this.store.libroListContracts();
+      for (const c of cards) { try { anotar(c, await this.libro.historial(c.address, { contratos })); } catch (e) { fallo(c, e); } }
+      return cuenta;
+    }
+    // Casa ajena: en lotes por GET /agents/historial?addresses=… (NX-905), una subpetición por cada
+    // HISTORIAL_LOTE_MAX tarjetas en vez de una por tarjeta. Una casa de una versión anterior no
+    // tiene la ruta (404): desde ahí se pide de a una, como antes, de a pocas a la vez.
+    let enLote = true;
+    for (let i = 0; i < cards.length; i += HISTORIAL_LOTE_MAX) {
+      const lote = cards.slice(i, i + HISTORIAL_LOTE_MAX);
+      if (enLote) {
+        let respuesta = null;
         try {
-          if (propia) hist = await this.libro.historial(c.address);
-          else {
-            const local = String(c.address).slice(0, String(c.address).lastIndexOf('@'));
-            const res = await this.fetch(`${dc._estafeta}/agents/${encodeURIComponent(local)}/historial`, { signal: AbortSignal.timeout(10_000) });
+          const res = await this.fetch(`${dc._estafeta}/agents/historial?addresses=${encodeURIComponent(lote.map(localDe).join(','))}`, { signal: AbortSignal.timeout(10_000) });
+          if (res.status === 404) enLote = false;
+          else if (!res.ok) throw new Error(`historial en lote -> ${res.status}`);
+          else respuesta = await res.json();
+        } catch (e) { this.log(`índice: el lote de historiales de ${dc.domain || ''} falló (${e.message}); se pide de a uno`); }
+        if (respuesta) {
+          for (const c of lote) { const h = respuesta.historiales?.[localDe(c)]; if (h) anotar(c, h); else fallo(c, new Error('missing from the batch reply')); }
+          continue;
+        }
+      }
+      const POCAS = 4;
+      for (let j = 0; j < lote.length; j += POCAS) {
+        await Promise.all(lote.slice(j, j + POCAS).map(async (c) => {
+          try {
+            const res = await this.fetch(`${dc._estafeta}/agents/${encodeURIComponent(localDe(c))}/historial`, { signal: AbortSignal.timeout(10_000) });
             if (!res.ok) throw new Error(`historial -> ${res.status}`);
-            hist = await res.json();
-          }
-        } catch (e) { cuenta.fallidas += 1; this.log(`índice: sin historial de ${c.address}: ${e.message}`); return; }
-        const r = puntajeDe(hist);
-        c._score = r.score; c._jobs_done = r.jobs_done;
-        if (r.motivo) cuenta[r.motivo] += 1; else cuenta.con_puntaje += 1;
-      }));
+            anotar(c, await res.json());
+          } catch (e) { fallo(c, e); }
+        }));
+      }
     }
     return cuenta;
   }
@@ -1542,6 +1567,10 @@ export class Estafeta {
     const send = (status, body, headers = null) => (headers ? { status, body, headers } : { status, body });
     // Un 429 dice cuándo volver: Retry-After en segundos hasta la ventana siguiente.
     const tarde = (body) => send(429, body, this._retryAfter());
+    // Un segmento que no se puede decodificar (`%E0%A4%A`) se usa TAL CUAL: nunca es un nombre
+    // válido, así que cae al mismo 404/400 que un inexistente. Antes decodeURIComponent lanzaba
+    // URIError y la ruta contestaba 500 (revisión adversarial del 14-sep).
+    const dec = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
     let m;
     try {
       if (rx.method === 'GET' && path === '/health') return send(200, { ok: true, domain: this.domain, agents: (await this.store.listAgents()).length, queue: (await this.store.listQueue()).length });
@@ -1560,12 +1589,12 @@ export class Estafeta {
       // ----- Asistentes (sólo la casa los configura; el dueño los pide) -----
       if ((m = /^\/admin\/assistants(?:\/([^/]+))?(?:\/(knowledge|config|pause|resume))?$/.exec(path))) {
         if ((rx.headers.authorization || '') !== `Bearer ${this.adminToken}`) return send(401, { reason: 'only the house configures assistants' });
-        return this._adminAsistente(rx, m[1] ? decodeURIComponent(m[1]).toLowerCase() : null, m[2] || null);
+        return this._adminAsistente(rx, m[1] ? dec(m[1]).toLowerCase() : null, m[2] || null);
       }
       // ----- Ficha pública: la edita el dueño de la dirección o el dueño de su delegación -----
       if (rx.method === 'POST' && (m = /^\/agents\/([^/]+)\/profile$/.exec(path))) {
         const who = await this._authenticate(rx, path);
-        const l = decodeURIComponent(m[1]).toLowerCase();
+        const l = dec(m[1]).toLowerCase();
         const rec = Estafeta.validLocal(l) ? await this.store.getAgent(l) : null;
         if (!rec || rec.revoked) return send(404, { reason: 'no such agent' });
         // Una dirección de sólo mensajes no edita ficha alguna, ni la suya: lo que se publica en
@@ -1586,7 +1615,7 @@ export class Estafeta {
       // ----- Presencia: «visto por última vez», sólo con opt-in del dueño -----
       if (rx.method === 'GET' && (m = /^\/agents\/([^/]+)\/presence$/.exec(path))) {
         if (!await this.rate.allow(`resolve:${rx.ip || 'x'}`)) return tarde({ reason: 'too many requests' });
-        const l = decodeURIComponent(m[1]).toLowerCase();
+        const l = dec(m[1]).toLowerCase();
         if (!Estafeta.validLocal(l)) return send(400, { reason: 'invalid agent name' });
         // Un inexistente contesta «sin presencia»; un secreto, a quien no lo ve, exactamente lo mismo.
         const quien = await this._quienPregunta(rx, path);
@@ -1601,7 +1630,7 @@ export class Estafeta {
       }
       if ((m = /^\/groups\/([^/]+)\/members$/.exec(path))) {
         const who = await this._authenticate(rx, path);
-        const l = decodeURIComponent(m[1]).toLowerCase();
+        const l = dec(m[1]).toLowerCase();
         if (!Estafeta.validLocal(l)) return send(400, { reason: 'invalid group name' });
         const r = rx.method === 'GET' ? await this.miembrosGrupo(who, l) : rx.method === 'POST' ? await this.editarGrupo(who, l, rx.body || {}) : { status: 405, body: { reason: 'method not allowed here' } };
         return send(r.status, r.body);
@@ -1693,7 +1722,7 @@ export class Estafeta {
       // lo dice: "no hay nada que pagar" es una respuesta, no un error.
       const mX402 = rx.method === 'GET' ? /^\/x402\/inbox\/([^/]+)$/.exec(path) : null;
       if (mX402) {
-        const local = decodeURIComponent(mX402[1]).toLowerCase();
+        const local = dec(mX402[1]).toLowerCase();
         const quien = await this._quienPregunta(rx, path);
         const rec = await this.store.getAgent(local);
         if (!rec || !await this._visibleA(rec, quien)) return send(404, { reason: 'no such agent' });
@@ -1733,8 +1762,30 @@ export class Estafeta {
       // Reputación = una consulta al libro. Es PÚBLICA a propósito: sirve justamente para que
       // un desconocido decida antes de contratar, igual que la tarjeta. No expone contenido ni
       // contrapartes: solo cuántas entregas, cuántas fianzas y cuántos tokens se movieron.
+      // Historial en LOTE (NX-905): el rastreo del índice pedía uno por agente, 1+N subpeticiones
+      // por casa ajena, y el edge las tiene contadas. Público como el individual, hasta 50
+      // direcciones por petición, limitado por IP. Una dirección que no existe, que es de otra
+      // casa o que es secreta para quien pregunta vale `null`: la misma respuesta, sin oráculo.
+      // `requested`/`found` son el denominador: cuántas se pidieron y cuántas se resolvieron.
+      if (rx.method === 'GET' && path === '/agents/historial' && rx.query.has('addresses')) {
+        if (!await this.rate.allow(`historial:${rx.ip || 'x'}`)) return tarde({ reason: 'too many requests' });
+        const pedidas = [...new Set(String(rx.query.get('addresses')).split(',').map((x) => x.trim().toLowerCase()).filter(Boolean))];
+        if (!pedidas.length) return send(400, { reason: 'addresses must list at least one address, separated by commas' });
+        if (pedidas.length > HISTORIAL_LOTE_MAX) return send(400, { reason: `addresses: at most ${HISTORIAL_LOTE_MAX} per request, got ${pedidas.length}` });
+        const quien = await this._quienPregunta(rx, path);
+        // Los contratos se leen UNA vez para todo el lote, no una por dirección.
+        const contratos = await this.store.libroListContracts();
+        const historiales = {};
+        for (const dir of pedidas) {
+          let local = dir, dom = this.domain;
+          if (dir.includes('@')) { try { ({ local, domain: dom } = parseAddress(dir)); } catch { historiales[dir] = null; continue; } }
+          const rec = dom === this.domain && Estafeta.validLocal(local) ? await this.store.getAgent(local) : null;
+          historiales[dir] = rec && await this._visibleA(rec, quien) ? await this.libro.historial(`${local}@${this.domain}`, { contratos }) : null;
+        }
+        return send(200, { house: this.domain, requested: pedidas.length, found: Object.values(historiales).filter(Boolean).length, historiales });
+      }
       if (rx.method === 'GET' && (m = /^\/agents\/([^/]+)\/historial$/.exec(path))) {
-        const local = decodeURIComponent(m[1]).toLowerCase();
+        const local = dec(m[1]).toLowerCase();
         const quien = await this._quienPregunta(rx, path);
         const rec = Estafeta.validLocal(local) ? await this.store.getAgent(local) : null;
         if (!rec || !await this._visibleA(rec, quien)) return send(404, { reason: 'no such agent' });
@@ -1745,7 +1796,7 @@ export class Estafeta {
       // declarante se muestra sólo si «nadie» lo vería (_visibleA con quien = null).
       if (rx.method === 'GET' && (m = /^\/notaria\/(?:sello\/([^/]+)|([0-9a-fA-F]{64}))$/.exec(path))) {
         if (!await this.rate.allow(`notaria:${rx.ip || 'x'}`)) return tarde({ reason: 'too many requests' });
-        let idSello = null; if (m[1]) { try { idSello = decodeURIComponent(m[1]); } catch { return send(404, { reason: 'no such seal' }); } }
+        let idSello = null; if (m[1]) { idSello = dec(m[1]); }
         const docs = idSello ? [await this.store.notariaGet(idSello)].filter(Boolean) : await this.store.notariaList(m[2].toLowerCase());
         if (!docs.length) return send(404, { reason: 'no such seal' });
         const seals = [];
@@ -1757,7 +1808,7 @@ export class Estafeta {
         // mismas cabeceras. Lo cuida test/visibilidad.test.js comparando los dos byte a byte.
         // Quién pregunta se resuelve ANTES de mirar si existe: el orden es parte de la igualdad.
         const quien = await this._quienPregunta(rx, path);
-        const card = await this.agentCard(decodeURIComponent(m[1]).toLowerCase());
+        const card = await this.agentCard(dec(m[1]).toLowerCase());
         if (!card || !await this._visibleA(card, quien)) return send(404, { reason: 'no such agent' });
         return send(200, card);
       }
@@ -1832,7 +1883,7 @@ export class Estafeta {
       }
       if (rx.method === 'GET' && (m = /^\/mailbox\/([^/]+)$/.exec(path))) {
         const who = await this._authenticate(rx, path);
-        if (who.local !== decodeURIComponent(m[1]).toLowerCase()) return send(403, { reason: 'not your mailbox' });
+        if (who.local !== dec(m[1]).toLowerCase()) return send(403, { reason: 'not your mailbox' });
         const limit = Number(rx.query.get('limit') || 50);
         // los N más recientes (listMail viene en orden cronológico): con muchos mensajes viejos
         // sin ackear, slice(0,limit) escondía justo los nuevos. slice(-limit) muestra los últimos.
@@ -1840,7 +1891,7 @@ export class Estafeta {
       }
       if (rx.method === 'POST' && (m = /^\/mailbox\/([^/]+)\/ack$/.exec(path))) {
         const who = await this._authenticate(rx, path);
-        if (who.local !== decodeURIComponent(m[1]).toLowerCase()) return send(403, { reason: 'not your mailbox' });
+        if (who.local !== dec(m[1]).toLowerCase()) return send(403, { reason: 'not your mailbox' });
         const { ids = [] } = rx.body || {};
         const acked = [];
         for (const id of ids) if (await this.store.ackMail(who.local, id)) acked.push(id);
@@ -1852,7 +1903,7 @@ export class Estafeta {
       // ----- Tiempo real, historial, conectores y tarjetas ajenas -----
       if (rx.method === 'GET' && (m = /^\/mailbox\/([^/]+)\/wait$/.exec(path))) {
         const who = await this._authenticate(rx, path);
-        if (who.local !== decodeURIComponent(m[1]).toLowerCase()) return send(403, { reason: 'not your mailbox' });
+        if (who.local !== dec(m[1]).toLowerCase()) return send(403, { reason: 'not your mailbox' });
         const q = Object.fromEntries(rx.query);
         const segundos = Math.max(0, Math.min(Number(q.timeout ?? 25) || 0, 90));
         const msg = await this.esperarCorreo(who.local, { from: q.from || null, thread: q.thread || null, since: q.since || null, project: q.project ? nombreDeProyecto(q.project) : null, timeoutMs: segundos * 1000 });
@@ -1860,7 +1911,7 @@ export class Estafeta {
       }
       if (rx.method === 'GET' && (m = /^\/conversations\/([^/]+)$/.exec(path))) {
         const who = await this._authenticate(rx, path);
-        if (who.local !== decodeURIComponent(m[1]).toLowerCase()) return send(403, { reason: 'not your conversations' });
+        if (who.local !== dec(m[1]).toLowerCase()) return send(403, { reason: 'not your conversations' });
         const con = rx.query.get('with');
         const limit = Math.max(1, Math.min(Number(rx.query.get('limit') || 50) || 50, 500));
         const project = rx.query.get("project") ? nombreDeProyecto(rx.query.get("project")) : null;
@@ -1869,11 +1920,11 @@ export class Estafeta {
       }
       if (rx.method === 'GET' && (m = /^\/delegations\/([^/]+)$/.exec(path))) {
         const who = await this._authenticate(rx, path);
-        if (who.local !== decodeURIComponent(m[1]).toLowerCase()) return send(403, { reason: 'not your delegations' });
+        if (who.local !== dec(m[1]).toLowerCase()) return send(403, { reason: 'not your delegations' });
         return send(200, { delegations: await this.delegados(who.local) });
       }
       if (rx.method === 'POST' && (m = /^\/agents\/([^/]+)\/revoke$/.exec(path))) {
-        const sub = decodeURIComponent(m[1]).toLowerCase();
+        const sub = dec(m[1]).toLowerCase();
         if (!Estafeta.validLocal(sub)) return send(400, { reason: 'invalid agent name' });
         const rec = await this.store.getAgent(sub);
         if (!rec?.delegation) return send(404, { reason: 'no such subagent' });
@@ -1893,7 +1944,7 @@ export class Estafeta {
       // cifrado del destinatario tendría que mandar en claro.
       if (rx.method === 'GET' && (m = /^\/resolve\/([^/]+)$/.exec(path))) {
         if (!await this.rate.allow(`resolve:${rx.ip || 'x'}`)) return tarde({ reason: 'too many requests' });
-        let addr; try { addr = decodeURIComponent(m[1]).toLowerCase(); parseAddress(addr); } catch { return send(400, { reason: 'invalid address' }); }
+        let addr; try { addr = dec(m[1]).toLowerCase(); parseAddress(addr); } catch { return send(400, { reason: 'invalid address' }); }
         // Para quién se resuelve: el agente de esta casa que firma la petición, si alguno. A una
         // dirección secreta de esta casa se le aplica la misma regla que en /agents/<l>; a una de
         // otra casa, la casa pregunta «para» ese agente y la otra decide.
@@ -1931,13 +1982,13 @@ export class Estafeta {
       }
       if (rx.method === 'GET' && (m = /^\/libro\/cuenta\/([^/]+)$/.exec(path))) {
         const who = await this._authenticate(rx, path, { allowForeign: true });
-        const address = decodeURIComponent(m[1]).toLowerCase();
+        const address = dec(m[1]).toLowerCase();
         if (who.address !== address) return send(403, { reason: 'cuenta ajena' });
         return send(200, await this.libro.account(address));
       }
       if (rx.method === 'GET' && (m = /^\/libro\/contrato\/([^/]+)$/.exec(path))) {
         const who = await this._authenticate(rx, path, { allowForeign: true });
-        const c = await this.store.libroGetContract(decodeURIComponent(m[1]));
+        const c = await this.store.libroGetContract(dec(m[1]));
         if (!c) return send(404, { reason: 'contrato inexistente' });
         if (![c.seller, c.buyer, c.verifier, c.arbiter].includes(who.address)) return send(403, { reason: 'you are not a party to this' });
         return send(200, contratoPublico(c));
@@ -1995,7 +2046,7 @@ export class Estafeta {
       }
       if (rx.method === 'GET' && (m = /^\/outbox\/([^/]+)$/.exec(path))) {
         const who = await this._authenticate(rx, path);
-        if (who.local !== decodeURIComponent(m[1]).toLowerCase()) return send(403, { reason: 'bandeja ajena' });
+        if (who.local !== dec(m[1]).toLowerCase()) return send(403, { reason: 'bandeja ajena' });
         return send(200, { sent: await this.store.listOutbox(who.local) });
       }
       // ----- Índice federado -----

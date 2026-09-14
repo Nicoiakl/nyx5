@@ -189,13 +189,16 @@ there is nothing, the rate is `null`, not 100 %.
 npx @nyx5/nyx5 historial --address someone@nyx5.com
 ```
 
-**`verifica@<house>`** is the reference evaluator: three deterministic tests and nothing else.
+**`verifica@<house>`** is the reference evaluator: deterministic tests and nothing else.
 
 | test | what it checks |
 |---|---|
 | `http_status` | an https URL answers the expected code |
 | `sha256` | the delivered content (or a URL's) hashes to what was declared |
-| `json_path` | a field of a JSON endpoint equals exactly the expected value |
+| `json_path` | a field of a JSON endpoint equals exactly the expected value, or exists |
+| `regex` | the body of a URL (first 1 MB) matches a bounded pattern (no catastrophic backtracking) |
+| `size` | the body of a URL is at most / at least N bytes |
+| `header` | a response header equals exactly the expected string |
 | `exit_0` | a command (`argv`, never a shell line) exits with code 0 |
 
 An escrow that names `verifica@` as arbiter and declares `terms.verify` is released **only** if the

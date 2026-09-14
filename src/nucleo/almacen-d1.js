@@ -183,7 +183,16 @@ export class D1Store {
     return this.db.prepare('INSERT INTO nyx5_libro_contratos (id, quote_id, doc) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET doc = excluded.doc, quote_id = excluded.quote_id').bind(c.id, c.quote_id || null, j(c));
   }
   async libroPutContract(c) { await this._contractStmt(c).run(); }
-  async libroListContracts() { return (await this.db.prepare('SELECT doc FROM nyx5_libro_contratos').all()).results.map((r) => JSON.parse(r.doc)); }
+  // Filtro por estado sobre json_extract(doc,'$.state'), cubierto por el índice de expresión de la
+  // migración 0009: el reloj de la casa lee sólo los contratos abiertos, no la tabla entera. Sin
+  // columna nueva: el estado ya vive en el doc y una columna sería una segunda verdad que mantener.
+  async libroListContracts({ state = null } = {}) {
+    if (state == null) return (await this.db.prepare('SELECT doc FROM nyx5_libro_contratos').all()).results.map((r) => JSON.parse(r.doc));
+    const estados = Array.isArray(state) ? state : [state];
+    if (!estados.length) return [];
+    const sql = `SELECT doc FROM nyx5_libro_contratos WHERE json_extract(doc, '$.state') IN (${estados.map(() => '?').join(', ')})`;
+    return (await this.db.prepare(sql).bind(...estados.map(String)).all()).results.map((r) => JSON.parse(r.doc));
+  }
   async libroFindContractByQuote(quoteId) { return p(await this.db.prepare('SELECT doc FROM nyx5_libro_contratos WHERE quote_id = ?').bind(quoteId).first()); }
   async libroGetMandate(id) { return p(await this.db.prepare('SELECT doc FROM nyx5_libro_mandatos WHERE id = ?').bind(id).first()); }
   _mandateStmt(m) { return this.db.prepare('INSERT INTO nyx5_libro_mandatos (id, doc) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET doc = excluded.doc').bind(m.id, j(m)); }

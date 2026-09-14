@@ -194,7 +194,16 @@ export class FileStore {
   }
   libroGetContract(id) { return readJson(path.join(this.dir, 'libro', 'contratos', `${id}.json`)); }
   libroPutContract(c) { writeJson(path.join(this.dir, 'libro', 'contratos', `${c.id}.json`), c); }
-  libroListContracts() { const d = path.join(this.dir, 'libro', 'contratos'); return fs.readdirSync(d).filter((f) => f.endsWith('.json')).map((f) => readJson(path.join(d, f))); }
+  // `state`: un estado o una lista de estados. Sin filtro devuelve todos. Los recorridos del reloj
+  // (verifica@, escrow que vence) piden sólo held/delivered: la tabla entera crecía con cada
+  // contrato cerrado y se leía completa en cada tick (revisión del 14-sep).
+  libroListContracts({ state = null } = {}) {
+    const d = path.join(this.dir, 'libro', 'contratos');
+    const todos = fs.readdirSync(d).filter((f) => f.endsWith('.json')).map((f) => readJson(path.join(d, f)));
+    if (state == null) return todos;
+    const estados = Array.isArray(state) ? state : [state];
+    return todos.filter((c) => estados.includes(c.state));
+  }
   libroFindContractByQuote(quoteId) { return this.libroListContracts().find((c) => c.quote_id === quoteId) || null; }
   libroGetMandate(id) { return readJson(path.join(this.dir, 'libro', 'mandatos', `${id}.json`)); }
   libroPutMandate(m) { writeJson(path.join(this.dir, 'libro', 'mandatos', `${m.id}.json`), m); }
