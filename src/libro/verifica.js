@@ -148,6 +148,36 @@ export async function veredicto(pruebas, opts = {}) {
   return { pasa, indeciso, razon, resultados };
 }
 
+// NX-305 — La prueba de un contrato que nace de un PEDIDO al catálogo. La ficha publica el
+// `kind` y una descripción en prosa (`template`); los valores concretos (la URL, el hash, el
+// camino) los pone quien contrata, en el `input` del pedido. Sólo entran los campos que la
+// prueba lee: ni el comprador cuela uno ajeno ni el vendedor uno que la debilite.
+//
+// `exit_0` NO se deriva de un pedido a propósito: el `argv` lo escribiría el comprador y lo
+// correría la casa del vendedor, que cotiza sola. Un vendedor que auto-cotiza sería el proxy
+// de cualquiera para ejecutar comandos en la casa. Se cotiza a mano o no se cotiza.
+export const CAMPOS_PRUEBA = {
+  http_status: { requiere: ['url'], opcionales: ['expect', 'method'] },
+  sha256: { requiere: ['expect'], opcionales: ['url'] },
+  json_path: { requiere: ['url', 'path', 'expect'], opcionales: [] },
+};
+export function pruebaDeAceptacion(acceptance, input = {}) {
+  const kind = acceptance?.kind;
+  const campos = CAMPOS_PRUEBA[kind];
+  if (!campos) throw new Error(`acceptance.kind "${kind}" cannot be derived from a request; a request can only fill: ${Object.keys(CAMPOS_PRUEBA).join(', ')}`);
+  const dado = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const faltan = campos.requiere.filter((k) => dado[k] === undefined);
+  if (faltan.length) throw new Error(`the ${kind} test needs ${faltan.join(', ')} in the request input (${acceptance.template})`);
+  const verify = { type: kind };
+  for (const k of [...campos.requiere, ...campos.opcionales]) if (dado[k] !== undefined) verify[k] = dado[k];
+  // Lo que verifica@ va a rechazar al correr se rechaza AQUÍ, antes de firmar: una prueba que
+  // nunca puede pasar castigaría al vendedor por lo que escribió el comprador.
+  if (verify.url !== undefined && !/^https:\/\//.test(String(verify.url))) throw new Error(`the ${kind} test needs an https url; the request gave ${JSON.stringify(verify.url)}`);
+  if (kind === 'sha256' && !/^[0-9a-f]{64}$/.test(String(verify.expect).toLowerCase())) throw new Error('the sha256 test needs expect as 64 hex characters');
+  if (kind === 'json_path' && (typeof verify.path !== 'string' || !verify.path.length)) throw new Error('the json_path test needs path as a non-empty string');
+  return verify;
+}
+
 // Un contrato es verificable por la casa si declara pruebas en sus términos y nombra
 // como árbitro al verificador de la casa. Sin ambas cosas, nadie toca ese escrow.
 export function pruebasDe(contrato) {

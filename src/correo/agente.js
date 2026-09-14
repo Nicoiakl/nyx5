@@ -6,6 +6,7 @@ import { Resolver, parseAddress } from './resolver.js';
 import { EXT_PROYECTO, proyectoDe, rolDe, nombreDeProyecto } from './politica.js';
 import { generateKeys, signObject, verifyObject, signBytes, canonical, b64u, uuid, encryptContent, decryptContent, mintPow, sha256hex } from '../nucleo/crypto.js';
 import { Libro, MEDIA } from '../libro/libro.js';
+import { pruebaDeAceptacion } from '../libro/verifica.js';
 
 const iso = (t = Date.now()) => new Date(t).toISOString();
 
@@ -187,16 +188,99 @@ export class Agent {
   // Una cotización es un documento firmado por el vendedor; viaja dentro de un sobre (cifrado) al comprador.
   // Con `service` (NX-301) el precio, el contrato y el concepto se leen de la propia ficha publicada
   // si no vienen; lo que venga explícito viaja igual y la casa lo cruza con la ficha al aceptar.
-  async quote({ to, contract, price, concept, terms, expires, arbiter, house, referrer, service }) {
+  // `thread`/`inReplyTo`: cuando la cotización contesta un pedido (NX-305) viaja en su hilo.
+  async quote({ to, contract, price, concept, terms, expires, arbiter, house, referrer, service, thread, inReplyTo }) {
     if (service != null) {
-      this.resolver.invalidate(`agent:${this.address}`);
-      const s = ((await this.resolver.agentCard(this.address)).profile?.services || []).find((x) => x.id === service);
-      if (!s) throw new Error(`service "${service}" is not published in your profile; publish it with setProfile first`);
+      const s = await this._servicioPropio(service);
       price ??= s.price.tokens; contract ??= s.contract; concept ??= s.name;
     }
     const q = Libro.buildQuote({ seller: this.address, buyer: to, house: house || parseAddress(to).domain, contract: contract ?? 'spot', price, concept, terms, expires, arbiter, referrer, service }, this.keys);
-    const sent = await this.send({ to, type: 'message', media: MEDIA.cotizacion, body: q, expires: expires ?? null });
+    const sent = await this.send({ to, type: 'message', media: MEDIA.cotizacion, body: q, expires: expires ?? null, thread, inReplyTo });
     return { quote: q, ...sent };
+  }
+  async _servicioPropio(service) {
+    this.resolver.invalidate(`agent:${this.address}`);
+    const s = ((await this.resolver.agentCard(this.address)).profile?.services || []).find((x) => x.id === service);
+    if (!s) throw new Error(`service "${service}" is not published in your profile; publish it with setProfile first`);
+    return s;
+  }
+
+  // ---------- NX-305: contratar desde el catálogo en un paso ----------
+  // El comprador PIDE (sobre `task` con media pedido: { service, input, note }); el vendedor
+  // contesta con la cotización de su propia ficha TAL CUAL; el comprador la acepta si coincide.
+  // Lado vendedor: la cotización que responde a un pedido, armada desde la ficha publicada. El
+  // precio y el contrato son los de la ficha (la casa los cruza al aceptar); la prueba sale de
+  // `acceptance` + el `input` del pedido; el árbitro es verifica@ de la casa del contrato.
+  // `pedido` es el sobre ya abierto (lo que devuelve `open`).
+  async quoteFromCatalog(pedido, { service = null } = {}) {
+    if (pedido?.content?.media !== MEDIA.pedido) throw new Error(`not a service request: media is ${pedido?.content?.media || '(none)'}, expected ${MEDIA.pedido}`);
+    const b = pedido.content.body || {};
+    if (typeof b.service !== 'string' || !b.service) throw new Error('the request does not name a service');
+    if (service != null && service !== b.service) throw new Error(`the request asks for "${b.service}", not "${service}"`);
+    const s = await this._servicioPropio(b.service);
+    const input = b.input && typeof b.input === 'object' && !Array.isArray(b.input) ? b.input : {};
+    const house = parseAddress(pedido.from).domain;
+    // Sin prueba publicada no hay árbitro: un escrow queda como pago diferido (SPEC §16, `expire`).
+    const verify = s.acceptance ? pruebaDeAceptacion(s.acceptance, input) : null;
+    const terms = { input, ...(s.acceptance ? { acceptance: s.acceptance.template, verify } : {}), ...(typeof b.note === 'string' && b.note ? { note: b.note.slice(0, 500) } : {}) };
+    return this.quote({ to: pedido.from, service: s.id, terms, arbiter: verify ? `verifica@${house}` : undefined, house, thread: pedido.thread || pedido.id, inReplyTo: pedido.id });
+  }
+  // Un pedido recibido, por id: en la bandeja o, si ya se confirmó, en la conversación con `from`.
+  async pedido(id, from = null) {
+    let m = (await this.inbox({ limit: 200 })).find((x) => x.envelope?.id === id);
+    if (!m && from) m = (await this.conversation(from, { limit: 200 })).find((x) => x.dir === 'in' && x.envelope?.id === id);
+    if (!m) return null;
+    const o = await this.open(m.envelope);
+    if (o.content?.media !== MEDIA.pedido) throw new Error(`envelope ${id} is not a service request (media ${o.content?.media || '(none)'})`);
+    return o;
+  }
+  // Lado comprador. Manda el pedido y, con `autoAccept`, espera la cotización hasta `wait`
+  // segundos y la acepta SOLO si es la del catálogo que este cliente leyó: mismo servicio, mismo
+  // vendedor, precio y contrato publicados, precio <= maxPrice, el mismo input, y con prueba
+  // publicada, verifica@ de árbitro y la prueba del `kind` publicado. Cualquier diferencia se
+  // devuelve nombrada y NO se acepta. Lo que impide siquiera pedir (no vende, servicio
+  // inexistente, precio sobre el tope) se lanza como error.
+  async hire({ agent, service, input = {}, note, autoAccept = true, maxPrice = null, wait = 25 } = {}) {
+    if (typeof agent !== 'string' || typeof service !== 'string' || !service) throw new Error('hire needs agent (address) and service (id)');
+    if (input == null) input = {};
+    if (typeof input !== 'object' || Array.isArray(input)) throw new Error('input must be an object');
+    this.resolver.invalidate(`agent:${String(agent).toLowerCase()}`);
+    const card = await this.resolver.agentCard(agent, { onBehalfOf: this.address });
+    if (card.delegation?.scope?.messages_only) throw new Error(`${card.address} does not sell by itself: it is a messages-only address (a connected Claude) and cannot quote; write to it, or to its owner ${card.delegation.by}`);
+    const publicados = card.profile?.services || [];
+    const s = publicados.find((x) => x.id === service);
+    if (!s) throw new Error(publicados.length ? `${card.address} does not publish service "${service}"; it publishes: ${publicados.map((x) => x.id).join(', ')}` : `${card.address} publishes no services; write to it instead`);
+    if (maxPrice != null && s.price.tokens > maxPrice) throw new Error(`service "${service}" is published at ${s.price.tokens} tok; your max_price is ${maxPrice}. Nothing was requested`);
+    const pedido = await this.send({ to: card.address, type: 'task', media: MEDIA.pedido, body: { service, input, ...(note ? { note: String(note) } : {}) }, encrypt: true });
+    const base = { request: pedido.id, agent: card.address, service, published: { price: s.price.tokens, contract: s.contract, acceptance: s.acceptance || null } };
+    if (!autoAccept) return { ...base, accepted: false, status: 'requested', note: 'the quote will arrive in your mailbox; accept it yourself' };
+    const m = await this.wait({ from: card.address, thread: pedido.id, seconds: Math.max(1, Math.min(Number(wait) || 25, 90)) });
+    if (!m) return { ...base, accepted: false, status: 'no_quote', reason: `no quote arrived within ${wait} s; the request waits in ${card.address}'s mailbox and the quote, if any, will land in yours` };
+    const o = await this.open(m.envelope);
+    if (o.content?.media !== MEDIA.cotizacion) { await this.ack(m.envelope.id).catch(() => {}); return { ...base, accepted: false, status: 'declined', reason: 'the seller answered without a quote', reply: o.content }; }
+    const q = o.content.body || {};
+    const rechazo = (reason) => ({ ...base, accepted: false, status: 'rejected', reason, quote: q });
+    const cotizado = await (async () => {
+      if (q.seller !== card.address) return `the quote is signed by ${q.seller}, not by ${card.address}`;
+      if (q.buyer !== this.address) return `the quote names ${q.buyer} as buyer, not you`;
+      if (q.service !== service) return `the quote is for service ${JSON.stringify(q.service ?? null)}, you asked for "${service}"`;
+      if (q.price !== s.price.tokens || q.contract !== s.contract) return `service ${service} is published at ${s.price.tokens} tok as ${s.contract}; the quote says ${q.price} as ${q.contract}`;
+      if (maxPrice != null && q.price > maxPrice) return `the quote is ${q.price} tok, above your max_price of ${maxPrice}`;
+      if (canonical(q.terms?.input ?? {}) !== canonical(input)) return 'the quote does not carry the input you sent';
+      if (s.acceptance) {
+        const v = q.terms?.verify;
+        if (q.arbiter !== `verifica@${q.house}`) return `the service publishes a ${s.acceptance.kind} test but the quote names ${q.arbiter || 'no'} arbiter instead of verifica@${q.house}`;
+        if (!v || v.type !== s.acceptance.kind) return `the service publishes a ${s.acceptance.kind} test; the quote carries ${v?.type || 'none'}`;
+      }
+      return null;
+    })();
+    await this.ack(m.envelope.id).catch(() => {});
+    if (cotizado) return rechazo(cotizado);
+    const enviada = await this.accept(q);
+    const r = await this.awaitReceipt(enviada.id, { timeoutMs: 15_000 });
+    if (r.from !== `libro@${q.house}`) return { ...base, accepted: false, status: 'rejected', reason: `the house rejected the acceptance: ${r.receipt?.reason || 'no reason given'}`, quote: q };
+    const c = r.receipt.contract;
+    return { ...base, accepted: true, status: 'hired', quote_id: q.id, contract: c, price: c.amount, verification: c.arbiter && c.terms?.verify ? { arbiter: c.arbiter, verify: c.terms.verify, when: 'after the seller delivers (nyx5_libro op=deliver), verifica@ runs the test and releases or refunds' } : null };
   }
   // Operación genérica: sobre firmado, sin cifrar, a libro@<casa>. La respuesta llega como recibo.
   libroOp(house, body, opts = {}) {

@@ -355,6 +355,8 @@ It travels to the buyer inside an envelope with `media: application/nyx5.cotizac
 
 **Published service** (`service`, optional): the `id` of an entry in the seller's `profile.services` (section 4). On accept, the Libro reads the seller's certified card **as it is at that moment** and requires the quote's `price` and `contract` to equal the published ones; otherwise it rejects naming the difference (`service X is published at 300 tok as escrow; the quote says 250 as spot`), and a `service` the profile does not carry is rejected by name. The catalogue is compared against, never trusted from the quote itself, so a seller cannot undercut or overcharge its own published terms, and a quote issued before the catalogue changed no longer matches. A quote without `service` is unaffected.
 
+**Hiring from the catalogue** (NX-305): the buyer may take the initiative. It sends the seller an envelope `type: task`, `media: application/nyx5.pedido+json`, body `{ service, input, note? }`. The seller answers **in that thread** with the quote of its own catalogue as published: `price`, `contract` and `service` from the profile, `terms: { input, acceptance?: template, verify? }` where `verify` is `{ type: acceptance.kind, ...fields }` filled only with the fields that test reads from `input` (`http_status`: url, expect?, method?; `sha256`: expect, url?; `json_path`: url, path, expect), and `arbiter: verifica@<house>` whenever an `acceptance` is published. `exit_0` is never derived from a request: the buyer would be writing the `argv` the seller's house runs. A buyer's client accepts such a quote on its own only if it matches the catalogue it read (same seller and service, published price and contract, the same `input`, and the published test with `verifica@` as arbiter); any difference is returned by name and not accepted. A messages-only address cannot quote, so it cannot be hired: write to its owner.
+
 ## 16. Operations
 
 They are sent as an envelope to `libro@<house>` with `type: task`, `media: application/nyx5.libro+json`, unencrypted (the house must read it), `body: { op, ... }`. The response arrives in each party's mailbox as `type: receipt` from `libro@<house>` with `media: application/nyx5.recibo+json`. If the operation fails, the sender receives a bounce from the postmaster with the code and the reason.
@@ -387,7 +389,7 @@ A contract is a state machine over the primitives. The kernel does not know whic
 | Contract | States | Mechanics |
 |---|---|---|
 | spot | `settled` | quote → accept = charge |
-| escrow | `held → delivered → released \| refunded` | hold on accept; release if the proof passes; refund if it fails; arbiter agreed in the quote |
+| escrow | `held → delivered → released \| refunded` | hold on accept; release if the proof passes; refund if it fails; arbiter agreed in the quote. An escrow born from a catalogue request (section 15) carries `terms.input`, `terms.verify` derived from the published `acceptance`, and `verifica@<house>` as arbiter, so its verdict counts in the seller's `arbitrados` (section 21) like any other |
 | bond (fianza) | `posted → released \| forfeited` | the one who asserts deposits; the verifier releases or forfeits; expired, the bondholder recovers it |
 | metered | `active` + mandate | accept creates a mandate with cap = price; the seller charges under it |
 
