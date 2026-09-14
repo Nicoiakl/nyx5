@@ -15,6 +15,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { filaDeIndice, buscarEnMemoria } from '../correo/indice.js';
 
 const readJson = (p, fallback = null) => (fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : fallback);
 const writeJson = (p, v) => {
@@ -259,15 +260,32 @@ export class FileStore {
   indexGetHouse(domain) { return readJson(path.join(this.dir, 'indice', 'casas', `${domain}.json`)); }
   indexPutHouse(h) { writeJson(path.join(this.dir, 'indice', 'casas', `${h.domain}.json`), h); }
   indexListHouses() { const d = path.join(this.dir, 'indice', 'casas'); return fs.readdirSync(d).filter((f) => f.endsWith('.json')).map((f) => readJson(path.join(d, f))); }
-  indexReplaceAgents(domain, cards) { writeJson(path.join(this.dir, 'indice', 'agentes', `${domain}.json`), { domain, cards, updated: new Date().toISOString() }); }
-  indexSearch({ q, capability, accepts, house, limit = 50, offset = 0 } = {}) {
+  // Cada casa rastreada es un archivo con FILAS: la tarjeta (doc) más las columnas que el índice
+  // extrae de ella (indice.js) y la generación, para que un recorrido por cursor sobrevida a un
+  // rastreo que cambie los puntajes (ver la cabecera de src/correo/indice.js).
+  indexReplaceAgents(domain, cards) {
+    const archivo = path.join(this.dir, 'indice', 'agentes', `${domain}.json`);
+    const previo = new Map(this._indexRows(domain).map((r) => [r.address, r]));
+    const gen = this._indexGen() + 1;
+    const rows = cards.map((c) => filaDeIndice(domain, c, gen, previo.get(c.address) || null));
+    writeJson(archivo, { domain, gen, rows, updated: new Date().toISOString() });
+  }
+  _indexRows(domain) {
+    const f = readJson(path.join(this.dir, 'indice', 'agentes', `${domain}.json`));
+    if (!f) return [];
+    // Archivo del formato anterior (sólo tarjetas): filas sin columnas ni generación.
+    if (!f.rows && Array.isArray(f.cards)) return f.cards.map((c) => filaDeIndice(domain, c, 0, null));
+    return f.rows || [];
+  }
+  _indexGen() {
     const d = path.join(this.dir, 'indice', 'agentes');
-    let cards = fs.readdirSync(d).filter((f) => f.endsWith('.json'))
-      .filter((f) => !house || f === `${house}.json`)
-      .flatMap((f) => (readJson(path.join(d, f))?.cards || []));
-    if (capability) cards = cards.filter((c) => c.capabilities?.[capability]);
-    if (accepts) cards = cards.filter((c) => c.capabilities?.accepts?.includes(accepts));
-    if (q) { const needle = String(q).toLowerCase(); cards = cards.filter((c) => c.address.includes(needle) || JSON.stringify(c.capabilities || {}).toLowerCase().includes(needle)); }
-    return { total: cards.length, offset, agents: cards.slice(offset, offset + limit) };
+    return fs.readdirSync(d).filter((f) => f.endsWith('.json')).reduce((m, f) => Math.max(m, readJson(path.join(d, f))?.gen || 0), 0);
+  }
+  indexSearch(f = {}) {
+    const d = path.join(this.dir, 'indice', 'agentes');
+    const filas = fs.readdirSync(d).filter((x) => x.endsWith('.json'))
+      .filter((x) => !f.house || x === `${f.house}.json`)
+      .flatMap((x) => this._indexRows(x.slice(0, -5)));
+    return buscarEnMemoria(filas, f);
   }
 }

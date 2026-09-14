@@ -40,6 +40,7 @@ import { abrirBoveda } from '../nucleo/boveda.js';
 import { ICONOS } from '../plataformas/iconos.js';
 import { Agent } from './agente.js';
 import { atenderAsistentes, PRECIOS } from './asistente.js';
+import { validarFiltros, puntajeDe, precioMinimo, FILTROS } from './indice.js';
 
 const now = () => Date.now();
 const iso = (t = now()) => new Date(t).toISOString();
@@ -1427,6 +1428,10 @@ export class Estafeta {
         offset += batch.length;
         if (batch.length < 200 || offset >= page.total) break;
       }
+      // Reputación y precio (NX-302): cada tarjeta lleva su puntaje arbitrado, leído del historial
+      // público de SU casa (§21). La propia casa se lee local; las ajenas por HTTP, de a pocas.
+      h.reputacion = await this._indexReputacion(cards, dc, propia);
+      for (const c of cards) c._price_min = precioMinimo(c);
       await this.store.indexReplaceAgents(h.domain, cards);
       h.last_ok = iso(); h.fails = 0; h.agents = cards.length;
       await this.store.indexPutHouse(h);
@@ -1435,6 +1440,33 @@ export class Estafeta {
       await this.store.indexPutHouse(h);
       throw e;
     }
+  }
+  // Puntaje de cada tarjeta a partir del historial de su casa. Devuelve el DENOMINADOR: cuántas
+  // se pidieron, cuántas quedaron con puntaje, cuántas sin historial, cuántas de una casa que no
+  // distingue arbitrados (versión anterior de Nyx5) y cuántas fallaron al pedirse. Una falla no
+  // tumba el rastreo: esa tarjeta entra sin puntaje (al final del orden), y el número queda escrito.
+  async _indexReputacion(cards, dc, propia) {
+    const cuenta = { pedidas: cards.length, con_puntaje: 0, sin_historial: 0, sin_arbitrados: 0, fallidas: 0 };
+    const LOTE = 4;
+    for (let i = 0; i < cards.length; i += LOTE) {
+      await Promise.all(cards.slice(i, i + LOTE).map(async (c) => {
+        c._score = null; c._jobs_done = null;
+        let hist;
+        try {
+          if (propia) hist = await this.libro.historial(c.address);
+          else {
+            const local = String(c.address).slice(0, String(c.address).lastIndexOf('@'));
+            const res = await this.fetch(`${dc._estafeta}/agents/${encodeURIComponent(local)}/historial`, { signal: AbortSignal.timeout(10_000) });
+            if (!res.ok) throw new Error(`historial -> ${res.status}`);
+            hist = await res.json();
+          }
+        } catch (e) { cuenta.fallidas += 1; this.log(`índice: sin historial de ${c.address}: ${e.message}`); return; }
+        const r = puntajeDe(hist);
+        c._score = r.score; c._jobs_done = r.jobs_done;
+        if (r.motivo) cuenta[r.motivo] += 1; else cuenta.con_puntaje += 1;
+      }));
+    }
+    return cuenta;
   }
   // ---------- puente de correo (urn:nyx5:ext:email) ----------
   // ENTRADA: un email real entra al buzón del destinatario como sobre SIN FIRMA, marcado
@@ -1481,9 +1513,12 @@ export class Estafeta {
     catch (e) { return { ok: false, code: 502, reason: `the email provider failed: ${e.message}` }; }
   }
 
+  // `params` crudos (strings de URL o argumentos de la herramienta): se validan aquí, así el
+  // método y la ruta rechazan lo mismo (400 cursor/filtro inválido, 410 recorrido caduco).
   async indexSearch(params) {
-    const out = await this.store.indexSearch(params);
+    const out = await this.store.indexSearch(validarFiltros(params));
     // Respuesta firmada por la casa del índice: otro índice (u otra casa) puede ingerirla verificada.
+    // `total` es lo que cumple los filtros hoy; `next_cursor` es null en la última página.
     return signObject({ nyx5: '1', index: this.domain, issued: iso(), ...out }, this.keys);
   }
 
@@ -1947,10 +1982,9 @@ export class Estafeta {
         return send(200, { total: houses.length, houses });
       }
       if (this.index.enabled && rx.method === 'GET' && path === '/index/agents') {
+        // Paginación por cursor opaco, nunca por offset; los filtros se validan en indexSearch.
         const p = Object.fromEntries(rx.query);
-        const limit = Number.isInteger(Number(p.limit)) && Number(p.limit) > 0 ? Math.min(Number(p.limit), 200) : 50;
-        const offset = Number.isInteger(Number(p.offset)) && Number(p.offset) >= 0 ? Number(p.offset) : 0;
-        return send(200, await this.indexSearch({ q: p.q, capability: p.capability, accepts: p.accepts, house: p.house, limit, offset }));
+        return send(200, await this.indexSearch({ ...Object.fromEntries(FILTROS.map((k) => [k, p[k]])), offset: p.offset }));
       }
       return send(404, { reason: 'unknown route' });
     } catch (e) {

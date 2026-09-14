@@ -8,6 +8,7 @@
 // el roundtrip y las firmas siguen verificando (invariante 7).
 
 import { LibroError } from '../libro/errores.js';
+import { filaDeIndice, codificarCursor, CADUCO } from '../correo/indice.js';
 
 const j = (v) => JSON.stringify(v);
 const p = (row, col = 'doc') => (row ? JSON.parse(row[col]) : null);
@@ -272,21 +273,60 @@ export class D1Store {
   async indexGetHouse(domain) { return p(await this.db.prepare('SELECT doc FROM nyx5_indice_casas WHERE domain = ?').bind(domain).first()); }
   async indexPutHouse(h) { await this.db.prepare('INSERT INTO nyx5_indice_casas (domain, doc) VALUES (?, ?) ON CONFLICT(domain) DO UPDATE SET doc = excluded.doc').bind(h.domain, j(h)).run(); }
   async indexListHouses() { return (await this.db.prepare('SELECT doc FROM nyx5_indice_casas').all()).results.map((r) => JSON.parse(r.doc)); }
+  // Reemplazo por casa con generación: cada fila conserva un historial corto de sus puntajes
+  // (hist, first_gen) para que un recorrido por cursor no repita ni salte a quien cambió de
+  // puntaje entre página y página (cabecera de src/correo/indice.js).
   async indexReplaceAgents(domain, cards) {
+    const previas = (await this.db.prepare('SELECT address, first_gen, hist FROM nyx5_indice_agentes WHERE house = ?').bind(domain).all()).results;
+    const previo = new Map(previas.map((r) => [r.address, { first_gen: r.first_gen, hist: JSON.parse(r.hist || '[]') }]));
+    const gen = ((await this.db.prepare('SELECT COALESCE(MAX(gen), 0) AS g FROM nyx5_indice_agentes').first()).g || 0) + 1;
     await this.db.batch([
       this.db.prepare('DELETE FROM nyx5_indice_agentes WHERE house = ?').bind(domain),
-      ...cards.map((c) => this.db.prepare('INSERT INTO nyx5_indice_agentes (house, address, doc) VALUES (?, ?, ?)').bind(domain, c.address, j(c))),
+      ...cards.map((c) => {
+        const r = filaDeIndice(domain, c, gen, previo.get(c.address) || null);
+        return this.db.prepare('INSERT INTO nyx5_indice_agentes (house, address, doc, tags, langs, price_min, score, jobs_done, gen, first_gen, hist) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .bind(domain, c.address, j(c), j(r.tags), j(r.langs), r.price_min, r.score, r.jobs_done, r.gen, r.first_gen, j(r.hist));
+      }),
     ]);
   }
-  async indexSearch({ q, capability, accepts, house, limit = 50, offset = 0 } = {}) {
+  // La misma búsqueda que buscarEnMemoria (indice.js), en SQL. `g` va como literal entero (ya
+  // validado como entero seguro) porque la clave de orden aparece varias veces en la consulta.
+  async indexSearch(f = {}) {
+    const gActual = (await this.db.prepare('SELECT COALESCE(MAX(gen), 0) AS g FROM nyx5_indice_agentes').first()).g || 0;
+    if (f.cursor && f.cursor.g > gActual) throw Object.assign(new Error('invalid cursor: it names a generation of the index that does not exist'), { status: 400 });
+    const g = f.cursor ? f.cursor.g : gActual;
+    if (!Number.isSafeInteger(g) || g < 0) throw Object.assign(new Error('invalid cursor'), { status: 400 });
+    // El puntaje congelado en g: la última entrada del historial con generación <= g; NULL si la
+    // dirección entró al índice después de g (claveCongelada, en indice.js, es la referencia).
+    const ULT = `(SELECT json_extract(e.value, '$.s') FROM json_each(hist) e WHERE json_extract(e.value, '$.g') <= ${g} ORDER BY json_extract(e.value, '$.g') DESC LIMIT 1)`;
+    const K = `(CASE WHEN first_gen > ${g} THEN NULL ELSE ${ULT} END)`;
     const where = []; const binds = [];
-    if (house) { where.push('house = ?'); binds.push(house); }
-    if (capability) { where.push("json_extract(doc, '$.capabilities.' || ?) IS NOT NULL"); binds.push(capability); }
-    if (accepts) { where.push("EXISTS (SELECT 1 FROM json_each(doc, '$.capabilities.accepts') WHERE value = ?)"); binds.push(accepts); }
-    if (q) { where.push('lower(doc) LIKE ?'); binds.push(`%${String(q).toLowerCase()}%`); }
+    if (f.house) { where.push('house = ?'); binds.push(f.house); }
+    if (f.capability) { where.push("json_extract(doc, '$.capabilities.' || ?) IS NOT NULL"); binds.push(f.capability); }
+    if (f.accepts) { where.push("EXISTS (SELECT 1 FROM json_each(doc, '$.capabilities.accepts') WHERE value = ?)"); binds.push(f.accepts); }
+    if (f.tag) { where.push('EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)'); binds.push(f.tag); }
+    if (f.lang) { where.push("EXISTS (SELECT 1 FROM json_each(langs) WHERE value = ? OR value LIKE ? || '-%')"); binds.push(f.lang, f.lang); }
+    if (f.price_max != null) { where.push('price_min IS NOT NULL AND price_min <= ?'); binds.push(f.price_max); }
+    if (f.q) { where.push('lower(doc) LIKE ?'); binds.push(`%${String(f.q).toLowerCase()}%`); }
+    const wBase = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    if (f.cursor) {
+      // Caduco: una fila que ya existía en g y cuyo historial no conserva ninguna entrada <= g.
+      const caduco = (await this.db.prepare(`SELECT COUNT(*) AS c FROM nyx5_indice_agentes ${wBase} ${where.length ? 'AND' : 'WHERE'} first_gen <= ${g} AND NOT EXISTS (SELECT 1 FROM json_each(hist) e WHERE json_extract(e.value, '$.g') <= ${g})`).bind(...binds).first()).c;
+      if (caduco > 0) throw Object.assign(new Error(CADUCO), { status: 410 });
+    }
+    if (f.min_score != null) { where.push(`${K} >= ?`); binds.push(f.min_score); }
     const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const total = (await this.db.prepare(`SELECT COUNT(*) AS c FROM nyx5_indice_agentes ${w}`).bind(...binds).first()).c;
-    const rows = await this.db.prepare(`SELECT doc FROM nyx5_indice_agentes ${w} ORDER BY house, address LIMIT ? OFFSET ?`).bind(...binds, limit, offset).all();
-    return { total, offset, agents: rows.results.map((r) => JSON.parse(r.doc)) };
+    const keyset = []; const kb = [];
+    if (f.cursor) {
+      if (f.cursor.s == null) { keyset.push(`${K} IS NULL AND address > ?`); kb.push(f.cursor.a); }
+      else { keyset.push(`(${K} < ? OR (${K} = ? AND address > ?) OR ${K} IS NULL)`); kb.push(f.cursor.s, f.cursor.s, f.cursor.a); }
+    }
+    const wPag = [...where, ...keyset].length ? `WHERE ${[...where, ...keyset].join(' AND ')}` : '';
+    const rows = (await this.db.prepare(`SELECT address, ${K} AS k, doc FROM nyx5_indice_agentes ${wPag} ORDER BY k DESC NULLS LAST, address ASC LIMIT ?`).bind(...binds, ...kb, f.limit + 1).all()).results;
+    const pagina = rows.slice(0, f.limit);
+    const ultima = pagina[pagina.length - 1];
+    const next_cursor = rows.length > f.limit ? codificarCursor({ s: ultima.k ?? null, a: ultima.address, g }) : null;
+    return { total, agents: pagina.map((r) => JSON.parse(r.doc)), next_cursor };
   }
 }
