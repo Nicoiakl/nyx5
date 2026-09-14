@@ -18,7 +18,6 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 | ☐ | **Cuenta prepago para el agente** (Mercado Pago empresa de Blue Tuna SpA, $30.000, logueada una vez en Chrome) para repetir la compra chilena con plata del agente | 14-sep |
 | ☐ | **Liberar el escrow** `ae65c82b` (500 tokens a compras@) cuando llegue el pedido de Mercado Libre; recordatorio en su buzón el 15-sep | 14-sep |
 | ☐ | **Marca INAPI** clase 42, en pausa hasta la vuelta (`marca/SOLICITUD-MARCA-NYX5.md`) | 13-sep |
-| ☐ | **Smithery**: `smithery auth login && smithery mcp publish dist/nyx5-*.mcpb -n <namespace>/nyx5` | 8-sep |
 | ☐ | **AP2**: ¿se queda mapeado o se le construye la segunda llave ECDSA? Recomendación: dejarlo mapeado | 9-sep |
 | ☐ | **x402**: ¿la comisión de la casa puede seguir saliendo de lo que recibe el receptor? Si x402 responde que no, el binding exige cambiar cómo se asienta la comisión. Preguntado en su issue #3435 | 9-sep |
 
@@ -26,7 +25,7 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 | | Qué | Desde |
 |---|---|---|
-| ☐ | **Al retomar tras el mes de Nicholas (Mac apagado, nada corre)**: leer el buzón de nicholas@ (recordatorios semanales y sus respuestas por nico@); fusionar y desplegar la rama `proyectos` (8d39fb7, en revisión al cortar); terminar la maqueta v2 (`plan/maquetas/auditoria-v1.md` es el contrato); luego la app real (NX-408/409) | 14-sep |
+| ☐ | **Al retomar tras el mes de Nicholas (Mac apagado, nada corre)**: leer el buzón de nicholas@ (recordatorios semanales y sus respuestas por nico@); aprobación de la maqueta v2 (`plan/maquetas/app-colaboracion-v2.html`, entregada sin OK) y luego la app real (NX-408/409, dinero real arriba en «Ahora») | 14-sep |
 | ☐ | Los ~20 hallazgos medios/bajos de la revisión adversarial | 5-sep |
 | ☐ | Ancla DNS TXT `_nyx5.<dominio>` en producción | 5-sep |
 | ☐ | Reclamar el listado de glama.ai con OAuth de GitHub | 8-sep |
@@ -53,7 +52,9 @@ Nicholas pidió pruebas de impacto real, no de escritorio. Dos compras, con lect
   conector remoto (la casa vería el RUT en claro).
 - **La app como herramienta de colaboración** (NX-408, nuevo): Spec pedido a `qa@` y sellado
   (`8e5b1e30`, sha256 bf3093ae…); maqueta en construcción con ese contrato de aceptación.
-- Suite: 340 -> 382. Recordatorio en el buzón de nicholas@ para liberar el escrow el 15-sep.
+- **Ruta de conversaciones con proyectos** (`projects`, `pending_by_project`, `?project=`), sexta revisión (7 hallazgos, 34 viñetas rotas del sitio de la spec arregladas, suite `fuente-limpia` contra invisibles y NUL), **desplegada en las dos casas**. Suite: 340 -> 393.
+- **Smithery**: `nicholasiakl/nyx5` publicado con la URL del conector remoto (OAuth del escáner sobre claude.nico@); release SUCCESS, quality score 51/100.
+- **Maqueta v2** de la app (auditoría contra Slack/WhatsApp/Asana/Salesforce → Home «Ahora», cinco lugares, ⌘K, Dinero con tres saldos); 24 de 29 criterios; entregada a Nicholas sin aprobación (viaje de un mes). Escrow de la compra liberado por su decisión; topes de API del mes: US$15.
 
 ### 14-sep-2026 (mañana) — contratar en un paso, plantillas, qa@ como servicio, y el fondo
 Cuatro agentes en paralelo con el método de la noche; fusionados, revisados (cuarta revisión: 4
