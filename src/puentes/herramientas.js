@@ -7,7 +7,7 @@
 // Las descripciones son lo único que el modelo lee para decidir si usa Nyx5: dicen la capacidad,
 // la garantía y el momento de uso, no el mecanismo. Las cuida test/mcp.test.js.
 
-import { proyectoDe } from '../correo/politica.js';
+import { proyectoDe, nombreDeProyecto } from '../correo/politica.js';
 import { MEDIA_GATE } from '../correo/asistente.js';
 import { MEDIA_COBRO_CONFIRMACION, MONEDAS, TIPOS_CUENTA } from '../correo/cobro.js';
 
@@ -70,7 +70,7 @@ export const TOOLS = [
     inputSchema: { type: 'object', required: ['to', 'body'], properties: { to: { type: 'string', description: 'dirección de correo, ej. persona@gmail.com' }, subject: { type: 'string' }, body: { description: 'el texto del correo' } } } },
   { name: 'nyx5_wait', description: 'Wait, up to a limit, for the next message in your mailbox (optionally only from one sender or one thread) and get it opened, with its signature verified, the moment it lands. Use it right after sending when the other side is live: it is how two agents hold a real-time conversation instead of polling.',
     inputSchema: { type: 'object', properties: { from: { type: 'string', description: 'only messages from this address' }, thread: { type: 'string', description: 'only messages in this thread' }, since: { type: 'string', description: 'ISO time: only messages received after it. Default: now, so earlier unread mail is never mistaken for the reply' }, project: { type: 'string', description: 'only messages of this project (see nyx5_send)' }, seconds: { type: 'number', description: 'how long to wait, 1 to 90 (default 60)' } } } },
-  { name: 'nyx5_conversation', description: 'The signed history between you and one address, both directions and oldest first, including what you already acknowledged; without an address, the list of your conversations. Use it to pick up where a conversation was left, from any device: the history lives in the house, not in your session.',
+  { name: 'nyx5_conversation', description: 'The signed history between you and one address, both directions and oldest first, including what you already acknowledged; without an address, the list of your conversations, each with its projects and what is pending per project. Use it to pick up where you left off, from any device: the history lives in the house.',
     inputSchema: { type: 'object', properties: { with: { type: 'string', description: 'the other address; omit it to list your conversations' }, limit: { type: 'number', description: 'how many messages, newest kept (default 30)' }, project: { type: 'string', description: 'only messages of this project (see nyx5_send)' } } } },
   { name: 'nyx5_group', description: 'A group address (g.name@house): one signed message reaches every member, encrypted for each, with a shared history nobody outside can read. Use it when work involves several agents. ops: create {name, members, post}, members {group}, add {group, members}, remove {group, members}, leave {group}. Only members post; admins change members.',
     inputSchema: { type: 'object', required: ['op'], properties: { op: { type: 'string', enum: ['create', 'members', 'add', 'remove', 'leave'] }, name: { type: 'string', description: 'create: the group name (becomes g.name@house)' }, group: { type: 'string', description: 'the group address or name' }, members: { type: 'array', items: { type: 'string' }, description: 'addresses of this house' }, post: { type: 'string', enum: ['members', 'admins'], description: 'who can post (default members)' } } } },
@@ -138,7 +138,9 @@ export async function llamar(agent, name, args = {}, { permitidas = null, espera
   switch (name) {
     case 'nyx5_send': { const r = await agent.send({ to: args.to, body: args.body, type: args.type, thread: args.thread, inReplyTo: args.in_reply_to, encrypt: args.encrypt ?? true, project: args.project, role: args.role, extensions: args.aval ? { 'urn:nyx5:ext:aval': args.aval } : undefined }); return text({ id: r.id, jobs: r.jobs, encrypted: r.encrypted }); }
     case 'nyx5_inbox': {
-      const proyecto = args.project ? String(args.project).trim().toLowerCase() : null;
+      // La MISMA normalización que al enviar y que la casa (NFKC, sin invisibles): `trim().toLowerCase()`
+      // dejaba pasar un homógrafo por el filtro del puente mientras la casa lo colapsaba (14-sep-2026).
+      const proyecto = args.project ? nombreDeProyecto(args.project) : null;
       const msgs = (await agent.inbox({ limit: args.limit ?? 20 })).filter((m) => !proyecto || proyectoDe(m.envelope) === proyecto);
       const opened = [];
       // `received` es la hora que entiende `since` de nyx5_wait (la de llegada al buzón, no la de
@@ -191,7 +193,7 @@ export async function llamar(agent, name, args = {}, { permitidas = null, espera
       // Lo que YA estaba sin leer se entrega igual (nada se pierde), pero marcado como anterior a la
       // espera, para que nadie lo tome por la respuesta a lo que acaba de mandar.
       const desde = args.since || new Date().toISOString();
-      const anterior = args.since ? null : (await agent.inbox({ limit: 50 })).find((m) => m.received < desde && (!args.from || m.envelope?.from === args.from) && (!args.thread || m.envelope?.thread === args.thread || m.envelope?.id === args.thread) && (!args.project || proyectoDe(m.envelope) === String(args.project).trim().toLowerCase()));
+      const anterior = args.since ? null : (await agent.inbox({ limit: 50 })).find((m) => m.received < desde && (!args.from || m.envelope?.from === args.from) && (!args.thread || m.envelope?.thread === args.thread || m.envelope?.id === args.thread) && (!args.project || proyectoDe(m.envelope) === nombreDeProyecto(args.project)));
       const m = anterior || await agent.wait({ from: args.from, thread: args.thread, since: desde, project: args.project, seconds: secs });
       if (!m) return text({ message: null, waited_seconds: secs, note: 'nothing arrived; call again to keep listening' });
       let abierto;

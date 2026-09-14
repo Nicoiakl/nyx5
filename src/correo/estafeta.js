@@ -64,6 +64,8 @@ const MANIFIESTO = { name: 'Nyx5', short_name: 'Nyx5', start_url: '/app', scope:
 // Direcciones por petición en GET /agents/historial?addresses=… (NX-905). El rastreo del índice
 // pide lotes de este tamaño y una casa que no tenga la ruta (versión anterior) contesta 404.
 export const HISTORIAL_LOTE_MAX = 50;
+// Proyectos que la lista de conversaciones devuelve por contacto (14-sep-2026): los de último uso.
+export const PROYECTOS_POR_CONTACTO = 20;
 
 export class Estafeta {
   constructor({
@@ -679,16 +681,51 @@ export class Estafeta {
     const contraparte = (x) => grupo(x) || (x.dir === 'in' ? (x.envelope.extensions?.['urn:nyx5:ext:email']?.from || x.envelope.from) : (x.envelope.to.find((t) => t !== propia) || x.envelope.to[0]));
     const orden = (a, b) => String(a.at).localeCompare(String(b.at));
     if (con) return todos.filter((x) => contraparte(x) === con || (x.dir === 'out' && x.envelope.to.includes(con))).sort(orden).slice(-limit);
+    // La lista trae, por contacto, los proyectos vistos (14-sep-2026, decisión de Nicholas): la app
+    // filtra por proyecto sin leer cada hilo. Sale de la MISMA pasada, no de otra consulta: el
+    // proyecto real es `proyectoDe` (NFKC, sin invisibles, minúsculas), que SQLite no sabe calcular
+    // (su `lower()` es sólo ASCII y no hay NFKC), y el contacto tampoco es una columna (grupo,
+    // pasarela de correo o primer destinatario). Con `?project=` todo se calcula sobre ese proyecto.
     const mapa = new Map();
     for (const x of todos) {
       const c = contraparte(x);
-      const r = mapa.get(c) || { with: c, count: 0, pending: 0, last_at: '', last_dir: null, last_id: null };
+      const r = mapa.get(c) || { with: c, count: 0, pending: 0, last_at: '', last_dir: null, last_id: null, proyectos: new Map(), pendientes: new Map() };
       r.count++;
-      if (x.dir === 'in' && !x.acked) r.pending++;
+      const pendiente = x.dir === 'in' && !x.acked;
+      if (pendiente) r.pending++;
       if (String(x.at) > r.last_at) { r.last_at = String(x.at); r.last_dir = x.dir; r.last_id = x.id; }
+      const p = proyectoDe(x.envelope);
+      if (p) {
+        // Sin proyecto no hay entrada: no se inventa un «(none)».
+        if (String(x.at) > (r.proyectos.get(p) || '')) r.proyectos.set(p, String(x.at));
+        if (pendiente) r.pendientes.set(p, (r.pendientes.get(p) || 0) + 1);
+      }
       mapa.set(c, r);
     }
-    return [...mapa.values()].sort((a, b) => b.last_at.localeCompare(a.last_at));
+    return [...mapa.values()].sort((a, b) => b.last_at.localeCompare(a.last_at)).map(({ proyectos, pendientes, ...r }) => {
+      // Por último uso, a lo sumo 20: un contacto que etiquetó 10.000 proyectos distintos no
+      // devuelve 10.000 nombres. `pending_by_project` cubre SÓLO esos 20 (revisión del 14-sep-2026:
+      // traía una clave por proyecto pendiente, 1.000 con la ventana del historial, y el lector no
+      // podía cruzarlas con `projects`); lo pendiente bajo los demás va sumado en `pending_other`.
+      // Ninguna de las dos claves aparece en cero. `Object.fromEntries` crea propiedades propias:
+      // aunque llegara un nombre como `__proto__`, no pisaría el prototipo.
+      r.projects = [...proyectos.entries()].sort((a, b) => b[1].localeCompare(a[1])).slice(0, PROYECTOS_POR_CONTACTO).map(([p]) => p);
+      const listados = new Set(r.projects);
+      const porProyecto = [...pendientes].filter(([p]) => listados.has(p));
+      const otros = [...pendientes].filter(([p]) => !listados.has(p)).reduce((s, [, n]) => s + n, 0);
+      if (porProyecto.length) r.pending_by_project = Object.fromEntries(porProyecto);
+      if (otros) r.pending_other = otros;
+      return r;
+    });
+  }
+  // El `?project=` de una ruta: null si no viene (o viene vacío: sin filtro), el nombre normalizado
+  // como al enviar, o `false` si viene algo que no es un nombre (sólo invisibles, `%00`, una palabra
+  // reservada). Revisión del 14-sep-2026: `?project=%00` devolvía la lista ENTERA como si no hubiera
+  // filtro, y quien pidió un proyecto se llevaba todo. Se evalúa después de autenticar: no es oráculo.
+  _proyectoPedido(query) {
+    const crudo = query.get('project');
+    if (!crudo) return null;
+    return nombreDeProyecto(crudo) ?? false;
   }
   // Los subagentes que un dueño delegó (sus Claude conectados), con lo necesario para revocarlos.
   async delegados(local) {
@@ -1976,7 +2013,9 @@ export class Estafeta {
         if (who.local !== dec(m[1]).toLowerCase()) return send(403, { reason: 'not your mailbox' });
         const q = Object.fromEntries(rx.query);
         const segundos = Math.max(0, Math.min(Number(q.timeout ?? 25) || 0, 90));
-        const msg = await this.esperarCorreo(who.local, { from: q.from || null, thread: q.thread || null, since: q.since || null, project: q.project ? nombreDeProyecto(q.project) : null, timeoutMs: segundos * 1000 });
+        const project = this._proyectoPedido(rx.query);
+        if (project === false) return send(400, { reason: 'invalid project: empty after normalization, or a reserved word' });
+        const msg = await this.esperarCorreo(who.local, { from: q.from || null, thread: q.thread || null, since: q.since || null, project, timeoutMs: segundos * 1000 });
         return send(200, { message: msg });
       }
       if (rx.method === 'GET' && (m = /^\/conversations\/([^/]+)$/.exec(path))) {
@@ -1984,7 +2023,8 @@ export class Estafeta {
         if (who.local !== dec(m[1]).toLowerCase()) return send(403, { reason: 'not your conversations' });
         const con = rx.query.get('with');
         const limit = Math.max(1, Math.min(Number(rx.query.get('limit') || 50) || 50, 500));
-        const project = rx.query.get("project") ? nombreDeProyecto(rx.query.get("project")) : null;
+        const project = this._proyectoPedido(rx.query);
+        if (project === false) return send(400, { reason: 'invalid project: empty after normalization, or a reserved word' });
         if (con) return send(200, { with: con.toLowerCase(), messages: await this.conversacion(who.local, { con: con.toLowerCase(), limit, project }) });
         return send(200, { conversations: await this.conversacion(who.local, { project }) });
       }

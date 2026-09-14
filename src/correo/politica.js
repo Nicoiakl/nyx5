@@ -21,7 +21,12 @@ export const EXT_PROYECTO = 'urn:nyx5:ext:proyecto';
 // llegaban tal cual a la herramienta del Claude remoto. Se limpian y acotan como la ficha, y el
 // proyecto se normaliza (NFKC, sin invisibles) para que un homógrafo no esconda un mensaje del filtro.
 export const proyectoDe = (env) => { const p = env?.extensions?.[EXT_PROYECTO]?.project; return typeof p === 'string' ? nombreDeProyecto(p) : null; };
-export const nombreDeProyecto = (p) => limpio(String(p).normalize('NFKC'), 40).toLowerCase() || null;
+// Devuelve null cuando lo que queda no es un nombre: vacío tras limpiar, o un nombre que es
+// propiedad propia de Object.prototype (`__proto__`, `constructor`). Revisión del 14-sep-2026:
+// `pending_by_project` viaja como objeto JSON y un lector que haga `mapa[p]` con ese nombre ausente
+// recibe una función en vez de un número (o, al armar el objeto, pisa el prototipo). Es UNA función
+// para las dos puertas: el cliente rechaza al enviar y la casa lee «sin proyecto» si llega de fuera.
+export const nombreDeProyecto = (p) => { const n = limpio(String(p).normalize('NFKC'), 40).toLowerCase(); return n && !Object.hasOwn(Object.prototype, n) ? n : null; };
 export const rolDe = (env) => { const r = env?.extensions?.[EXT_PROYECTO]?.role; return typeof r === 'string' ? (limpio(r, 40) || null) : null; };
 
 // Ficha pública del agente (13-sep-2026): qué hace, en qué idiomas, de quién es, con qué etiquetas.
