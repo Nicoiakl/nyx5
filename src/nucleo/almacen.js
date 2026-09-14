@@ -143,22 +143,24 @@ export class FileStore {
     fs.unlinkSync(p);
     return (r.expires != null && r.expires <= nowMs) ? null : r.doc;
   }
-  // Contador atómico con vencimiento (límites de tasa durables). Un contador vencido arranca en 1.
-  kvIncrement(ns, key, expires = null, nowMs = Date.now()) {
-    const n = (Number(this.kvGet(ns, key, nowMs)) || 0) + 1;
+  // Contador atómico con vencimiento (límites de tasa durables). Suma `by` (1 por defecto; los
+  // bytes de un cupo diario, por ejemplo). Un contador vencido arranca en `by`.
+  kvIncrement(ns, key, expires = null, nowMs = Date.now(), by = 1) {
+    const n = (Number(this.kvGet(ns, key, nowMs)) || 0) + by;
     this.kvPut(ns, key, n, expires);
     return n;
   }
   kvDelete(ns, key) { const p = this._kvPath(ns, key); if (fs.existsSync(p)) fs.unlinkSync(p); }
   // Las claves vivas de un espacio que empiezan por `prefix`, en orden de clave: [{ key, doc }].
   // Nació para el registro de ideas@ (una fila por idea, clave con el número relleno de ceros).
-  kvList(ns, { prefix = '', limit = 1000 } = {}, nowMs = Date.now()) {
+  // `after`: sólo claves estrictamente mayores (paginación por clave).
+  kvList(ns, { prefix = '', limit = 1000, after } = {}, nowMs = Date.now()) {
     const dir = path.join(this.dir, 'kv', ns);
     if (!fs.existsSync(dir)) return [];
     const out = [];
-    for (const f of fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort()) {
-      const key = decodeURIComponent(f.slice(0, -5));
-      if (!key.startsWith(prefix)) continue;
+    const claves = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => [decodeURIComponent(f.slice(0, -5)), f]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    for (const [key, f] of claves) {
+      if (!key.startsWith(prefix) || (after != null && !(key > after))) continue;
       const r = readJson(path.join(dir, f));
       if (!r || (r.expires != null && r.expires <= nowMs)) continue;
       out.push({ key, doc: r.doc });

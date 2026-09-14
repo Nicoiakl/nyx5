@@ -42,7 +42,7 @@ import { ICONOS } from '../plataformas/iconos.js';
 import { Agent } from './agente.js';
 import { eventoDeCobro } from './cobro.js';
 import { atenderAsistentes, PRECIOS, MEDIA_GATE } from './asistente.js';
-import { atenderIdeas, listarIdeas, LOCAL as IDEAS_LOCAL, VIA as IDEAS_VIA } from './ideas.js';
+import { atenderIdeas, paginaDeIdeas, puertaIdeas, LOCAL as IDEAS_LOCAL, VIA as IDEAS_VIA } from './ideas.js';
 import { validarFiltros, puntajeDe, precioMinimo, FILTROS } from './indice.js';
 
 const now = () => Date.now();
@@ -144,7 +144,8 @@ export class Estafeta {
     this.asistente = asistente.apiKey ? { apiKey: asistente.apiKey, fetch: (...a) => (asistente.fetchImpl || this.fetch)(...a) } : null;
     // ideas@ (src/correo/ideas.js): el buzón que registra y confirma, nunca ejecuta. Se enciende por
     // casa (NYX5_IDEAS=on) y exige la bóveda: su llave vive ahí, como la de un asistente de sistema.
-    this.ideas = { enabled: !!(ideas.enabled && this.boveda) };
+    // `cupo` sólo para pruebas (no sale de ninguna variable de entorno): el límite es de código.
+    this.ideas = { enabled: !!(ideas.enabled && this.boveda), cupo: ideas.cupo || undefined };
     this._ready = null;
     this._domainCardCache = null; // { value, until }
     this._pushes = [];            // avisos por webhook en vuelo (los espera flushPushes)
@@ -1408,6 +1409,12 @@ export class Estafeta {
       if (!rec || !await this._visibleA(rec, env.from)) { rejected.push({ to, code: 404, reason: 'no such agent' }); continue; }
       const p = applyInboxPolicy(env, rec, senderCard._domain);
       if (!p.ok) { rejected.push({ to, ...p, ok: undefined }); continue; }
+      // ideas@ tiene su propia puerta (src/correo/ideas.js): sólo su lista, con cupo diario. Ni el
+      // intro ni el aval de la política general entran: nadie los leería, y el buzón no se borra.
+      if (local === IDEAS_LOCAL && this.ideas.enabled && rec.custody?.via === IDEAS_VIA) {
+        const veto = await puertaIdeas(this, env, rec, this.ideas.cupo ? { cupo: this.ideas.cupo } : {});
+        if (veto) { rejected.push({ to, ...veto }); continue; }
+      }
       try {
         if (local === 'libro') {
           // Operación del Libro: se ejecuta (idempotente por id de sobre), no se almacena;
@@ -1690,6 +1697,10 @@ export class Estafeta {
     // la casa no manda correo a una dirección que no verificó (nada de backscatter).
     const pol = applyEmailPolicy(rec, from);
     if (!pol.ok) return { ok: false, code: pol.code, reason: pol.reason };
+    // Un correo nunca es una idea (no va firmado): se rechaza en la puerta, y el remitente recibe el
+    // rebote de su propio proveedor. Antes entraba con `From:` de la lista y el tick lo cerraba en
+    // silencio: quien escribía desde su correo creía que había quedado anotado.
+    if (this.ideas.enabled && local === IDEAS_LOCAL && rec.custody?.via === IDEAS_VIA) return { ok: false, code: 403, reason: 'the ideas mailbox records only signed envelopes; email is not recorded' };
     // Y un buzón abierto tampoco es un embudo infinito: se limita por dominio del remitente.
     if (!await this.rate.allow(`email:${String(from).slice(String(from).lastIndexOf('@') + 1).toLowerCase()}`)) {
       return { ok: false, code: 429, reason: 'rate limit for the sending domain' };
@@ -1773,8 +1784,11 @@ export class Estafeta {
           const cfg = await this.store.kvGet('ideas', '_config');
           if (!cfg || who.address !== cfg.owner) return send(403, { reason: 'only the owner of the ideas mailbox reads it' });
         }
-        const ideas = await listarIdeas(this);
-        return send(200, { address: `${IDEAS_LOCAL}@${this.domain}`, total: ideas.length, ideas });
+        // Paginado: `?after=<n>` sigue desde ese número; `next` dice desde dónde sigue la página
+        // siguiente (antes la lista se cortaba en 1.000 en silencio y `total` decía 1.000).
+        const after = rx.query.get('after');
+        if (after != null && !/^\d{1,9}$/.test(after)) return send(400, { reason: 'after must be a non-negative integer' });
+        return send(200, { address: `${IDEAS_LOCAL}@${this.domain}`, ...(await paginaDeIdeas(this, { after: Number(after) || 0 })) });
       }
       // ----- Ficha pública: la edita el dueño de la dirección o el dueño de su delegación -----
       if (rx.method === 'POST' && (m = /^\/agents\/([^/]+)\/profile$/.exec(path))) {

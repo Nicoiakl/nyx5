@@ -6,6 +6,12 @@
 // firmada por ideas@, cifrada, en el hilo y con el proyecto; GET /ideas sólo al dueño o a la casa; y
 // que el módulo no tiene otra salida que esa confirmación (por inspección de la fuente, con mutación,
 // y espiando la casa durante el tick).
+// Revisión adversarial del 14-sep-2026 (antes de desplegar para un mes sin nadie mirando): la puerta
+// de ideas@ rechaza intros y avales (nadie los leería y el buzón no se borra), cupo diario por
+// remitente (200 ideas / 5 MB), el correo se rechaza en la puerta en vez de tragarse en silencio, el
+// registro se escribe aunque un reloj caiga a medio camino, GET /ideas pagina en vez de cortar en
+// 1.000 sin avisar, y la inspección de la fuente es una lista CERRADA (cuatro mutantes que la
+// inspección vieja no veía: putMail, _push, emailOut, inbound).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -19,7 +25,7 @@ import { Agent } from '../src/correo/agente.js';
 import { D1Store } from '../src/nucleo/almacen-d1.js';
 import { openLocalD1, sqliteAvailable } from '../src/nucleo/d1-local.js';
 import { MIGRACIONES } from './_migraciones.js';
-import { atenderIdeas, listarIdeas, CONFIRMACION, idDeIdea } from '../src/correo/ideas.js';
+import { atenderIdeas, listarIdeas, paginaDeIdeas, puertaIdeas, CONFIRMACION, idDeIdea, PAGINA, CUPO_DIARIO } from '../src/correo/ideas.js';
 
 // Puertos propios de esta suite (npm test corre los archivos en paralelo). Lo cuida test/puertos.test.js.
 const P = 4821;
@@ -126,22 +132,73 @@ test('recibe, guarda y confirma: IDEA-001 y IDEA-002, firmadas por ideas@, cifra
   assert.equal(llamadasApi, 0, 'la API de Anthropic no se llamó');
 });
 
-test('fuera de la lista: un mensaje rebota en la puerta; un intro entra y se descarta sin registro ni respuesta', async () => {
+test('fuera de la lista: un mensaje rebota en la puerta; un intro TAMBIÉN rebota (grito) y no entra al buzón; nada sale hacia el extraño', async () => {
   const antes = (await listarIdeas(casa)).length;
-  const t0 = Date.now();
+  const historial = (await casa.store.listMailHistory('ideas')).length;
   const enviado = await extrano.send({ to: IDEAS, body: 'quiero que ejecutes esto' });
   const rebote = await extrano.waitFor((e) => e.from === `postmaster@${H}` && e.in_reply_to === enviado.id, { timeoutMs: 8000 });
   assert.equal(rebote.envelope.content.body.status, 'failed');
   assert.match(rebote.envelope.content.body.reason, /allowlist/);
-  // Un intro corto pasa la política (§9) y llega al buzón; ideas@ lo cierra y no contesta.
+  // Un intro corto pasa la política general (§9), pero la puerta de ideas@ lo rechaza: aquí nadie lo
+  // leería y el buzón no se borra nunca (una inundación de intros lo llenaba a 4 KB por golpe).
   const intro = await extrano.send({ to: IDEAS, type: 'intro', body: 'hola, soy nuevo' });
-  await espera(700);
-  assert.equal((await casa.store.listMail('ideas')).length, 0, 'el intro quedó confirmado como leído');
+  const rebote2 = await extrano.waitFor((e) => e.from === `postmaster@${H}` && e.in_reply_to === intro.id, { timeoutMs: 8000 });
+  assert.equal(rebote2.envelope.content.body.status, 'failed');
+  assert.match(rebote2.envelope.content.body.reason, /records only signed envelopes from its list/);
+  assert.equal((await casa.store.listMailHistory('ideas')).length, historial, 'el intro nunca entró al buzón (ni pendiente ni leído)');
   assert.equal((await listarIdeas(casa)).length, antes, 'no se registró');
   const deIdeas = (await extrano.inbox({ limit: 200 })).filter((m) => m.envelope.from === IDEAS);
   assert.deepEqual(deIdeas, [], 'ideas@ no le escribió al extraño');
   assert.ok(!(await casa.store.listOutbox('ideas')).some((o) => o.to.includes(extrano.address)), 'ni salió nada hacia él');
-  assert.ok(intro.id && Date.now() > t0);
+  // Silencio: el mismo intro a un buzón por lista que NO es ideas@ sigue entrando (§9 no cambió).
+  const introNico = await extrano.send({ to: claudeNico.address, type: 'intro', body: 'hola, soy nuevo' });
+  await claudeNico.waitFor((e) => e.id === introNico.id, { timeoutMs: 8000 });
+});
+
+test('puerta: cupo diario por remitente — grito al pasarse de ideas y de bytes, silencio al día siguiente y para otro remitente', async () => {
+  assert.deepEqual(CUPO_DIARIO, { ideas: 200, bytes: 5 * 1024 * 1024 }, 'el cupo real: 200 ideas y 5 MB por remitente y día UTC');
+  const rec = await casa.store.getAgent('ideas');
+  const sobre = (n, from = nicholas.address, relleno = 10) => ({ nyx5: '1', id: `cupo-${n}`, from, to: [IDEAS], type: 'message', content: { media: 'text/plain', body: 'x'.repeat(relleno) }, signature: { alg: 'Ed25519', kid: 'k', value: 'v' } });
+  const hoy = Date.parse('2026-10-01T12:00:00Z');
+  const cupo = { ideas: 3, bytes: 100_000 };
+  for (let i = 1; i <= 3; i++) assert.equal(await puertaIdeas(casa, sobre(i), rec, { cupo, nowMs: hoy }), null, `la idea ${i} entra`);
+  const cuarta = await puertaIdeas(casa, sobre(4), rec, { cupo, nowMs: hoy });
+  assert.equal(cuarta?.code, 403, 'la cuarta rebota, permanente (un 429 dejaría la cola de la otra casa reintentando un día entero)');
+  assert.match(cuarta.reason, /daily limit .*\(3 ideas or 0 MB per UTC day\): not recorded$/);
+  assert.equal((await puertaIdeas(casa, sobre(5), rec, { cupo, nowMs: hoy + 3600_000 }))?.code, 403, 'una hora después es el mismo día UTC: sigue cerrado');
+  assert.equal(await puertaIdeas(casa, sobre(6), rec, { cupo, nowMs: hoy + 24 * 3600_000 }), null, 'al día siguiente vuelve a abrir');
+  assert.equal(await puertaIdeas(casa, sobre(7, nico.address), rec, { cupo, nowMs: hoy }), null, 'el cupo es por remitente: nico@ no paga el de nicholas@');
+  // Bytes: dos sobres de ~60 KB caben en 100 KB... no: el segundo se pasa y cierra el día.
+  assert.equal(await puertaIdeas(casa, sobre(8, claudeNico.address, 60_000), rec, { cupo, nowMs: hoy }), null);
+  const pasado = await puertaIdeas(casa, sobre(9, claudeNico.address, 60_000), rec, { cupo, nowMs: hoy });
+  assert.equal(pasado?.code, 403, 'el que se pasa de bytes rebota');
+  assert.equal((await puertaIdeas(casa, sobre(10, claudeNico.address, 10), rec, { cupo, nowMs: hoy }))?.code, 403, 'y el día queda cerrado aunque el siguiente sea chico');
+  // Fuera de la lista: rebota antes de contar (el extraño no gasta filas de cupo).
+  const ajeno = await puertaIdeas(casa, sobre(11, extrano.address), rec, { cupo, nowMs: hoy });
+  assert.equal(ajeno?.code, 403); assert.match(ajeno.reason, /only signed envelopes from its list/);
+  assert.equal(await casa.store.kvGet('ideas-cupo', `${extrano.address}:2026-10-01:n`), null, 'un extraño no deja fila de cupo');
+  // Y por la puerta de verdad (inbound), con un cupo chico inyectado por el constructor: el 3.º rebota con motivo.
+  const chica = await new Estafeta({ domain: 'cupo.test', port: P + 2, dataDir: path.join(tmp, 'cupo'), adminToken: 't', hosts: { 'cupo.test': { url: `http://127.0.0.1:${P + 2}` } }, workerIntervalMs: 100, libro: { welcome: 0, feeBps: 0 }, log: () => {}, remoto: { enabled: true, vaultKey: randomBytes(32).toString('base64') }, ideas: { enabled: true, cupo: { ideas: 2, bytes: 1_000_000 } } }).start();
+  try {
+    const due = Agent.create('duena@cupo.test', `http://127.0.0.1:${P + 2}`, { hosts: { 'cupo.test': { url: `http://127.0.0.1:${P + 2}` } } });
+    await due.register({ adminToken: 't' });
+    assert.equal((await foto(`http://127.0.0.1:${P + 2}/admin/ideas`, { method: 'POST', headers: { authorization: 'Bearer t', 'content-type': 'application/json' }, body: JSON.stringify({ owner: due.address, keys: generateKeys() }) })).status, 201);
+    const t0 = Date.now();
+    const ids = []; for (let i = 0; i < 3; i++) ids.push((await due.send({ to: 'ideas@cupo.test', body: `idea ${i}` })).id);
+    const rebote = await due.waitFor((e) => e.from === 'postmaster@cupo.test' && e.in_reply_to === ids[2], { timeoutMs: 8000 });
+    assert.match(rebote.envelope.content.body.reason, /daily limit of the ideas mailbox reached .*2 ideas or 1 MB/);
+    for (const id of ids.slice(0, 2)) await due.waitFor((e) => e.from === 'ideas@cupo.test' && e.in_reply_to === id && Date.parse(e.created) > t0, { timeoutMs: 8000 });
+    assert.deepEqual((await listarIdeas(chica)).map((x) => x.id_sobre), ids.slice(0, 2), 'las dos primeras se registraron; la tercera nunca entró');
+  } finally { await chica.stop(); }
+});
+
+test('puerta del correo: un email a ideas@ con From: de la lista se rechaza (rebote SMTP), nada queda en el buzón; a otro buzón sigue entrando', async () => {
+  const historial = (await casa.store.listMailHistory('ideas')).length;
+  const r = await casa.receiveEmail({ from: nicholas.address, to: IDEAS, subject: 'idea', text: 'una idea por correo', messageId: 'correo-a-ideas-0001@x' });
+  assert.equal(r.ok, false); assert.equal(r.code, 403); assert.match(r.reason, /email is not recorded/);
+  assert.equal((await casa.store.listMailHistory('ideas')).length, historial, 'el correo no entró (antes entraba y el tick lo tragaba en silencio)');
+  const ok = await casa.receiveEmail({ from: 'alguien@ejemplo.test', to: nico.address, subject: 'hola', text: 'un correo normal', messageId: 'correo-a-nico-0001@x' });
+  assert.equal(ok.code, 202, JSON.stringify(ok));
 });
 
 test('GET /ideas: sin firma 401; en la lista pero no dueño, ajeno y delegado dan el mismo 403; el dueño y la casa leen', async () => {
@@ -172,9 +229,70 @@ test('GET /ideas: sin firma 401; en la lista pero no dueño, ajeno y delegado da
   const apagada = await new Estafeta({ domain: 'apagada.test', port: P + 1, dataDir: path.join(tmp, 'apagada'), adminToken: 't', workerIntervalMs: 999_999, log: () => {}, remoto: { enabled: true, vaultKey: randomBytes(32).toString('base64') } }).start();
   try {
     assert.equal(apagada.ideas.enabled, false);
-    assert.equal((await fetch(`http://127.0.0.1:${P + 1}/ideas`, { headers: { authorization: 'Bearer t' } })).status, 404);
-    assert.equal((await fetch(`http://127.0.0.1:${P + 1}/admin/ideas`, { method: 'POST', headers: { authorization: 'Bearer t', 'content-type': 'application/json' }, body: '{}' })).status, 404);
+    // Byte a byte iguales a una ruta que no existe (estado, cuerpo y cabeceras salvo date): que
+    // ideas@ esté apagado no se distingue desde fuera.
+    const foto404 = async (path, init) => { const r = await fetch(`http://127.0.0.1:${P + 1}${path}`, init); const h = Object.fromEntries([...r.headers].filter(([k]) => k !== 'date')); return { status: r.status, headers: h, body: await r.text() }; };
+    const bearer = { headers: { authorization: 'Bearer t' } };
+    assert.deepEqual(await foto404('/ideas', bearer), await foto404('/ideaz', bearer));
+    const post = { method: 'POST', headers: { authorization: 'Bearer t', 'content-type': 'application/json' }, body: '{}' };
+    assert.deepEqual(await foto404('/admin/ideas', post), await foto404('/admin/ideaz', post));
+    assert.equal((await foto404('/ideas', bearer)).status, 404);
   } finally { await apagada.stop(); }
+});
+
+test('GET /ideas pagina: 1.005 registros -> 1.000 con next=1000 y total=1005; ?after=1000 da los 5 que faltan; after inválido es 400', async () => {
+  const pag = await new Estafeta({ domain: 'pagina.test', port: P + 3, dataDir: path.join(tmp, 'pagina'), adminToken: 't', workerIntervalMs: 999_999, log: () => {}, remoto: { enabled: true, vaultKey: randomBytes(32).toString('base64') }, ideas: { enabled: true } }).start();
+  try {
+    assert.equal(PAGINA, 1000);
+    const N = PAGINA + 5;
+    for (let n = 1; n <= N; n++) await pag.store.kvPut('ideas', `n:${String(n).padStart(6, '0')}`, { n, id: idDeIdea(n), at: '2026-10-01T00:00:00.000Z' });
+    await pag.store.kvPut('ideas', '_n', N);
+    const p1 = await foto(`http://127.0.0.1:${P + 3}/ideas`, { headers: { authorization: 'Bearer t' } });
+    assert.equal(p1.status, 200);
+    assert.equal(p1.body.total, N, 'total es el último número asignado, no lo que cupo en la página');
+    assert.equal(p1.body.count, PAGINA); assert.equal(p1.body.ideas.length, PAGINA); assert.equal(p1.body.next, PAGINA);
+    assert.deepEqual([p1.body.ideas[0].n, p1.body.ideas[PAGINA - 1].n], [1, PAGINA]);
+    const p2 = await foto(`http://127.0.0.1:${P + 3}/ideas?after=${p1.body.next}`, { headers: { authorization: 'Bearer t' } });
+    assert.deepEqual(p2.body.ideas.map((x) => x.n), [1001, 1002, 1003, 1004, 1005]);
+    assert.equal(p2.body.next, null); assert.equal(p2.body.total, N);
+    assert.equal((await foto(`http://127.0.0.1:${P + 3}/ideas?after=x`, { headers: { authorization: 'Bearer t' } })).status, 400);
+    assert.equal((await foto(`http://127.0.0.1:${P + 3}/ideas?after=-1`, { headers: { authorization: 'Bearer t' } })).status, 400);
+    // Con menos de una página no hay next, y el registro vacío también contesta bien formado.
+    assert.deepEqual(await paginaDeIdeas(pag, { after: N }), { total: N, count: 0, ideas: [], next: null });
+  } finally { await pag.stop(); }
+});
+
+test('el registro se escribe aunque el reloj caiga entre el número y el registro: al reintentar no queda una idea confirmada sin registro (grito) ni un número repetido (silencio)', async () => {
+  // En Node el adaptador dispara un tick COMPLETO tras cada petición (en el edge va con programado:
+  // false); para observar una pasada a mano se apaga ese tick mientras dura la prueba.
+  clearInterval(casa.timer);
+  const tickReal = casa.tick.bind(casa); casa.tick = async () => {};
+  const t0 = Date.now();
+  const n0 = await casa.store.kvGet('ideas', '_n');
+  const enviado = await nicholas.send({ to: IDEAS, body: 'idea que cae a medio camino' });
+  await tickReal({ programado: false });
+  assert.ok((await casa.store.listMail('ideas')).some((m) => m.envelope.id === enviado.id), 'en el buzón, sin atender');
+  // Primer reloj: el almacén falla JUSTO al escribir el registro `n:`, después de asignar el número.
+  const kvPut = casa.store.kvPut.bind(casa.store);
+  let caidas = 0;
+  casa.store.kvPut = (ns, key, ...r) => { if (ns === 'ideas' && key.startsWith('n:')) { caidas++; throw new Error('D1 caído al escribir el registro'); } return kvPut(ns, key, ...r); };
+  try { assert.equal(await atenderIdeas(casa), 0); } finally { casa.store.kvPut = kvPut; }
+  assert.equal(caidas, 1);
+  assert.equal(await casa.store.kvGet('ideas', '_n'), n0 + 1, 'el número ya salió');
+  assert.equal(await casa.store.kvGet('ideas', `n:${String(n0 + 1).padStart(6, '0')}`), null, 'y el registro no está');
+  assert.ok((await casa.store.listMail('ideas')).some((m) => m.envelope.id === enviado.id), 'el sobre sigue pendiente (no se confirmó sin registro)');
+  // Segundo reloj (15 minutos después): se suelta el turno y se reintenta.
+  await casa.store.kvDelete('ideas-turno', enviado.id);
+  assert.equal(await atenderIdeas(casa), 1);
+  const reg = await casa.store.kvGet('ideas', `n:${String(n0 + 1).padStart(6, '0')}`);
+  assert.equal(reg?.id_sobre, enviado.id, 'el registro existe ahora, con el MISMO número');
+  assert.equal(await casa.store.kvGet('ideas', '_n'), n0 + 1, 'no se gastó otro número');
+  casa.tick = tickReal;
+  casa.timer = setInterval(() => casa.tick().catch(() => {}), casa.workerIntervalMs);
+  const conf = await confirmacionA(nicholas, t0);
+  assert.equal(conf.envelope.in_reply_to, enviado.id);
+  assert.match((await nicholas.open(conf.envelope)).content.body, new RegExp(`^Saved as ${idDeIdea(n0 + 1)} on `));
+  assert.equal((await casa.store.listOutbox('ideas')).filter((o) => o.envelope.in_reply_to === enviado.id).length, 1, 'una sola confirmación');
 });
 
 test('cupos por tick: 30 intros de un extraño no dejan sin turno a una idea, y con maxDescartesPorTick=5 sólo se cierran 5 por pasada', async () => {
@@ -215,16 +333,29 @@ test('tope de bytes: un remitente de la lista que manda más de 1 MB es rechazad
 // ----- la única salida: por inspección de la fuente (con mutación) y espiando la casa -----
 // Lo que el módulo NO puede tener: importar el asistente (la API), el Libro, los puentes; llamar a
 // `fetch`; usar `_systemSend` o la cola; y más de un `send`. Un hallazgo aquí es un cambio de alcance.
+// Lista CERRADA de lo que el módulo puede tocar. Revisión del 14-sep-2026: la inspección anterior era
+// una lista de PROHIBIDOS (fetch, _systemSend, libro...) y cuatro mutantes la pasaban en silencio:
+// `est.store.putMail` a otro buzón, `est._push` (webhook), `est.emailOut` y `est.inbound` directo.
+// Con una lista de permitidos, cualquier miembro nuevo de la estafeta, del almacén o del agente grita.
+// Lo que NO cubre: un alias (`const x = est; x.inbound()`) o acceso por corchetes; por eso además se
+// prohíben los corchetes sobre est/store/agente y se espía la casa en vivo (prueba siguiente).
+const PERMITIDO = {
+  imports: ['./resolver.js', '../nucleo/crypto.js', './politica.js'],
+  est: ['ideas', 'store', 'domain', 'log', 'agenteDeBoveda', '_evento'],
+  store: ['kvIncrement', 'kvGet', 'kvPut', 'kvPutIfAbsent', 'kvList', 'getAgent', 'listMail', 'ackMail'],
+  agente: ['open', 'send'],
+};
 function salidasDe(conComentarios) {
   // Se inspecciona el CÓDIGO: los comentarios pueden nombrar lo que el módulo no hace.
   const fuente = conComentarios.replace(/^\s*\/\/.*$/gm, '').replace(/\/\/[^'"`\n]*$/gm, '');
   const hallazgos = [];
-  for (const m of fuente.matchAll(/^import\s.*?from\s+'([^']+)'/gm)) {
-    if (!['./resolver.js', '../nucleo/crypto.js', './politica.js'].includes(m[1])) hallazgos.push(`import ${m[1]}`);
-  }
-  // Usos, no menciones: `libro` como nombre de dirección de sistema a saltar es legítimo; `.libro`,
-  // `libroOp` o importar de `libro/` no lo son.
-  const PROHIBIDO = { fetch: /\bfetch\s*\(/, _systemSend: /_systemSend/, enqueue: /\benqueue\b/, libro: /\.libro\b|libroOp|\/libro\//, anthropic: /anthropic/i, API_MENSAJES: /API_MENSAJES/, url: /https?:\/\//, env: /process\.env/, webhook: /webhook/i };
+  for (const m of fuente.matchAll(/^import\s.*?from\s+'([^']+)'/gm)) if (!PERMITIDO.imports.includes(m[1])) hallazgos.push(`import ${m[1]}`);
+  for (const m of fuente.matchAll(/\best\.store\.(\w+)/g)) if (!PERMITIDO.store.includes(m[1])) hallazgos.push(`est.store.${m[1]}`);
+  for (const m of fuente.matchAll(/\best\.(?!store\.)(\w+)/g)) if (!PERMITIDO.est.includes(m[1])) hallazgos.push(`est.${m[1]}`);
+  for (const m of fuente.matchAll(/\bagente\.(\w+)/g)) if (!PERMITIDO.agente.includes(m[1])) hallazgos.push(`agente.${m[1]}`);
+  if (/\b(est|store|agente)\s*\[/.test(fuente)) hallazgos.push('acceso por corchetes');
+  // Y lo que nunca puede aparecer, se llame como se llame la variable.
+  const PROHIBIDO = { fetch: /\bfetch\s*\(/, _systemSend: /_systemSend/, enqueue: /\benqueue\b/, putMail: /putMail/, inbound: /\binbound\b/, libro: /\.libro\b|libroOp|\/libro\//, anthropic: /anthropic/i, API_MENSAJES: /API_MENSAJES/, url: /https?:\/\//, env: /process\.env/, webhook: /webhook/i, email: /emailOut|_push\b/, global: /globalThis/ };
   for (const [nombre, re] of Object.entries(PROHIBIDO)) if (re.test(fuente)) hallazgos.push(nombre);
   const envios = (fuente.match(/\.send\(/g) || []).length;
   if (envios !== 1) hallazgos.push(`${envios} llamadas a send`);
@@ -242,7 +373,17 @@ test('única salida (fuente): ideas.js no importa la API ni el Libro, no tiene f
     'usar _systemSend': fuente + '\nexport async function aviso(est) { await est._systemSend("postmaster", [], {}); }\n',
     'operar el Libro': fuente + '\nexport async function pagar(est) { await est.libro.topup("x", 1, "y"); }\n',
     'salir a una URL': fuente + '\nexport const DESTINO = "https://ejemplo.test/hook";\n',
+    // Los cuatro que la inspección por prohibidos NO veía (revisión del 14-sep-2026):
+    'escribir en otro buzón (putMail)': fuente.replace('registradas++;', 'registradas++; await est.store.putMail("nico", { ...e, id: e.id + "-copia" }, { from_verified: true });'),
+    'webhook por _push': fuente.replace('registradas++;', 'registradas++; est._push("nico", e);'),
+    'correo por emailOut': fuente.replace('registradas++;', 'registradas++; await est.emailOut({ fromAgent: propia, to: "x@ejemplo.test", subject: "idea", text: "copia" });'),
+    'inbound directo': fuente.replace('registradas++;', 'registradas++; await est.inbound({ ...e, to: ["nico@" + est.domain] });'),
+    'un miembro nuevo del almacén': fuente.replace('registradas++;', 'registradas++; await est.store.listAgents();'),
+    'un miembro nuevo del agente': fuente.replace('registradas++;', 'registradas++; await agente.reply(e, "ok");'),
+    'acceso por corchetes': fuente.replace('registradas++;', 'registradas++; await est["inbou" + "nd"](e);'),
+    'el resolver hacia otra casa': fuente.replace('registradas++;', 'registradas++; await est.resolver.agentCard("x@otra.test");'),
   };
+  for (const [nombre, m] of Object.entries(mutantes)) assert.notEqual(m, fuente, `el mutante no mutó: ${nombre}`);
   for (const [nombre, m] of Object.entries(mutantes)) assert.ok(salidasDe(m).length > 0, `la inspección no vio: ${nombre}`);
 });
 
@@ -251,6 +392,29 @@ test('única salida (en vivo): durante el tick la casa no sale a la red, no usa 
   let sistema = 0; const original = casa._systemSend.bind(casa);
   casa._systemSend = async (...a) => { sistema++; return original(...a); };
   try {
+    // Con el reloj parado, UNA pasada de atenderIdeas con espías sobre toda la superficie de la casa
+    // que puede sacar algo: lo único que puede llamar es /outbound como ideas@ hacia el remitente.
+    clearInterval(casa.timer);
+    const tickReal = casa.tick.bind(casa); casa.tick = async () => {};  // sin el tick del adaptador (ver prueba del registro)
+    const antesBuzones = new Map(); for (const l of ['nico', 'extrano', 'nicholas']) antesBuzones.set(l, (await casa.store.listMailHistory(l)).length);
+    const esp = await nicholas.send({ to: IDEAS, body: 'idea bajo espías' });
+    await tickReal({ programado: false });
+    const llamadas = {}; const cuenta = (k) => { llamadas[k] = (llamadas[k] || 0) + 1; };
+    const restaurar = [];
+    for (const k of ['inbound', '_push', 'emailOut', '_deliver', 'outbound', 'fetch']) { const o = casa[k]; restaurar.push(() => { casa[k] = o; }); casa[k] = (...a) => { cuenta(k); return o.apply(casa, a); }; }
+    for (const k of ['putMail', 'enqueue']) { const o = casa.store[k].bind(casa.store); restaurar.push(() => { casa.store[k] = o; }); casa.store[k] = (...a) => { cuenta(`store.${k}`); return o(...a); }; }
+    const rutas = []; const hr = casa.handleRequest.bind(casa); restaurar.push(() => { casa.handleRequest = hr; });
+    casa.handleRequest = (rx) => { rutas.push([rx.method, rx.path, rx.body?.from, rx.body?.to]); return hr(rx); };
+    let registradas;
+    try { registradas = await atenderIdeas(casa); } finally { for (const r of restaurar) r(); }
+    assert.equal(registradas, 1);
+    assert.deepEqual(llamadas, { outbound: 1, 'store.enqueue': 1 }, `la casa hizo algo más que encolar la confirmación: ${JSON.stringify(llamadas)}`);
+    assert.deepEqual(rutas, [['POST', '/outbound', IDEAS, [nicholas.address]]], 'la única petición interna es /outbound de ideas@ al remitente');
+    for (const [l, n] of antesBuzones) assert.equal((await casa.store.listMailHistory(l)).length, n, `el buzón de ${l} no cambió durante el tick`);
+    assert.equal(salidas.length - antesRed, 0);
+    casa.tick = tickReal;
+    casa.timer = setInterval(() => casa.tick().catch(() => {}), casa.workerIntervalMs);
+    await nicholas.waitFor((e) => e.from === IDEAS && e.in_reply_to === esp.id, { timeoutMs: 8000 });
     const t0 = Date.now();
     const n0 = await casa.store.kvGet('ideas', '_n');
     const enviados = await Promise.all([1, 2, 3].map((i) => nicholas.send({ to: IDEAS, body: `idea en ráfaga ${i}` })));
@@ -270,6 +434,23 @@ test('única salida (en vivo): durante el tick la casa no sale a la red, no usa 
 
 // ----- dos relojes a la vez sobre el MISMO almacén (D1 local): ni número repetido ni confirmación doble -----
 const testD1 = (name, fn) => test(name, sqliteAvailable ? {} : { skip: 'node:sqlite no disponible (Node 22+)' }, fn);
+testD1('los dos almacenes cuentan igual: kvIncrement suma `by` (bytes del cupo) y kvList pagina con `after`', async () => {
+  const db = openLocalD1(); db._raw.exec(MIGRACIONES);
+  const fileStore = casa.store;
+  for (const [nombre, st] of [['FileStore', fileStore], ['D1Store', new D1Store(db)]]) {
+    assert.equal(await st.kvIncrement('prueba-by', 'k', null, Date.now(), 5), 5, nombre);
+    assert.equal(await st.kvIncrement('prueba-by', 'k', null, Date.now(), 7), 12, nombre);
+    assert.equal(await st.kvIncrement('prueba-by', 'k'), 13, `${nombre}: sin by suma 1`);
+    assert.equal(await st.kvIncrement('prueba-by', 'vencido', Date.now() - 1, Date.now(), 4), 4, `${nombre}: vencido arranca en by`);
+    for (const k of ['n:000001', 'n:000002', 'n:000003', 'x:000009']) await st.kvPut('prueba-list', k, { k });
+    assert.deepEqual((await st.kvList('prueba-list', { prefix: 'n:' })).map((f) => f.key), ['n:000001', 'n:000002', 'n:000003'], nombre);
+    assert.deepEqual((await st.kvList('prueba-list', { prefix: 'n:', after: 'n:000001' })).map((f) => f.key), ['n:000002', 'n:000003'], `${nombre}: after excluye la clave`);
+    assert.deepEqual((await st.kvList('prueba-list', { prefix: 'n:', after: 'n:000002', limit: 1 })).map((f) => f.key), ['n:000003'], nombre);
+    assert.deepEqual(await st.kvList('prueba-list', { prefix: 'n:', after: 'n:000003' }), [], nombre);
+    for (const k of ['n:000001', 'n:000002', 'n:000003', 'x:000009']) await st.kvDelete('prueba-list', k);
+    await st.kvDelete('prueba-by', 'k'); await st.kvDelete('prueba-by', 'vencido');
+  }
+});
 testD1('correlativo bajo dos ticks concurrentes: seis sobres, IDEA-001..006 sin huecos ni repetidos, una confirmación por sobre', async () => {
   const db = openLocalD1(); db._raw.exec(MIGRACIONES);
   // El emulador de D1 es síncrono por dentro y los dos relojes casi nunca caen en la misma ventana de

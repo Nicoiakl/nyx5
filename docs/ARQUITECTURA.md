@@ -265,6 +265,28 @@ buzón, y el remitente lo relee en su conversación con `ideas@`. `test/ideas.te
 inspección de la fuente (con mutantes) y espiando la casa durante el tick que el módulo no tiene otra
 salida que esa confirmación.
 
+Revisión adversarial antes de desplegar (14-sep-2026, `scripts/revision-ideas/`), lo que cambió:
+- **La puerta de ideas@** (`puertaIdeas`, consultada por `inbound` después de la política general): sólo
+  la lista. Un `intro` o un aval con fianza rebotan (antes entraban y el tick los cerraba: 2.000 intros
+  de 20 extraños = 2 MB en el buzón, que no se borra nunca). Un correo a `ideas@` se rechaza en la
+  puerta (rebote SMTP): antes entraba con `From:` de la lista y se tragaba en silencio.
+- **Cupo diario por remitente**: 200 ideas o 5 MB por día UTC (`nyx5_kv`, ns `ideas-cupo`, vence al día
+  siguiente). Medido: una dirección de la lista metía 112 MB por minuto. Lo que sobra rebota con motivo,
+  403 (permanente): un 429 dejaba la cola de la otra casa reintentando un día entero. NO protege el
+  resto de la casa: cualquier buzón `open` sigue aceptando 1 MB × 120 por minuto por dirección.
+- **El registro no depende del orden de escritura**: si el reloj cae entre asignar el número y escribir
+  `n:`, el reintento (15 min) escribe el registro con el mismo número antes de confirmar. Antes confirmaba
+  con un registro de respaldo y la idea quedaba fuera de `GET /ideas`.
+- **`GET /ideas` pagina**: `{ total, count, ideas, next }`, 1.000 por página, `?after=<n>`. Antes cortaba
+  en 1.000 en silencio y `total` decía 1.000.
+- **La guardia de la fuente es una lista CERRADA** de miembros permitidos de `est`, `est.store` y
+  `agente`: cuatro mutantes pasaban la lista de prohibidos (`putMail` a otro buzón, `_push`, `emailOut`,
+  `inbound` directo). Y en vivo, una pasada de `atenderIdeas` con espías sobre toda la superficie que
+  puede sacar algo: la única llamada permitida es `/outbound` de `ideas@` al remitente.
+- Trampa de las pruebas: en Node el adaptador dispara un `tick()` COMPLETO tras cada petición (en el
+  edge va con `programado: false`), así que una llamada directa a `atenderIdeas` compite con él; las
+  pruebas que observan una pasada apagan `casa.tick` mientras dura.
+
 ## 5. Interoperabilidad
 
 - **MCP**: `nyx5 mcp --agent keys/x.json` expone el agente como servidor MCP por stdio. Configuración para Claude Desktop en el README. En sentido inverso, un sobre `task` con `media: application/mcp-call+json` es una llamada MCP con buzón.

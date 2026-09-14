@@ -141,20 +141,23 @@ export class D1Store {
   }
   // Contador atómico con vencimiento en UNA sentencia: dos isolates que suman a la vez no pierden
   // ninguna. Un contador ya vencido arranca de nuevo en 1 (la purga puede no haber pasado aún).
-  async kvIncrement(ns, key, expires = null, nowMs = Date.now()) {
-    const r = await this.db.prepare(`INSERT INTO nyx5_kv (ns, key, doc, expires, created) VALUES (?, ?, '1', ?, ?)
+  // `by`: cuánto suma (1 por defecto; los bytes de un cupo diario, por ejemplo).
+  async kvIncrement(ns, key, expires = null, nowMs = Date.now(), by = 1) {
+    const paso = String(Math.trunc(Number(by) || 0));
+    const r = await this.db.prepare(`INSERT INTO nyx5_kv (ns, key, doc, expires, created) VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(ns, key) DO UPDATE SET
-        doc = CASE WHEN nyx5_kv.expires IS NOT NULL AND nyx5_kv.expires <= ? THEN '1' ELSE CAST(CAST(nyx5_kv.doc AS INTEGER) + 1 AS TEXT) END,
+        doc = CASE WHEN nyx5_kv.expires IS NOT NULL AND nyx5_kv.expires <= ? THEN ? ELSE CAST(CAST(nyx5_kv.doc AS INTEGER) + CAST(? AS INTEGER) AS TEXT) END,
         expires = excluded.expires
-      RETURNING doc`).bind(ns, key, expires, iso(), nowMs).all();
+      RETURNING doc`).bind(ns, key, paso, expires, iso(), nowMs, paso, paso).all();
     return Number(r.results[0].doc);
   }
   async kvDelete(ns, key) { await this.db.prepare('DELETE FROM nyx5_kv WHERE ns = ? AND key = ?').bind(ns, key).run(); }
   // Las claves vivas de un espacio que empiezan por `prefix`, en orden de clave. `%` y `_` del
   // prefijo se escapan: son comodines de LIKE y un prefijo no es un patrón.
-  async kvList(ns, { prefix = '', limit = 1000 } = {}, nowMs = Date.now()) {
+  // `after`: sólo claves estrictamente mayores (paginación por clave).
+  async kvList(ns, { prefix = '', limit = 1000, after } = {}, nowMs = Date.now()) {
     const patron = `${String(prefix).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-    const r = await this.db.prepare(`SELECT key, doc FROM nyx5_kv WHERE ns = ? AND key LIKE ? ESCAPE '\\' AND (expires IS NULL OR expires > ?) ORDER BY key LIMIT ?`).bind(ns, patron, nowMs, limit).all();
+    const r = await this.db.prepare(`SELECT key, doc FROM nyx5_kv WHERE ns = ? AND key LIKE ? ESCAPE '\\' AND key > ? AND (expires IS NULL OR expires > ?) ORDER BY key LIMIT ?`).bind(ns, patron, after == null ? '' : String(after), nowMs, limit).all();
     return r.results.map((row) => ({ key: row.key, doc: JSON.parse(row.doc) }));
   }
   async kvPurge(nowMs = Date.now()) { await this.db.prepare('DELETE FROM nyx5_kv WHERE expires IS NOT NULL AND expires <= ?').bind(nowMs).run(); }

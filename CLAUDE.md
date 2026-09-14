@@ -54,7 +54,7 @@ src/nucleo/keccak.js     Keccak-256 (el de Ethereum, NO sha3-256) en JS puro; sr
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas -> `npm test` (404)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas -> `npm test` (409)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 scripts/revision-adversarial.{md,mjs}  el guion adversarial por versión (NX-903) y su parte automatizable
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
@@ -63,7 +63,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 404 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 409 pruebas, todas deben pasar antes de cualquier commit
 npm run revision         # revisión adversarial automatizable contra una casa local (scripts/revision-adversarial.md)
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
@@ -564,4 +564,18 @@ hay que saber para no romperlo:
 - **Dos cupos por tick, separados**: 20 ideas registradas y 200 descartes (intros, correo sin firma).
   Sin el segundo, una inundación de intros hacía que un tick recorriera el buzón entero; sin que sean
   separados, los intros dejaban sin turno a la idea real. Verificado por mutación.
-- `kvList(ns, { prefix, limit })` nuevo en los DOS almacenes (D1: LIKE con ESCAPE). Sin migración.
+- `kvList(ns, { prefix, limit, after })` y `kvIncrement(ns, key, expires, nowMs, by)` en los DOS
+  almacenes (D1: LIKE con ESCAPE; `by` suma bytes). Sin migración.
+- **Revisión adversarial antes de desplegar (14-sep, noche; `scripts/revision-ideas/`)**: cinco medios
+  arreglados con grito y silencio, todo en `test/ideas.test.js` y `docs/ARQUITECTURA.md` §4.7. (1) La
+  puerta de ideas@ rechaza intros y avales (2.000 intros de 20 extraños entraban: 2 MB en un buzón que
+  no se borra) y el correo a ideas@ (entraba con `From:` de la lista y se tragaba en silencio: rebote
+  SMTP ahora). (2) Cupo diario por remitente, 200 ideas o 5 MB por día UTC, 403 permanente (una
+  dirección de la lista metía 112 MB/min). (3) El registro se escribe en el reintento aunque el reloj
+  cayera entre número y registro (antes: idea confirmada sin registro). (4) `GET /ideas` pagina
+  (`total`, `next`, `?after=`; antes cortaba en 1.000 sin avisar). (5) La guardia de la fuente pasó de
+  lista de prohibidos a lista CERRADA de permitidos: `putMail`, `_push`, `emailOut` e `inbound` directo
+  pasaban en silencio. Trampa nueva: en Node el adaptador dispara `tick()` completo tras cada petición
+  (el edge no), y compite con una llamada directa a `atenderIdeas`; las pruebas apagan `casa.tick`.
+  **NO cubre**: el resto de la casa sigue sin tope de bytes por remitente (1 MB × 120/min a un buzón
+  `open`), y el cupo se cuenta al aceptar, así que dos casas emisoras a la vez pueden pasarse por uno.
