@@ -221,7 +221,7 @@ test('quoteFromCatalog: sin el campo que la prueba exige no se cotiza, y se nomb
 });
 
 test('herramientas: nyx5_hire mueve dinero (no está en el remoto), y un Claude vendedor contesta el pedido con nyx5_quote {service, to, in_reply_to}', async () => {
-  assert.equal(TOOLS.length, 25);
+  assert.equal(TOOLS.length, 27);
   const t = TOOLS.find((x) => x.name === 'nyx5_hire');
   assert.equal(t.annotations.destructiveHint, true);
   assert.ok(!MENSAJERIA.has('nyx5_hire'), 'contratar mueve saldo: el conector sólo-mensajes no la ofrece');

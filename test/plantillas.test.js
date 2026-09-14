@@ -112,7 +112,7 @@ async function puenteRespondeConTodo(config, etiqueta) {
     const nombres = (list.result?.tools || []).map((t) => t.name);
     // Se compara contra el OBJETO que declara el módulo, no contra el número 24 recordado.
     assert.deepEqual(nombres, TOOLS.map((t) => t.name), `${etiqueta}: tools/list no coincide con herramientas.js`);
-    assert.equal(nombres.length, 24, `${etiqueta}: se esperaban 24 herramientas, el puente lista ${nombres.length}`);
+    assert.equal(nombres.length, TOOLS.length, `${etiqueta}: se esperaban ${TOOLS.length} herramientas, el puente lista ${nombres.length}`);
     // Y una llamada de verdad, para que "arranca" no sea sólo "imprime una lista".
     const who = await p.pedir('tools/call', { name: 'nyx5_whoami', arguments: {} });
     assert.ok(!who.result?.isError, `${etiqueta}: nyx5_whoami falló: ${JSON.stringify(who.result)}`);
@@ -120,7 +120,7 @@ async function puenteRespondeConTodo(config, etiqueta) {
   } finally { await p.cerrar(); }
 }
 
-test('Claude Agent SDK · el bloque mcpServers de la plantilla arranca el puente y lista las 24 herramientas', async () => {
+test('Claude Agent SDK · el bloque mcpServers de la plantilla arranca el puente y lista las mismas herramientas que el módulo', async () => {
   const { agente, file } = await claveRegistrada('sdk-claude');
   const opts = nyx5Options({ keyfile: file, command: 'node', args: [BIN], env: { NYX5_HOSTS: hostsFile } });
   assert.deepEqual(opts.allowedTools, ['mcp__nyx5__*']);

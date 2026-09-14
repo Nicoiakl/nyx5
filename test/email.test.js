@@ -170,12 +170,15 @@ test('D3 · notify_email: quien registró un correo recibe un aviso cuando le es
     await a.register({ adminToken: 't', notify_email: 'nicholas@gmail.test' });
     e.email.senders.add(a.address); // el aviso sale como correo del agente: la casa tiene que autorizarlo
     await b.register({ adminToken: 't' });
-    await b.send({ to: a.address, body: 'hola a' });
+    await b.send({ to: a.address, body: 'hola a', project: 'viaje' });
     const until = Date.now() + 6000;
     while (!captured && Date.now() < until) await new Promise((r) => setTimeout(r, 150));
     assert.ok(captured, 'se disparó el aviso por email');
     assert.deepEqual(captured.to, ['nicholas@gmail.test']);
-    assert.match(captured.subject, /new message/i);
+    // Texto aprobado por Nicholas (14-sep-2026): remitente, proyecto, hora y dónde leerlo; nunca el contenido.
+    assert.equal(captured.subject, `${b.address} wrote to you on Nyx5 (project viaje)`);
+    assert.match(captured.text, /project: viaje · .* UTC\. The content is encrypted/);
+    assert.ok(!captured.text.includes('hola a'), 'el aviso no lleva el contenido');
   } finally { await e.stop(); }
 });
 

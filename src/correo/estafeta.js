@@ -1444,9 +1444,13 @@ export class Estafeta {
       const emailOrig = env.extensions?.['urn:nyx5:ext:email']?.from;
       if (emailOrig && emailOrig === rec.notify_email) return; // no te avises de tu propio correo
       const quien = emailOrig || env.from;
+      // Texto aprobado por Nicholas el 14-sep-2026: remitente, proyecto y hora (lo único que la casa
+      // sabe: el contenido va cifrado), y dónde leerlo según el aparato. Sin avisos de recibos.
+      const proyecto = proyectoDe(env);
+      const cuando = new Date(env.created || Date.now()).toUTCString().replace(/:\d\d GMT$/, ' UTC');
       await this.emailOut({ fromAgent: `${local}@${this.domain}`, to: rec.notify_email,
-        subject: `New message on Nyx5 from ${quien}`,
-        text: `${quien} wrote to ${local}@${this.domain}.\n\nOpen it in the mailbox: https://${this.domain}/app\n\n(Automatic notice. The content is in the mailbox, not in this email.)` });
+        subject: `${quien} wrote to you on Nyx5${proyecto ? ` (project ${proyecto})` : ''}`,
+        text: `${quien} wrote to ${local}@${this.domain}${proyecto ? ` · project: ${proyecto}` : ''} · ${cuando}. The content is encrypted and only your key opens it. On your Mac: https://${this.domain}/app. From your phone, ask your Claude for your mailbox (replies to what your phone Claude sends arrive there, not here).` });
     }).catch((e) => this.log(`notify_email ${local} falló: ${e.message}`));
     this._pushes.push(pendiente);
     return pendiente;
