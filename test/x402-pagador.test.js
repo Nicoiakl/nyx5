@@ -474,3 +474,20 @@ test('ATAQUE · el payTo cambia en la segunda respuesta: se firmó UNA vez para 
   const r = await pagador.pagar({ url: 'http://x/y', privKey: LLAVE_1, tope: '10000', fetch: bueno });
   assert.equal(r.pagado, true); assert.equal(r.firmado, true); assert.equal(r.destinatario, COBRA); assert.match(r.nonce, /^0x[0-9a-f]{64}$/);
 });
+
+test('COMPAT · la segunda petición lleva X-PAYMENT con la forma v1 además de PAYMENT-SIGNATURE, y el motivo del rechazo sale del cuerpo si la cabecera no lo trae', async () => {
+  const url = `http://127.0.0.1:${P}/recurso`;
+  const vistas = [];
+  const espia = async (u, o) => { vistas.push(o?.headers || {}); return fetch(u, o); };
+  const r = await pagador.pagar({ url, privKey: LLAVE_1, tope: '10000', fetch: espia });
+  assert.equal(r.pagado, true);
+  const cab = vistas.at(-1);
+  assert.ok(cab['PAYMENT-SIGNATURE'] && cab['X-PAYMENT'], 'van las dos cabeceras');
+  const v2 = abrir(cab['PAYMENT-SIGNATURE']), v1 = abrir(cab['X-PAYMENT']);
+  assert.equal(v1.x402Version, 1); assert.equal(v1.scheme, 'exact'); assert.equal(v1.network, v2.accepted.network);
+  assert.deepEqual(v1.payload, v2.payload, 'el mismo cheque: una sola firma');
+  // Un servidor que rechaza con el motivo en el cuerpo JSON y una cabecera PAYMENT-REQUIRED sin error.
+  const pr1 = abrir((await fetch(url)).headers.get('payment-required'));
+  const cuerpoDice = async (u, o) => o?.headers?.['X-PAYMENT'] ? new Response(JSON.stringify({ error: 'Payment failed', details: 'Unsupported payment scheme: None' }), { status: 402, headers: { 'content-type': 'application/json', 'PAYMENT-REQUIRED': b64(pr1) } }) : new Response('{}', { status: 402, headers: { 'PAYMENT-REQUIRED': b64(pr1) } });
+  await assert.rejects(pagador.pagar({ url, privKey: LLAVE_1, tope: '10000', fetch: cuerpoDice }), /Payment failed: Unsupported payment scheme/);
+});

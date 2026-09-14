@@ -177,6 +177,9 @@ export function armarPago({ requisito, privKey, tope, ahora = Math.floor(Date.no
 }
 
 const b64 = (obj) => Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');
+// El mismo pago con la forma de la v1 de x402 (scheme y network en la raíz): lo que leen los servidores
+// que sólo miran X-PAYMENT. `accepted` viaja igual: un lector v2 lo encuentra donde lo espera.
+export const cabeceraV1 = (pago) => ({ x402Version: 1, scheme: pago.accepted.scheme, network: pago.accepted.network, payload: pago.payload, accepted: pago.accepted });
 const deB64 = (s) => JSON.parse(Buffer.from(String(s), 'base64').toString('utf8'));
 
 async function leerCuerpo(r) {
@@ -220,7 +223,10 @@ export async function pagar({ url, privKey, tope, fetch: fetchImpl = globalThis.
   if (alFirmar) await alFirmar(entregado);
 
   try {
-    const segunda = await pedir({ 'PAYMENT-SIGNATURE': b64(pago) });
+    // Dos cabeceras con el mismo cheque: PAYMENT-SIGNATURE (v2, con accepted) y X-PAYMENT con el cuerpo de
+    // la v1 (scheme y network arriba). Medido el 14-sep-2026 contra 402milly: un servidor que lee X-PAYMENT
+    // contesta el MISMO 402 sin motivo si sólo va la v2. Mandar las dos no cuesta nada y la firma es una.
+    const segunda = await pedir({ 'PAYMENT-SIGNATURE': b64(pago), 'X-PAYMENT': b64(cabeceraV1(pago)) });
     const cuerpo = await leerCuerpo(segunda);
     let liquidacion = null;
     const respuesta = segunda.headers.get('payment-response');
@@ -228,6 +234,10 @@ export async function pagar({ url, privKey, tope, fetch: fetchImpl = globalThis.
     if (segunda.status === 402) {
       let motivo = '';
       try { motivo = deB64(segunda.headers.get('payment-required') || '').error || ''; } catch { /* sin motivo */ }
+      // El motivo puede venir en el cuerpo JSON (details/error), no en la cabecera: 402milly lo hace así.
+      // El cuerpo con `details` manda: la cabecera suele repetir el genérico «Payment required».
+      const detalle = cuerpo && typeof cuerpo === 'object' ? [cuerpo.error, cuerpo.details].filter((x) => typeof x === 'string' && x).join(': ') : '';
+      if (detalle && (typeof cuerpo.details === 'string' || !motivo)) motivo = detalle;
       throw new Error(`x402 pagador: el servidor rechazó el pago${motivo ? `: ${motivo}` : ''}`);
     }
     return { pagado: true, status: segunda.status, body: cuerpo, liquidacion, ...entregado };

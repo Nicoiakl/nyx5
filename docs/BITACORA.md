@@ -14,8 +14,9 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 |---|---|---|
 | ⏳ | **DNSSEC** en nyx5.com. NO es un clic pendiente: el panel dice "pending while we automatically add the DS record" y el único botón que ofrece es Cancel Setup, en rojo. Pero el DS no está en el registro .com y whois sigue diciendo `unsigned`, o sea que lleva colgado. Nadie debe tocar ese botón. Si sigue así, hay que cancelar y volver a encender, o abrir un ticket | 9-sep |
 | ☐ | **Leer y aprobar `docs/TERMS.md`**. Se sirven sólo si él los enciende: son declaraciones vinculantes en su nombre | 8-sep |
-| ☐ | **Textos de la app** para contactos con consentimiento (NX-402) y pedido de pago por transferencia (NX-502): `plan/textos-app-borrador.md` (privado) | 14-sep |
-| ☐ | **`npm publish`** de @nyx5/nyx5 0.7.0 si la sesión de npm de este Mac no alcanzó a hacerlo | 14-sep |
+| ☐ | **Textos de la app** para contactos con consentimiento (NX-402): `plan/textos-app-borrador.md` (privado). Los de NX-502 ya se aprobaron y están desplegados | 14-sep |
+| ☐ | **Cuenta prepago para el agente** (Mercado Pago empresa de Blue Tuna SpA, $30.000, logueada una vez en Chrome) para repetir la compra chilena con plata del agente | 14-sep |
+| ☐ | **Liberar el escrow** `ae65c82b` (500 tokens a compras@) cuando llegue el pedido de Mercado Libre; recordatorio en su buzón el 15-sep | 14-sep |
 | ☐ | **Marca INAPI** clase 42, en pausa hasta la vuelta (`marca/SOLICITUD-MARCA-NYX5.md`) | 13-sep |
 | ☐ | **Smithery**: `smithery auth login && smithery mcp publish dist/nyx5-*.mcpb -n <namespace>/nyx5` | 8-sep |
 | ☐ | **AP2**: ¿se queda mapeado o se le construye la segunda llave ECDSA? Recomendación: dejarlo mapeado | 9-sep |
@@ -30,6 +31,28 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 | ☐ | Reclamar el listado de glama.ai con OAuth de GitHub | 8-sep |
 
 ## Hecho
+
+### 14-sep-2026 (tarde) — dos compras reales, NX-502 desplegado, el pagador x402 y el Spec de la app
+Nicholas pidió pruebas de impacto real, no de escritorio. Dos compras, con lectura distinta:
+- **Compra en Mercado Libre por el agente** (`compras@nyx5.com`, servicio en catálogo, escrow 500
+  tokens): contratado en un paso por nicholas@, el agente eligió envío y medio de pago y pagó desde el
+  Chrome logueado del dueño ($25.409, n.º 2000015028526003). Comprobante sellado
+  (`ebb40537`), contrato `delivered`. Lectura honesta de Nicholas, correcta: plata del dueño en su
+  cuenta = **escritura contable**, no valor. Evidencia: `plan/pruebas/2026-09-14-compra-real-mercadolibre.md`.
+- **El agente pagó con SU billetera** (NX-108): keccak-256 y secp256k1 (RFC 6979, ecrecover) en JS
+  puro, firma EIP-3009, `pagar()` con tope obligatorio. Compra real: 100 píxeles en 402milly.xyz con el
+  ícono de Nyx5 y link a nyx5.com, US$1,00 USDC en Ethereum, tx `0x38cc7715…76a7` (bloque 25977280,
+  gas del facilitador; saldo 2,49 → 1,49). Sello `9ac3cc65`. Costó tres tropiezos medidos: 402milly lee
+  `X-PAYMENT` con cuerpo v1 (ahora van las dos cabeceras), el motivo del rechazo viene en el cuerpo,
+  y `/upload` devuelve un formulario presignado de S3. Evidencia: `plan/pruebas/2026-09-14-pago-x402-real.md`.
+- **NX-502 pedido de pago por transferencia**: textos aprobados tal cual, CLP y USD, RUT completo;
+  `nyx5_payment_request` / `nyx5_payment_confirm`, tarjeta y formulario en /app, eventos sin monto ni
+  RUT. Revisión (5ª): 3 medios en `cobro` y 4 en `pagador`, todos cerrados con grito y silencio.
+  **Desplegado en las dos casas** y verificado (/app sirve los rótulos). Fuera: la herramienta en el
+  conector remoto (la casa vería el RUT en claro).
+- **La app como herramienta de colaboración** (NX-408, nuevo): Spec pedido a `qa@` y sellado
+  (`8e5b1e30`, sha256 bf3093ae…); maqueta en construcción con ese contrato de aceptación.
+- Suite: 340 -> 382. Recordatorio en el buzón de nicholas@ para liberar el escrow el 15-sep.
 
 ### 14-sep-2026 (mañana) — contratar en un paso, plantillas, qa@ como servicio, y el fondo
 Cuatro agentes en paralelo con el método de la noche; fusionados, revisados (cuarta revisión: 4
