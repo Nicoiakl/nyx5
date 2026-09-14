@@ -36,6 +36,8 @@ export const MEDIA = {
   op: 'application/nyx5.libro+json',
   cotizacion: 'application/nyx5.cotizacion+json',
   recibo: 'application/nyx5.recibo+json',
+  // NX-305: un comprador PIDE un servicio del catálogo; el vendedor contesta con la cotización.
+  pedido: 'application/nyx5.pedido+json',
 };
 
 const iso = () => new Date().toISOString();

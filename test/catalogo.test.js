@@ -132,7 +132,7 @@ test('una cotización a un servicio que no está en la ficha se rechaza, en el c
 });
 
 test('herramientas: nyx5_quote acepta `service`, nyx5_profile set/get muestran services, y el conteo no cambió', async () => {
-  assert.equal(TOOLS.length, 24, 'el catálogo no agrega herramientas: van por las que ya existen (22 + las 2 de la notaría)');
+  assert.equal(TOOLS.length, 25, 'el catálogo no agrega herramientas: van por las que ya existen (22 + las 2 de la notaría + nyx5_hire de NX-305)');
   const puesto = JSON.parse((await llamar(vende, 'nyx5_profile', { op: 'set', profile: { services: [servicio({ id: 'lema', name: 'Lema', price: { tokens: 40 }, contract: 'spot', acceptance: undefined })] } })).content[0].text);
   assert.equal(puesto.profile.services[0].id, 'lema');
   const leido = JSON.parse((await llamar(compra, 'nyx5_profile', { op: 'get', address: vende.address })).content[0].text);

@@ -28,7 +28,7 @@ src/libro/contratos.js   máquinas de estado sobre el kernel: ops {accept, deliv
 src/libro/estado.js      NX-501: boleta del asiento (fee y comisión leídos de las líneas) y estado de cuenta por rango, JSON o CSV
 src/libro/errores.js     LibroError(code, message)
 src/libro/notaria.js     notaría (NX-601): sella un hash con fecha y firma de la casa, gratis, sin asiento; verificación pública en /notaria/*
-src/puentes/herramientas.js las 24 herramientas MCP, UN módulo para los dos puentes (MENSAJERIA = las 13 del remoto)
+src/puentes/herramientas.js las 25 herramientas MCP, UN módulo para los dos puentes (MENSAJERIA = las 13 del remoto)
 src/puentes/mcp.js       puente MCP por stdio (la llave del agente en el disco del usuario)
 src/puentes/mcp-remoto.js puente MCP por Streamable HTTP en /mcp (subagente delegado; llave en la bóveda)
 src/puentes/oauth.js     servidor OAuth 2.1 del conector: RFC 9728/8414/7591, PKCE S256, rotación de refresco
@@ -43,13 +43,13 @@ bin/nyx5.js           CLI
 demo/                    e2e, offline, spam (correo) · contratos (libro) · piloto-d4 (economía de una flota + costo por entrega)
 src/correo/unirse.js     join (alta en un paso) y mandate (tope del humano) como funciones testeables
 src/correo/indice.js     búsqueda del índice (NX-302): columnas de la tarjeta, puntaje arbitrado, cursor opaco por generación, filtros; UNA definición para FileStore y D1Store
-src/libro/verifica.js    evaluador de referencia: http_status | sha256 | exit_0; veredicto y "indeciso"
+src/libro/verifica.js    evaluador de referencia: http_status | sha256 | json_path | exit_0; veredicto y "indeciso"; `pruebaDeAceptacion` (NX-305: la prueba de un pedido al catálogo)
 src/libro/tareas.js      trabajo sembrado: catálogo, cupos por agente/día, y que la cotización coincida
 src/puentes/x402.js      adaptador x402 v2: PAYMENT-REQUIRED / PAYMENT-SIGNATURE / PAYMENT-RESPONSE, /x402/supported
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria -> `npm test` (291)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire -> `npm test` (300)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
 ```
@@ -57,7 +57,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 291 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 300 pruebas, todas deben pasar antes de cualquier commit
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
 npm run demo             # correo: tarea cifrada, respuesta, acuse
@@ -437,6 +437,23 @@ sello vuelve como recibo y cualquiera lo verifica sin cuenta en `GET /notaria/<s
 - **Dos versiones firmadas por sello** (`sello` con `by`, `anonimo` con `by: null`), mismo id: la
   pública sirve la anónima si el declarante es secreto (`_declaranteVisible`), y sigue verificando.
 - **Qué NO prueba**: autoría (prueba quién lo DECLARÓ), ni que el documento sea anterior a `at`.
+
+**Contratar desde el directorio en un paso (NX-305, 14-sep-2026).** `Agent.hire` (tool `nyx5_hire`,
+MUEVE_DINERO, no en el remoto) manda un sobre `task` con media `application/nyx5.pedido+json`
+`{ service, input, note }` al vendedor y, si llega una cotización que coincide con el catálogo que el
+CLIENTE leyó (mismo servicio y vendedor, precio y contrato publicados, precio ≤ `max_price`, el mismo
+`input`, y con `acceptance` publicada: `verifica@` de árbitro y prueba del `kind` publicado), la acepta
+sola; cualquier diferencia vuelve NOMBRADA y sin aceptar. El vendedor contesta con
+`Agent.quoteFromCatalog(pedido)` (`nyx5_quote { service, to, in_reply_to }`): la prueba sale de
+`pruebaDeAceptacion(acceptance, input)` en `verifica.js`, que sólo deja pasar los campos que la prueba
+lee y falla ANTES de firmar si falta uno o la URL no es https. Tres cosas que no hay que romper:
+- **`exit_0` no se deriva de un pedido**: el `argv` lo escribiría el comprador y lo correría la casa
+  del vendedor que auto-cotiza. Se cotiza a mano o no se cotiza (`CAMPOS_PRUEBA` no lo lista).
+- **Un vendedor sólo-mensajes no vende**: `hire` lo dice antes de pedir, con la dirección del dueño.
+- **Lo que NO cubre**: el chequeo del comprador es contra la ficha que él leyó; si el vendedor cambia
+  el catálogo entre el pedido y la cotización, la casa rechaza al aceptar (§15) y `hire` devuelve
+  `status: rejected` con la razón de la casa. Y una cotización que no llega en `wait` segundos deja el
+  pedido en el buzón del vendedor: `no_quote` no es "no vende", es "no contestó todavía".
 
 **Trampa: los contadores de puertos (11-sep-2026).** Cuatro suites levantan casas con
 `let puerto = N` + `puerto++`. El guard sólo veía constantes, y una suite nueva en 4231 chocaba con
