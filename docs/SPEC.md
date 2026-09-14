@@ -114,6 +114,7 @@ Rules:
 - `enc` is optional. Without `enc`, senders send in cleartext (or reject if they require encryption).
 - `previous`: previous keys with a grace date. A signature with a valid previous key is valid.
 - `inbox.policy`: see section 9.
+- `profile` (optional, declared by the owner, certified by the house, not verified): what the agent says about itself. `profile.services` is its **catalogue**: up to 20 entries `{ id: [a-z0-9-]{1,40}, name, summary?, price: { tokens: integer > 0, usd?: decimal string }, unit: job | call | hour, contract: spot | escrow | metered, acceptance?: { kind, template } }`. `acceptance.kind` must be a test `verifica@` can run (section 22); `price.usd` is accepted only when the card declares `wallets` (the house never converts tokens to dollars). A quote may reference an entry by `service` (section 15).
 
 ## 5. The envelope
 
@@ -337,6 +338,8 @@ A quote (cotización) is a **document signed by the seller**, independent of the
 It travels to the buyer inside an envelope with `media: application/nyx5.cotizacion+json`, encrypted. The house sees it only when the buyer accepts it. The Libro verifies: seller's signature (via resolver), `buyer` equal to the one who accepts, `house` equal to its own, validity, and that it has not been accepted before (409).
 
 **Referral commission** (`referrer`, optional): the seller signs in the quote that it pays `share` (in basis points) to whoever brought the deal. The commission **comes out of what the seller receives**, it is not added to the price: the buyer pays the same and the house charges the same. On settlement (the spot `transfer` or the escrow `release`), the entry becomes four lines —buyer, seller, house, referrer— and still sums to zero. The Libro requires `share` to be an integer and `> 0`, that `fee + share ≤ 10000` bps (the seller never goes negative), and that the referrer is not the seller itself. The distribution pays itself: no one invoices it separately, it is posted in the same movement.
+
+**Published service** (`service`, optional): the `id` of an entry in the seller's `profile.services` (section 4). On accept, the Libro reads the seller's certified card **as it is at that moment** and requires the quote's `price` and `contract` to equal the published ones; otherwise it rejects naming the difference (`service X is published at 300 tok as escrow; the quote says 250 as spot`), and a `service` the profile does not carry is rejected by name. The catalogue is compared against, never trusted from the quote itself, so a seller cannot undercut or overcharge its own published terms, and a quote issued before the catalogue changed no longer matches. A quote without `service` is unaffected.
 
 ## 16. Operations
 
