@@ -47,10 +47,12 @@ src/correo/indice.js     búsqueda del índice (NX-302): columnas de la tarjeta,
 src/libro/verifica.js    evaluador de referencia: http_status | sha256 | json_path | regex | size | header | exit_0; veredicto y "indeciso"; `pruebaDeAceptacion` (NX-305: la prueba de un pedido al catálogo)
 src/libro/tareas.js      trabajo sembrado: catálogo, cupos por agente/día, y que la cotización coincida
 src/puentes/x402.js      adaptador x402 v2: PAYMENT-REQUIRED / PAYMENT-SIGNATURE / PAYMENT-RESPONSE, /x402/supported
+src/puentes/x402-pagador.js PAGAR por x402 en USDC/EVM: elegir del 402, firmar EIP-3009 (tope obligatorio, nonce aleatorio, validBefore ≤ 5 min), reintentar con PAYMENT-SIGNATURE
+src/nucleo/keccak.js     Keccak-256 (el de Ethereum, NO sha3-256) en JS puro; src/nucleo/secp256k1.js  ECDSA secp256k1 RFC 6979 con recuperación (ecrecover) y dirección EIP-55
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa -> `npm test` (340)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador -> `npm test` (362)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 scripts/revision-adversarial.{md,mjs}  el guion adversarial por versión (NX-903) y su parte automatizable
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
@@ -59,7 +61,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 340 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 362 pruebas, todas deben pasar antes de cualquier commit
 npm run revision         # revisión adversarial automatizable contra una casa local (scripts/revision-adversarial.md)
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
@@ -501,3 +503,35 @@ del contador. Si agregas una suite, usa un puerto libre FUERA de 4300–4339 (bl
   además le inyecta tres defectos para comprobar que grita. Abierto que dejó a la vista: la cubeta
   de registro cuenta sólo después de verificar la firma (un POST sin firma cuesta una verificación
   Ed25519 sin límite).
+
+**Pagar por x402 (14-sep-2026, rama `pagador`, sin desplegar ni gastar).** Hasta hoy la casa sólo
+sabía COBRAR. `src/puentes/x402-pagador.js` firma la autorización EIP-3009 con `keccak.js` y
+`secp256k1.js` en JS puro (cero dependencias, vectores públicos en `test/x402-pagador.test.js`).
+Cuatro cosas que hay que saber para no romperlo:
+- **Keccak-256 NO es `sha3-256`** (relleno 0x01 contra 0x06). La prueba compara contra los KAT del
+  equipo Keccak (incluido un mensaje de 250 bytes, dos bloques) y contra el `sha3-256` de Node para
+  que NO coincidan. Cambiar el relleno tumba seis pruebas.
+- **El dominio EIP-712 sale de `TOKEN_USD`, nunca del 402.** Un servidor que anuncie otro `asset`
+  o `name` no consigue firma. Se comprobó que el separador de dominio calculado coincide con el
+  `DOMAIN_SEPARATOR()` del USDC de Ethereum y con el ejemplo del propio EIP-712.
+- **`tope` es obligatorio y se comprueba ANTES de tocar la llave**; nonce de 32 bytes aleatorios;
+  `validBefore` ≤ ahora + 300 s aunque el servidor pida más. Cada guardia tiene prueba de grito
+  (verificadas por mutación: siete mutaciones, siete fallos).
+- **`test/custodia.test.js` barre `src/` buscando `0x` + 40 hex.** Los primeros 40 dígitos de una
+  constante de 64 (P, N, G de la curva) parecen una dirección: por eso `secp256k1.js` las escribe
+  como `hex('…')` sin el `0x` pegado. Y ninguna dirección de ejemplo va en `src/`: vive en la prueba.
+- **No es de tiempo constante** (BigInt): sirve para un agente que firma pocos pagos en su propio
+  proceso, NO para un servidor que firme con una llave valiosa a pedido de extraños.
+- `demo/x402-pagar.mjs` lee la llave de un archivo y nunca la imprime; MUEVE DINERO si la llave
+  tiene fondos. Ejercitado sólo contra un servidor local. Correrlo contra algo real exige el OK de
+  Nicholas (§8).
+- **Revisión adversarial (14-sep, cuatro medios arreglados con grito y silencio):** una llave
+  malformada ya no se cita en el error (`deHex` repetía 20 caracteres = 72 bits del secreto); un
+  `maxTimeoutSeconds` negativo firmaba un cheque ya vencido, ahora sólo acorta; una red llamada
+  `constructor` reventaba con TypeError en vez de rechazarse (`tokenDe` con `Object.hasOwn`); y
+  todo error DESPUÉS de entregar la firma lleva `firmado`, `nonce`, `red`, `monto`, `destinatario`
+  y `validBefore` (el servidor puede liquidar ese cheque aunque haya dicho que no), con `alFirmar`
+  para escribir el registro antes del paso. Se comprobó en vivo (`eth_call` a un RPC público, sólo
+  lectura) que `DOMAIN_SEPARATOR()` del USDC de Ethereum es el que calcula `separadorDeDominio`.
+  **Qué NO cubre**: un timeout en la segunda petición no distingue "no llegó" de "llegó y no
+  contestó"; el nonce del error sirve para mirar la cadena, no para saber sin mirarla.
