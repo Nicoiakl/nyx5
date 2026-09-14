@@ -552,6 +552,41 @@ matches) together with the seal (the signature verifies against the domain card,
 - What it does **not** prove: authorship (it proves who *declared* the hash), that the document
   predates `at` (only that it is not later), or that `name`/`media`/`note` describe it.
 
+## 23c. Assistants and `qa@<house>`
+
+An **assistant** is an address whose replies are produced by a language model, operated by the house
+within a monthly budget. Its card declares `custody: { keys: "house", via: "assistant" }`: the house
+holds its key and reads what it receives (the declared exception to §5 encryption). Two kinds:
+
+- a **delegated** assistant lives on a messages-only delegated address (§4) and has no ledger account;
+- a **house** assistant is a root address of the house (no delegation), so it **has** a ledger account
+  and can receive `pay` (§16). `qa` is a reserved name (§8b): only a house assistant may live there.
+
+`qa@<house>` sells two things, both paid from **credit**: the client pays in advance with
+`pay { to: "qa@<house>", amount, concept }`; credit = payments received from that client in the
+journal minus what was consumed. With no credit the reply says how much is missing and the model is
+**not** called. The reply footer carries `cobrado: N tokens · crédito restante: M`. The assistant's
+owner and their delegates are not charged.
+
+- **Spec** — a plain message with a request. The reply is an acceptance contract with numbered
+  criteria; with `seal` on, its footer carries the `sha256` of the text (computed by the house, not by
+  the model) so the client can `notarize` it (§23b). Price: `price_tokens` (400 at nyx5.com).
+- **Gate** — a message with media `application/nyx5.gate+json` and body
+  `{ spec_sha256, spec, delivery: { text, url?, sha256? }, note? }`. The client **brings** the
+  contract text; before any cost the house checks `sha256(spec) == spec_sha256`, that this hash is
+  **sealed in its notary**, and that `delivery.text` is not empty (`delivery.sha256`, if given, must
+  match it). The reply is JSON **signed by the house** (`tipo: "veredicto"`, verifiable against the
+  domain card): `{ veredicto: pass | fail | abstain, criterios: [{ n, cumple: true | false | null,
+  evidencia }], razon, spec_sha256, delivery_sha256, sealed_by, sealed_at, model, in_reply_to }`.
+  A `fail` without a criterion marked false with evidence, a `pass` with any criterion not met, a
+  malformed answer or a model refusal are all downgraded to `abstain`. Price: `gate_price_tokens`
+  for pass or fail, `gate_abstain_tokens` for an abstention (400 / 200 at nyx5.com).
+- What Gate does **not** do: fetch `delivery.url` (it judges `delivery.text` only), require that the
+  seal be the client's (it records who sealed), or detect a well-formed fail with fabricated
+  evidence — the verdict travels with its evidence for the reader to check.
+- MCP: `nyx5_qa_spec { to?, request }` and `nyx5_qa_gate { to?, spec_sha256, spec, delivery, note? }`
+  are messages (available on the remote connector); the prior `pay` goes through the ledger tools.
+
 ## 24. What Nyx5/1 does not yet solve (and does not pretend to)
 
 - **Cross-domain reputation**: today each receiver decides alone. A shared reputation network (like email's blacklists) is future work.

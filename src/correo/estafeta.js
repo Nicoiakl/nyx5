@@ -40,7 +40,7 @@ import { atenderMcp } from '../puentes/mcp-remoto.js';
 import { abrirBoveda } from '../nucleo/boveda.js';
 import { ICONOS } from '../plataformas/iconos.js';
 import { Agent } from './agente.js';
-import { atenderAsistentes, PRECIOS } from './asistente.js';
+import { atenderAsistentes, PRECIOS, MEDIA_GATE } from './asistente.js';
 import { validarFiltros, puntajeDe, precioMinimo, FILTROS } from './indice.js';
 
 const now = () => Date.now();
@@ -242,7 +242,8 @@ export class Estafeta {
     if (!local || Estafeta.RESERVED.has(local) || local.length < (this.policy.min_name_length || 0)) return false;
     return !(await this.store.getAgent(local));
   }
-  static RESERVED = new Set(['postmaster', 'libro', 'verifica', 'tareas', 'casa', 'admin', 'root', 'abuse', 'security', 'hostmaster', 'noreply', 'no-reply', 'support', 'estafeta', 'nyx5', 'indice']);
+  // `qa` es de la casa (NX-606): sólo un asistente de sistema puede vivir ahí, nunca un registro.
+  static RESERVED = new Set(['postmaster', 'libro', 'verifica', 'tareas', 'casa', 'admin', 'root', 'abuse', 'security', 'hostmaster', 'noreply', 'no-reply', 'support', 'estafeta', 'nyx5', 'indice', 'qa']);
 
   // ---------- servicio de registro ----------
   // Invitaciones: la casa emite códigos con usos y vencimiento; un agente los presenta al inscribirse.
@@ -312,7 +313,10 @@ export class Estafeta {
 
   // ---------- agentes ----------
   static VISIBILIDADES = ['public', 'private', 'secret'];
-  async registerAgent({ local, sig, enc = null, capabilities = {}, inbox = { policy: 'open' }, wallet = null, wallets = null, webhook = null, notify_email = null, valid_until = null, delegation = null, welcome = null, custody = null, group = null, profile = undefined, visibility = undefined }) {
+  // `system`: una dirección de sistema con llaves propias (un asistente de la casa, NX-606). Sólo
+  // la pone `_adminAsistente` (ruta de la casa): salta la lista de reservados y el largo mínimo,
+  // como verifica@ y tareas@, y no recibe regalo de bienvenida.
+  async registerAgent({ local, sig, enc = null, capabilities = {}, inbox = { policy: 'open' }, wallet = null, wallets = null, webhook = null, notify_email = null, valid_until = null, delegation = null, welcome = null, custody = null, group = null, profile = undefined, visibility = undefined, system = false }) {
     // Visibilidad (NX-202): public = en el directorio; private = existe, lo encuentra quien sabe la
     // dirección (lo de siempre; es el defecto); secret = a quien no está en su lista se le responde
     // exactamente lo que a un nombre inexistente. Se conserva entre re-certificaciones.
@@ -328,11 +332,11 @@ export class Estafeta {
     local = String(local).toLowerCase();
     const address = `${local}@${this.domain}`;
     parseAddress(address);
-    if (Estafeta.RESERVED.has(local) && !this.isSystem(local)) throw Object.assign(new Error(`name reserved by the protocol: ${local}`), { status: 409 });
+    if (Estafeta.RESERVED.has(local) && !this.isSystem(local) && !system) throw Object.assign(new Error(`name reserved by the protocol: ${local}`), { status: 409 });
     // Nombres de 1 a 3 caracteres: reservados en una casa de registro abierto. Son lo primero
     // que alguien acapara para revender o para suplantar (a@casa se confunde con cualquiera), y
     // un agente que llega no necesita un nombre corto: necesita uno suyo. Los de sistema pasan.
-    if (local.length <= this.policy.min_name_length - 1 && !this.isSystem(local) && !delegation) {
+    if (local.length <= this.policy.min_name_length - 1 && !this.isSystem(local) && !delegation && !system) {
       throw Object.assign(new Error(`names shorter than ${this.policy.min_name_length} characters are reserved in this house`), { status: 409 });
     }
     if (delegation) {
@@ -410,7 +414,7 @@ export class Estafeta {
       await this.store.putAgent(local, { ...card, webhook, notify_email });
     }
     const gift = welcome ?? this.libro.welcome;
-    if (creado && !prev && !this.isSystem(local) && !delegation && !group && gift > 0) await this.libro.topup(address, gift, 'regalo de bienvenida', { agent: address });
+    if (creado && !prev && !this.isSystem(local) && !delegation && !group && !system && gift > 0) await this.libro.topup(address, gift, 'regalo de bienvenida', { agent: address });
     return card;
   }
 
@@ -771,13 +775,63 @@ export class Estafeta {
     // seal: cada respuesta termina con su sha256, para sellarla en la notaría (qa@, NX-606).
     const seal = c.seal ?? base.seal ?? false;
     if (typeof seal !== 'boolean') return { error: 'seal must be true or false' };
-    return { model, effort, max_tokens, budget_usd, seal };
+    // Cobro por crédito (NX-606 fase 1): tokens por respuesta de Spec, por veredicto de Gate y por
+    // abstención de Gate. 0 = gratis (el asistente de Sigo). Decisión de Nicholas (14-sep-2026):
+    // Spec 400, Gate 400 si dictamina y 200 si se abstiene.
+    const entero = (k, def, max = 1_000_000) => { const v = Number(c[k] ?? base[k] ?? def); return Number.isInteger(v) && v >= 0 && v <= max ? v : null; };
+    const price_tokens = entero('price_tokens', 0);
+    if (price_tokens === null) return { error: 'price_tokens must be an integer between 0 and 1000000' };
+    const gate_price_tokens = entero('gate_price_tokens', price_tokens);
+    if (gate_price_tokens === null) return { error: 'gate_price_tokens must be an integer between 0 and 1000000' };
+    const gate_abstain_tokens = entero('gate_abstain_tokens', Math.floor(gate_price_tokens / 2));
+    if (gate_abstain_tokens === null || gate_abstain_tokens > gate_price_tokens) return { error: 'gate_abstain_tokens must be an integer between 0 and gate_price_tokens' };
+    const gate = c.gate ?? base.gate ?? false;
+    if (typeof gate !== 'boolean') return { error: 'gate must be true or false' };
+    const persona_gate = c.persona_gate ?? base.persona_gate ?? '';
+    if (typeof persona_gate !== 'string' || persona_gate.length > 20_000) return { error: 'persona_gate must be a string of at most 20000 characters' };
+    return { model, effort, max_tokens, budget_usd, seal, price_tokens, gate_price_tokens, gate_abstain_tokens, gate, persona_gate };
+  }
+  // Alta de un asistente de SISTEMA (NX-606): `<local>@<casa>` con llaves propias guardadas en la
+  // bóveda, tarjeta certificada por la casa, buzón abierto y cuenta en el Libro (recibe `pay`).
+  // A diferencia del modo delegado, no cuelga de nadie: su dueño es quien diga `config.owner`.
+  async _altaAsistenteSistema(b) {
+    const l = String(b.local || '').toLowerCase();
+    if (!Estafeta.validLocal(l) || l.startsWith('g.')) return { status: 400, body: { reason: 'local must be a valid address name' } };
+    if (this.isSystem(l)) return { status: 409, body: { reason: `${l}@ is a protocol address, not an assistant` } };
+    if (await this.store.getAgent(l)) return { status: 409, body: { reason: `${l}@${this.domain} already exists` } };
+    const k = b.keys || {};
+    if (![k.sig, k.sigPriv, k.enc, k.encPriv].every((x) => typeof x === 'string' && x)) return { status: 400, body: { reason: 'keys must bring sig, sigPriv, enc and encPriv' } };
+    // Prueba de posesión (invariante 9): la llave privada firma y la pública verifica.
+    let posee = false; try { posee = verifyObject(signObject({ nyx5: '1', prueba: l }, k), k.sig); } catch { posee = false; }
+    if (!posee) return { status: 400, body: { reason: 'sigPriv does not match sig' } };
+    const c = b.config || {};
+    const v = this._configAsistente(c);
+    if (v.error) return { status: 400, body: { reason: v.error } };
+    let owner = null;
+    if (c.owner != null) {
+      try { const p = parseAddress(String(c.owner)); owner = `${p.local}@${p.domain}`; } catch { return { status: 400, body: { reason: 'owner must be an address' } }; }
+    }
+    const since = iso();
+    let card;
+    try {
+      card = await this.registerAgent({ local: l, sig: k.sig, enc: k.enc, system: true, welcome: 0, inbox: { policy: 'open' },
+        capabilities: { accepts: ['text/plain', 'application/json', ...(v.gate ? [MEDIA_GATE] : [])], listed: true, assistant: { spec_tokens: v.price_tokens, ...(v.gate ? { gate_tokens: v.gate_price_tokens, gate_abstain_tokens: v.gate_abstain_tokens } : {}) } },
+        custody: { keys: 'house', via: 'assistant', since } });
+    } catch (e) { return { status: e.status || 400, body: { reason: e.message } }; }
+    await this.store.kvPut('boveda', l, { sellado: this.boveda.sellar({ sig: k.sig, sigPriv: k.sigPriv, enc: k.enc, encPriv: k.encPriv }, l), root: null, since });
+    const cfg = { local: l, owner, system: true, ...v, persona: String(c.persona || ''), enabled: true, created: since };
+    await this.store.kvPut('asistente', l, cfg);
+    const i = (await this.store.kvGet('asistente', '_indice')) || [];
+    if (!i.includes(l)) await this.store.kvPut('asistente', '_indice', [...i, l]);
+    await this._evento('assistant_created', card.address, { budget_usd: cfg.budget_usd, system: true, price_tokens: cfg.price_tokens });
+    return { status: 201, body: { address: card.address, custody: card.custody, system: true, config: { ...cfg, persona: `${cfg.persona.length} chars`, persona_gate: `${cfg.persona_gate.length} chars` } } };
   }
   async _adminAsistente(rx, local, accion) {
     const b = rx.body || {};
     const indice = async () => (await this.store.kvGet('asistente', '_indice')) || [];
     if (rx.method === 'POST' && !local && !accion) {
       if (!this.boveda) return { status: 503, body: { reason: 'this house has no vault key' } };
+      if (b.system === true) return this._altaAsistenteSistema(b);
       const l = String(b.local || '').toLowerCase();
       const rec = Estafeta.validLocal(l) ? await this.store.getAgent(l) : null;
       if (!rec?.delegation || rec.revoked) return { status: 404, body: { reason: 'an assistant must be an existing delegated address' } };
@@ -814,7 +868,7 @@ export class Estafeta {
       if (v.error) return { status: 400, body: { reason: v.error } };
       const nueva = { ...cfg, ...v, ...(typeof b.persona === 'string' ? { persona: b.persona } : {}), updated: iso() };
       await this.store.kvPut('asistente', local, nueva);
-      return { status: 200, body: { model: nueva.model, effort: nueva.effort, max_tokens: nueva.max_tokens, budget_usd: nueva.budget_usd, seal: nueva.seal === true } };
+      return { status: 200, body: { model: nueva.model, effort: nueva.effort, max_tokens: nueva.max_tokens, budget_usd: nueva.budget_usd, seal: nueva.seal === true, price_tokens: nueva.price_tokens, gate: nueva.gate === true, gate_price_tokens: nueva.gate_price_tokens, gate_abstain_tokens: nueva.gate_abstain_tokens } };
     }
     if (rx.method === 'POST' && (accion === 'pause' || accion === 'resume')) {
       await this.store.kvPut('asistente', local, { ...cfg, enabled: accion === 'resume' });
@@ -824,7 +878,7 @@ export class Estafeta {
       const mes = new Date().toISOString().slice(0, 7);
       const gasto = (await this.store.kvGet('asistente-gasto', `${local}:${mes}`)) || { usd: 0, llamadas: 0 };
       const con = await this.store.kvGet('asistente-conocimiento', local);
-      return { status: 200, body: { address: `${local}@${this.domain}`, enabled: cfg.enabled, model: cfg.model, effort: cfg.effort, budget_usd: cfg.budget_usd, month: mes, spent_usd: Math.round(gasto.usd * 10000) / 10000, calls: gasto.llamadas, knowledge_bytes: con ? Buffer.byteLength(con.texto) : 0, knowledge_updated: con?.updated || null, api_key: !!this.asistente, pending: (await this.store.listMail(local)).length } };
+      return { status: 200, body: { address: `${local}@${this.domain}`, enabled: cfg.enabled, system: cfg.system === true, owner: cfg.owner || null, model: cfg.model, effort: cfg.effort, budget_usd: cfg.budget_usd, price_tokens: cfg.price_tokens ?? 0, gate: cfg.gate === true, gate_price_tokens: cfg.gate_price_tokens ?? 0, gate_abstain_tokens: cfg.gate_abstain_tokens ?? 0, month: mes, spent_usd: Math.round(gasto.usd * 10000) / 10000, calls: gasto.llamadas, knowledge_bytes: con ? Buffer.byteLength(con.texto) : 0, knowledge_updated: con?.updated || null, api_key: !!this.asistente, pending: (await this.store.listMail(local)).length } };
     }
     return { status: 405, body: { reason: 'method not allowed here' } };
   }
