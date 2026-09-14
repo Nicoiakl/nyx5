@@ -20,7 +20,7 @@
 
 import { FileStore } from '../nucleo/almacen.js';
 import { Resolver, parseAddress } from './resolver.js';
-import { validateEnvelope, applyInboxPolicy, applyEmailPolicy, RateLimiter, RateLimiterDurable, proyectoDe, nombreDeProyecto, validarPerfil } from './politica.js';
+import { validateEnvelope, applyInboxPolicy, applyEmailPolicy, RateLimiter, RateLimiterDurable, proyectoDe, nombreDeProyecto, validarPerfil, usdSinBilletera } from './politica.js';
 import { generateSigningKeys, signObject, verifyObject, signBytes, verifyBytes, canonical, uuid, unb64u, sha256hex } from '../nucleo/crypto.js';
 import { Libro, MEDIA, LibroError } from '../libro/libro.js';
 import { veredicto, pruebasDe, pruebasDisponibles } from '../libro/verifica.js';
@@ -349,6 +349,8 @@ export class Estafeta {
     // casa no la controla ni puede mover nada de ella, igual que no controla la llave del agente.
     let billeteras; try { billeteras = x402.validarBilleteras(wallets ?? wallet ?? prev?.wallets ?? prev?.wallet ?? null); }
     catch (e) { throw Object.assign(new Error(e.message), { status: 400 }); }
+    // Un servicio con precio en dólares sin billetera a la que cobrarlo es una promesa gratis (NX-301).
+    { const e = usdSinBilletera(profile === undefined ? prev?.profile : perfil, billeteras); if (e) throw Object.assign(new Error(e), { status: 400 }); }
     const card = signObject({
       nyx5: '1', address, sig, enc,
       capabilities: { accepts: ['text/plain', 'application/json'], ...capabilities },
@@ -1491,6 +1493,8 @@ export class Estafeta {
         if (who.local !== l && who.address !== rec.delegation?.by) return send(403, { reason: 'only the owner of an address (or of its delegation) edits its profile' });
         const v = validarPerfil(rx.body?.profile === undefined ? null : rx.body.profile);
         if (v.error) return send(400, { reason: v.error });
+        // El validador no ve la tarjeta: el precio en dólares se cruza aquí con la billetera declarada.
+        { const e = usdSinBilletera(v.perfil, rec.wallets || (rec.wallet ? [rec.wallet] : [])); if (e) return send(400, { reason: e }); }
         // Re-certificar sin tocar nada más: mismas llaves, misma delegación, mismo buzón.
         const { certification: _c, webhook, notify_email, ...cuerpo } = rec;
         const card = signObject({ ...cuerpo, profile: v.perfil ? { ...v.perfil, updated: iso() } : undefined }, this.keys, 'certification');

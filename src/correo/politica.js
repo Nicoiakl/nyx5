@@ -8,6 +8,8 @@
 
 import { checkPow } from '../nucleo/crypto.js';
 import { parseAddress } from './resolver.js';
+import { PRUEBAS } from '../libro/verifica.js';
+import { CONTRATOS } from '../libro/contratos.js';
 
 export const TYPES = new Set(['message', 'task', 'result', 'receipt', 'intro']);
 
@@ -27,7 +29,7 @@ export const rolDe = (env) => { const r = env?.extensions?.[EXT_PROYECTO]?.role;
 // Vocabulario CERRADO, como el alcance de un mandato: una clave desconocida se rechaza nombrándola,
 // porque una ficha es lo que otros agentes leen antes de contratar, y no puede llevar de todo.
 // Lo declarado NO está verificado (eso es el sello de dueño, otra pieza): es lo que el dueño dice.
-const PERFIL_CLAVES = ['display_name', 'summary', 'description', 'languages', 'tags', 'owner', 'links'];
+const PERFIL_CLAVES = ['display_name', 'summary', 'description', 'languages', 'tags', 'owner', 'links', 'services'];
 // Fuera: controles C0 y C1, invisibles de ancho cero, y las marcas bidi que voltean el texto en
 // pantalla (un nombre que se lee al revés es una suplantación). Los espacios se colapsan.
 // Los controles pasan a espacio (separaban algo); los invisibles se quitan (no separaban nada, y
@@ -67,7 +69,72 @@ export function validarPerfil(p) {
     for (const l of p.links) { let u; try { u = new URL(String(l)); } catch { u = null; } if (!u || u.protocol !== 'https:' || u.username || u.password || String(l).length > 200) return { error: `profile.links: not a plain https URL: ${String(l).slice(0, 60)}` }; }
     out.links = [...new Set(p.links.map(String))];
   }
+  if (p.services != null) {
+    if (!Array.isArray(p.services) || p.services.length > SERVICIOS_MAX) return { error: `profile.services must be a list of up to ${SERVICIOS_MAX} services` };
+    const ids = new Set(), lista = [];
+    for (const s of p.services) {
+      const v = validarServicio(s);
+      if (v.error) return { error: v.error };
+      if (ids.has(v.servicio.id)) return { error: `profile.services: the id "${v.servicio.id}" appears twice` };
+      ids.add(v.servicio.id); lista.push(v.servicio);
+    }
+    if (lista.length) out.services = lista;
+  }
   return { perfil: out };
+}
+
+// Catálogo de servicios en la ficha (NX-301): lo que el agente vende, con precio y contrato
+// publicados. Una cotización que nombre un `service` se compara contra ESTO al aceptar
+// (`Libro.verifyQuote`): el precio y el contrato de la cotización tienen que ser los publicados,
+// igual que una tarea sembrada se cotiza con los términos del catálogo tal cual.
+// Vocabulario cerrado por servicio, como el resto de la ficha. `acceptance.kind` sólo puede ser una
+// prueba que verifica@ sabe correr (la lista es la de verifica.js, importada, no copiada) y
+// `contract` sólo un tipo cotizable (la lista es la de contratos.js). `template` es texto para
+// quien va a cotizar: no es la prueba concreta, ésa va en `terms.verify` de cada cotización.
+// `price.usd` es un decimal en texto (no flotante) y SÓLO tiene sentido si la tarjeta declara
+// billetera: eso lo comprueba `usdSinBilletera` en la ruta, porque este validador no ve la tarjeta.
+const SERVICIOS_MAX = 20;
+const SERVICIO_CLAVES = ['id', 'name', 'summary', 'price', 'unit', 'contract', 'acceptance'];
+const UNIDADES = ['job', 'call', 'hour'];
+const contratosCotizables = () => Object.keys(CONTRATOS).filter((k) => CONTRATOS[k]?.quoteable);
+export function validarServicio(s) {
+  if (typeof s !== 'object' || s === null || Array.isArray(s)) return { error: 'profile.services: each service must be an object' };
+  const ajenas = Object.keys(s).filter((k) => !SERVICIO_CLAVES.includes(k));
+  if (ajenas.length) return { error: `profile.services carries ${ajenas.map((k) => JSON.stringify(k)).join(', ')}, which this house does not publish; a service accepts: ${SERVICIO_CLAVES.join(', ')}` };
+  if (typeof s.id !== 'string' || !/^[a-z0-9-]{1,40}$/.test(s.id)) return { error: 'profile.services[].id must be 1-40 lowercase letters, digits and dashes' };
+  const donde = `profile.services[${s.id}]`;
+  if (typeof s.name !== 'string' || !limpio(s.name, 80)) return { error: `${donde}.name must be a non-empty string` };
+  const out = { id: s.id, name: limpio(s.name, 80) };
+  if (s.summary != null) { if (typeof s.summary !== 'string') return { error: `${donde}.summary must be a string` }; const v = limpio(s.summary, 280); if (v) out.summary = v; }
+  const pr = s.price;
+  if (typeof pr !== 'object' || pr === null || Array.isArray(pr) || Object.keys(pr).some((k) => !['tokens', 'usd'].includes(k))) return { error: `${donde}.price must be { tokens, usd? }` };
+  if (!Number.isInteger(pr.tokens) || pr.tokens <= 0) return { error: `${donde}.price.tokens must be a positive integer` };
+  out.price = { tokens: pr.tokens };
+  if (pr.usd != null) {
+    // Decimal en texto con hasta 6 decimales (los de USDC), mayor que cero. Nunca un número: 0.1+0.2.
+    if (typeof pr.usd !== 'string' || !/^\d{1,9}(\.\d{1,6})?$/.test(pr.usd) || Number(pr.usd) <= 0) return { error: `${donde}.price.usd must be a positive decimal string like "1.50"` };
+    out.price.usd = pr.usd;
+  }
+  if (!UNIDADES.includes(s.unit)) return { error: `${donde}.unit must be one of ${UNIDADES.join(', ')}` };
+  out.unit = s.unit;
+  const cotizables = contratosCotizables();
+  if (!cotizables.includes(s.contract)) return { error: `${donde}.contract must be one of ${cotizables.join(', ')}` };
+  out.contract = s.contract;
+  if (s.acceptance != null) {
+    const a = s.acceptance;
+    if (typeof a !== 'object' || a === null || Array.isArray(a) || Object.keys(a).some((k) => !['kind', 'template'].includes(k))) return { error: `${donde}.acceptance must be { kind, template }` };
+    if (!PRUEBAS.includes(a.kind)) return { error: `${donde}.acceptance.kind must be a test verifica@ can run: ${PRUEBAS.join(', ')}` };
+    if (typeof a.template !== 'string' || !limpio(a.template, 280)) return { error: `${donde}.acceptance.template must be a non-empty string` };
+    out.acceptance = { kind: a.kind, template: limpio(a.template, 280) };
+  }
+  return { servicio: out };
+}
+// Un precio en dólares sólo se publica si hay a dónde cobrarlo. La comprobación vive aparte de
+// validarPerfil porque la billetera está en la tarjeta, no en la ficha. Devuelve el error o null.
+export function usdSinBilletera(perfil, wallets) {
+  const con = (perfil?.services || []).filter((s) => s.price?.usd != null);
+  if (!con.length || (Array.isArray(wallets) && wallets.length)) return null;
+  return `service "${con[0].id}" declares a usd price but the card has no wallet; declare wallets first`;
 }
 
 export function validateEnvelope(env, { maxBytes = 1_048_576 } = {}) {

@@ -236,8 +236,11 @@ export class Libro {
 
   // ---------- cotizaciones: documentos firmados por el vendedor ----------
   // Una cotización viaja adentro de un sobre (cifrado si se quiere) y se presenta al Libro al aceptar.
-  static buildQuote({ seller, buyer, house, contract = 'spot', price, concept, terms = {}, expires, arbiter = null, referrer = null }, sellerKeys) {
+  static buildQuote({ seller, buyer, house, contract = 'spot', price, concept, terms = {}, expires, arbiter = null, referrer = null, service = null }, sellerKeys) {
     if (!CONTRATOS[contract]?.quoteable) throw new LibroError(400, `contrato no cotizable: ${contract}`);
+    // `service` (NX-301): el id de un servicio publicado en la ficha del vendedor. Va firmado en la
+    // cotización y verifyQuote lo cruza con la ficha al aceptar: precio y contrato tienen que ser los publicados.
+    if (service != null && (typeof service !== 'string' || !/^[a-z0-9-]{1,40}$/.test(service))) throw new LibroError(400, 'service debe ser el id de un servicio de la ficha (letras minúsculas, dígitos y guiones)');
     if (arbiter) parseAddress(arbiter);
     // Comisión de referido: el vendedor firma en su cotización que le paga `share` (en basis points)
     // a quien trajo el trato. La comisión sale de LO QUE RECIBE el vendedor, no se suma al precio:
@@ -246,7 +249,7 @@ export class Libro {
       parseAddress(referrer.address);
       if (!Number.isInteger(referrer.share) || referrer.share <= 0) throw new LibroError(400, 'referrer.share debe ser un entero de basis points > 0');
     }
-    return signObject({ tipo: 'cotizacion', id: uuid(), house, seller, buyer, contract, price, currency: 'tok', concept, terms, arbiter, referrer: referrer || undefined, issued: iso(), expires: expires || null }, sellerKeys);
+    return signObject({ tipo: 'cotizacion', id: uuid(), house, seller, buyer, contract, price, currency: 'tok', concept, terms, arbiter, referrer: referrer || undefined, service: service || undefined, issued: iso(), expires: expires || null }, sellerKeys);
   }
   async verifyQuote(q, buyer) {
     if (q?.tipo !== 'cotizacion' || !q.id || !q.seller || !q.signature) throw new LibroError(400, 'cotización malformada');
@@ -271,6 +274,16 @@ export class Libro {
     // Una dirección de sólo mensajes (la del Claude de un teléfono, cuya llave guarda la casa) no
     // vende: aceptarle una cotización le movería saldo, que es justo lo que su dueño no autorizó.
     if (card.delegation?.scope?.messages_only) throw new LibroError(403, 'the seller is a messages-only address: it cannot sell');
+    // Cotización sobre un servicio publicado (NX-301): se compara contra la ficha CERTIFICADA del
+    // vendedor tal como está hoy, nunca contra lo que la cotización dice de sí misma. Mismo espíritu
+    // que tareas.coincide: un precio o un contrato distintos del publicado son rechazo, no negociación.
+    // Si el vendedor cambió su catálogo después de cotizar, la cotización vieja ya no coincide y se rechaza.
+    if (q.service != null) {
+      if (typeof q.service !== 'string') throw new LibroError(400, 'service must be the id of a published service');
+      const s = (card.profile?.services || []).find((x) => x.id === q.service);
+      if (!s) throw new LibroError(400, `service "${q.service}" is not published in the profile of ${q.seller}`);
+      if (s.price.tokens !== q.price || s.contract !== q.contract) throw new LibroError(400, `service ${s.id} is published at ${s.price.tokens} tok as ${s.contract}; the quote says ${q.price} as ${q.contract}`);
+    }
     if (await this.store.libroFindContractByQuote(q.id)) throw new LibroError(409, 'cotización ya aceptada');
     return card;
   }
