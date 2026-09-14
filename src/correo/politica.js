@@ -36,7 +36,7 @@ const PERFIL_CLAVES = ['display_name', 'summary', 'description', 'languages', 't
 // "sig<ancho cero>o" tiene que quedar "sigo", no "sig o").
 const CONTROLES = /[\x00-\x1f\x7f-\x9f]/g;
 const INVISIBLES = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
-const limpio = (s, max) => String(s).replace(INVISIBLES, '').replace(CONTROLES, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+export const limpio = (s, max) => String(s).replace(INVISIBLES, '').replace(CONTROLES, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 export function validarPerfil(p) {
   if (p === null) return { perfil: null };
   if (typeof p !== 'object' || Array.isArray(p)) return { error: 'profile must be an object' };

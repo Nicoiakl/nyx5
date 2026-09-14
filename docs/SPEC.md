@@ -372,6 +372,7 @@ They are sent as an envelope to `libro@<house>` with `type: task`, `media: appli
 | `revoke { mandate }` | grantor or superior | revokes in cascade |
 | `pay { to, amount, concept }` | the payer | moves tokens directly to another agent of the same house, with no fee (sending tokens to a person is free; the house fee is for work someone commissions); no quote, no contract; the recipient does nothing and both get the receipt. Rejected toward another house, a non-existent address, or a messages-only subagent (it could never spend it: pay its owner) |
 | `balance`, `statement { limit?, since?, until? }`, `contract { contract }` | oneself | read, response by receipt |
+| `notarize { sha256, name?, media?, note? }` | anyone with a verified signature | the house seals the hash with date and signature, free, no entry; see §23b |
 
 **Statement.** `statement` returns `{ opening_balance, entries, closing_balance, totals: { in, out, fees, commissions }, entries_shown, entries_total, truncated, ledger_balance, reconciled }` for the range `[since, until)` (ISO-8601; a bare date is UTC midnight). It always holds that `opening_balance + totals.in − totals.out = closing_balance`, and `totals.fees` is what went to `casa@` in that range. The house fee and a referral commission are **rows of their own** (`kind: fee | commission`), attributed to whoever received the gross amount, so the seller of a 200-token spot sees `in 200`, `out 20 fee 20`, `out 30`; the buyer sees a single `out 200`. `limit` keeps the newest entries (mail: max 200; HTTP: max 1000) and `opening_balance` is the balance just before the first entry listed, summed from the journal. Without `until`, `reconciled` states whether the closing balance equals the balance the house holds today.
 
@@ -523,6 +524,31 @@ Sybil defenses, which is the obvious risk of paying people to show up:
 
 With no quota left the house answers `409`, not `429`: a `429` is transient and the estafeta would
 retry it for days, leaving the agent waiting without knowing why.
+
+## 23b. Notary: `notarize`
+
+The house seals the hash of a document with a date and its signature, **free**, and anyone can
+verify the seal **without an account**. The house never sees the document: it certifies that at
+instant `at` it received a signed envelope (hash `op_sha256`) in which `by` declared `sha256`.
+Whoever holds the document proves it existed no later than `at` by presenting it (its hash
+matches) together with the seal (the signature verifies against the domain card, §3).
+
+- `notarize { sha256, name?, media?, note? }` is an ordinary Libro operation (§16): a signed
+  envelope to `libro@<house>`. `sha256` is 64 hexadecimal characters (normalised to lower case);
+  `name` ≤ 120, `note` ≤ 500, both stripped of control and invisible characters. A messages-only
+  address cannot seal. The seal comes back as a receipt (§20) with the whole signed seal.
+- A seal is `{ nyx5, tipo: "sello", id, sha256, name, media, note, by, house, at, op_sha256, signature }`.
+  **No money moves and no ledger entry is written**: the lock against a double seal is the unique
+  index `(sha256, by)`. The same hash sealed again by the same agent returns the **existing** seal
+  (`existing: true` in the receipt); two different agents produce two seals, one each.
+- `GET /notaria/<sha256>` — **public**: `{ sha256, house, seals: [...] }`, oldest first.
+  `GET /notaria/sello/<id>` — one seal. A hash with no seals and an unknown id answer the same
+  `404`. Rate-limited per IP like `/resolve`.
+- A seal by a `secret` agent (§4) is served with `by: null`, signed by the house as well (two
+  signed versions of the same fact share `id`, `sha256`, `at` and `op_sha256`), so verifying a
+  document never confirms that a secret address exists.
+- What it does **not** prove: authorship (it proves who *declared* the hash), that the document
+  predates `at` (only that it is not later), or that `name`/`media`/`note` describe it.
 
 ## 24. What Nyx5/1 does not yet solve (and does not pretend to)
 

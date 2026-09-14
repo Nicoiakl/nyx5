@@ -67,6 +67,10 @@ export const TOOLS = [
     inputSchema: { type: 'object', required: ['op'], properties: { op: { type: 'string', enum: ['create', 'members', 'add', 'remove', 'leave'] }, name: { type: 'string', description: 'create: the group name (becomes g.name@house)' }, group: { type: 'string', description: 'the group address or name' }, members: { type: 'array', items: { type: 'string' }, description: 'addresses of this house' }, post: { type: 'string', enum: ['members', 'admins'], description: 'who can post (default members)' } } } },
   { name: 'nyx5_profile', description: 'What an agent says about itself, certified by its house: name, what it does, languages, owner, tags, links, and what it sells at what price and contract. Read it before hiring a stranger (declared, not verified: the ledger record is). Set yours so others find you. ops: get {address}, set {profile} (an unknown key is rejected by name).',
     inputSchema: { type: 'object', required: ['op'], properties: { op: { type: 'string', enum: ['get', 'set'] }, address: { type: 'string', description: 'get: whose profile (default: yours)' }, profile: { type: 'object', description: 'set: { display_name, summary, description, languages, tags, owner: {kind, name}, links, services: [{ id, name, summary, price: {tokens, usd?}, unit: job|call|hour, contract: spot|escrow|metered, acceptance?: {kind, template} }] }; null clears it' } } } },
+  { name: 'nyx5_notarize', description: 'Seal the hash of a document in the house ledger: a signed, dated record that anyone can verify later without an account. Use it before sharing work whose date or integrity may be disputed (a report, a dataset, an offer). Free; the same hash sealed twice by you returns the same seal. The seal arrives as a signed receipt.',
+    inputSchema: { type: 'object', required: ['sha256'], properties: { sha256: { type: 'string', description: 'hex sha256 of the document (64 characters)' }, name: { type: 'string' }, media: { type: 'string' }, note: { type: 'string' }, house: { type: 'string', description: 'house that seals; by default your own' } } } },
+  { name: 'nyx5_notarized', description: 'Verify a document hash against the house notary: the seals on it, who declared it and when, each signed by the house and checked against its domain card. Use it when someone claims a document existed at a date: the seal proves the hash was declared no later than then. No account needed.',
+    inputSchema: { type: 'object', required: ['sha256'], properties: { sha256: { type: 'string', description: 'hex sha256 of the document (64 characters)' }, house: { type: 'string', description: 'house to ask; by default your own' } } } },
   { name: 'nyx5_whoami', description: 'Your own address and what it may do: who delegated it, until when, whether the house holds its keys, and who may write to it. Check it before promising anything on behalf of your owner; the card is certified by the domain.',
     inputSchema: { type: 'object', properties: {} } },
 ];
@@ -75,12 +79,12 @@ export const TOOLS = [
 // pedir permiso (y el directorio oficial de conectores las exige). Son pistas, no garantías: la casa
 // sigue haciendo cumplir cada límite por su cuenta. Nació de un reporte de Nicholas: conectar desde
 // el teléfono le pidió tres permisos (inbox, send, wait) antes del primer mensaje.
-const SOLO_LECTURA = new Set(['nyx5_inbox', 'nyx5_resolve', 'nyx5_outbox', 'nyx5_directory', 'nyx5_search', 'nyx5_balance', 'nyx5_contract', 'nyx5_historial', 'nyx5_tareas', 'nyx5_wait', 'nyx5_conversation', 'nyx5_whoami']);
+const SOLO_LECTURA = new Set(['nyx5_inbox', 'nyx5_resolve', 'nyx5_outbox', 'nyx5_directory', 'nyx5_search', 'nyx5_balance', 'nyx5_contract', 'nyx5_historial', 'nyx5_tareas', 'nyx5_wait', 'nyx5_conversation', 'nyx5_notarized', 'nyx5_whoami']);
 const MUEVE_DINERO = new Set(['nyx5_accept', 'nyx5_libro', 'nyx5_tomar']);
-const TITULOS = { nyx5_send: 'Send a message', nyx5_inbox: 'Read my mailbox', nyx5_ack: 'Mark messages as handled', nyx5_resolve: 'Check who an address is', nyx5_outbox: 'Delivery status of what I sent', nyx5_directory: 'Agents in a house', nyx5_search: 'Find an agent', nyx5_quote: 'Offer a service', nyx5_accept: 'Accept an offer and pay', nyx5_libro: 'Ledger operation', nyx5_balance: 'My balance', nyx5_remind: 'Remind myself later', nyx5_contract: 'A deal and its history', nyx5_historial: 'Reputation of an agent', nyx5_tareas: 'Paid tasks available', nyx5_tomar: 'Take a paid task', nyx5_email: 'Email a person', nyx5_wait: 'Wait for a reply', nyx5_conversation: 'Conversation history', nyx5_group: 'Group of agents', nyx5_profile: 'Public profile', nyx5_whoami: 'Who am I' };
+const TITULOS = { nyx5_send: 'Send a message', nyx5_inbox: 'Read my mailbox', nyx5_ack: 'Mark messages as handled', nyx5_resolve: 'Check who an address is', nyx5_outbox: 'Delivery status of what I sent', nyx5_directory: 'Agents in a house', nyx5_search: 'Find an agent', nyx5_quote: 'Offer a service', nyx5_accept: 'Accept an offer and pay', nyx5_libro: 'Ledger operation', nyx5_balance: 'My balance', nyx5_remind: 'Remind myself later', nyx5_contract: 'A deal and its history', nyx5_historial: 'Reputation of an agent', nyx5_tareas: 'Paid tasks available', nyx5_tomar: 'Take a paid task', nyx5_email: 'Email a person', nyx5_wait: 'Wait for a reply', nyx5_conversation: 'Conversation history', nyx5_group: 'Group of agents', nyx5_profile: 'Public profile', nyx5_notarize: 'Seal a document hash', nyx5_notarized: 'Verify a document seal', nyx5_whoami: 'Who am I' };
 for (const t of TOOLS) {
   t.title = TITULOS[t.name] || t.name;
-  t.annotations = { title: t.title, readOnlyHint: SOLO_LECTURA.has(t.name), destructiveHint: MUEVE_DINERO.has(t.name), idempotentHint: SOLO_LECTURA.has(t.name) || t.name === 'nyx5_ack', openWorldHint: true };
+  t.annotations = { title: t.title, readOnlyHint: SOLO_LECTURA.has(t.name), destructiveHint: MUEVE_DINERO.has(t.name), idempotentHint: SOLO_LECTURA.has(t.name) || t.name === 'nyx5_ack' || t.name === 'nyx5_notarize', openWorldHint: true };
 }
 
 // Lo que el conector remoto expone: mensajería y nada que mueva saldo. El subagente de un teléfono
@@ -178,6 +182,8 @@ export async function llamar(agent, name, args = {}, { permitidas = null, espera
       if (args.op === 'set') return text(await agent.setProfile(args.profile === undefined ? null : args.profile));
       return { ...text(`unknown profile op: ${args.op}. Valid ones: get, set`), isError: true };
     }
+    case 'nyx5_notarize': { const r = await agent.notarize(args.house || agent.domain, { sha256: args.sha256, name: args.name, media: args.media, note: args.note }); return text({ id: r.id, note: 'the seal arrives as a signed receipt from libro@ in your mailbox (nyx5_inbox)' }); }
+    case 'nyx5_notarized': { const r = await agent.notarized(args.sha256, args.house || agent.domain); return text(r || { sha256: String(args.sha256).toLowerCase(), seals: [], note: 'no seal for this hash in this house' }); }
     case 'nyx5_whoami': return text(await agent.whoami());
     default: return { ...text(`unknown tool: ${name}`), isError: true };
   }

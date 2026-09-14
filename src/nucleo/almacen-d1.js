@@ -191,6 +191,15 @@ export class D1Store {
   async libroListMandates() { return (await this.db.prepare('SELECT doc FROM nyx5_libro_mandatos').all()).results.map((r) => JSON.parse(r.doc)); }
   async libroGetOp(id) { return p(await this.db.prepare('SELECT doc FROM nyx5_libro_ops WHERE id = ?').bind(id).first()); }
   async libroPutOp(id, v) { await this.db.prepare('INSERT INTO nyx5_libro_ops (id, doc) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET doc = excluded.doc').bind(id, j(v)).run(); }
+
+  // --- notaría (NX-601): sellos de hash (migrations/0008_notaria.sql) ---
+  async notariaGet(id) { return p(await this.db.prepare('SELECT doc FROM nyx5_notaria WHERE id = ?').bind(id).first()); }
+  async notariaList(sha256) { return (await this.db.prepare('SELECT doc FROM nyx5_notaria WHERE sha256 = ? ORDER BY at, id').bind(sha256).all()).results.map((r) => JSON.parse(r.doc)); }
+  async notariaFind(sha256, by) { return p(await this.db.prepare('SELECT doc FROM nyx5_notaria WHERE sha256 = ? AND "by" = ?').bind(sha256, by).first()); }
+  // Sin ON CONFLICT a propósito: el índice único (sha256, by) es el candado, y un choque tiene
+  // que tirar el batch entero (421 reintentable), no pisar el sello anterior en silencio.
+  _selloStmt(s) { return this.db.prepare('INSERT INTO nyx5_notaria (id, sha256, "by", at, doc) VALUES (?, ?, ?, ?, ?)').bind(s.id, s.sha256, s.by, s.at, j(s)); }
+  async notariaPut(s) { try { await this._selloStmt(s).run(); } catch (e) { throw this._traducirConflicto(e); } }
   // ---------- instrumentación ----------
   async putEvent(e) { await this.db.prepare('INSERT OR IGNORE INTO nyx5_eventos (id, name, ts, actor, data) VALUES (?, ?, ?, ?, ?)').bind(e.id, e.name, e.ts, e.actor || null, j(e.data || {})).run(); }
   async listEvents({ name = null, since = null, limit = 500 } = {}) {
@@ -232,6 +241,7 @@ export class D1Store {
     if (bundle.state) stmts.push(this.db.prepare('UPDATE nyx5_libro_state SET seq = ?, balances = ? WHERE id = 1').bind(bundle.state.seq, j(bundle.state.balances)));
     for (const c of bundle.contracts || []) stmts.push(this._contractStmt(c));
     for (const m of bundle.mandates || []) stmts.push(this._mandateStmt(m));
+    for (const s of bundle.sellos || []) stmts.push(this._selloStmt(s));
     if (bundle.op) stmts.push(this.db.prepare('INSERT INTO nyx5_libro_ops (id, doc) VALUES (?, ?)').bind(bundle.op.id, j(bundle.op.result)));
     return stmts;
   }

@@ -66,11 +66,11 @@ export class Libro {
   // y ambos entrarían, superando el tope.
   async _begin(concepto = 'control', refs = {}) {
     const base = await this.store.libroState();
-    this.tx = { base, state: null, asientos: [], contracts: new Map(), mandates: new Map(), op: null, concepto, refs };
+    this.tx = { base, state: null, asientos: [], contracts: new Map(), mandates: new Map(), sellos: [], op: null, concepto, refs };
   }
   _bundle() {
     const t = this.tx;
-    return { state: t.state, base: t.base, asientos: t.asientos, contracts: [...t.contracts.values()], mandates: [...t.mandates.values()], op: t.op };
+    return { state: t.state, base: t.base, asientos: t.asientos, contracts: [...t.contracts.values()], mandates: [...t.mandates.values()], sellos: t.sellos, op: t.op };
   }
   async _commit() {
     const t = this.tx;
@@ -94,6 +94,9 @@ export class Libro {
   putContract(c) { if (!this.tx) throw new LibroError(500, 'putContract fuera de transacción'); this.tx.contracts.set(c.id, c); }
   async getMandate(id) { return this.tx?.mandates.get(id) ?? await this.store.libroGetMandate(id); }
   putMandate(m) { if (!this.tx) throw new LibroError(500, 'putMandate fuera de transacción'); this.tx.mandates.set(m.id, m); }
+  // Sello de notaría (NX-601): no mueve dinero ni consume número de asiento. Su candado contra el
+  // doble sello es el índice único (sha256, by) del almacén, que hace fallar cerrado el commit.
+  putSello(s) { if (!this.tx) throw new LibroError(500, 'putSello fuera de transacción'); this.tx.sellos.push(s); }
 
   // ---------- consultas ----------
   get ops() { return Object.keys(CONTRATOS.ops); }

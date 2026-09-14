@@ -26,6 +26,7 @@ import { Libro, MEDIA, LibroError } from '../libro/libro.js';
 import { veredicto, pruebasDe, pruebasDisponibles } from '../libro/verifica.js';
 import { contratoPublico, ACP } from '../libro/contratos.js';
 import { estadoDeCuenta, csvDe, nombreCsv } from '../libro/estado.js';
+import { selloPublico } from '../libro/notaria.js';
 import { Tareas } from '../libro/tareas.js';
 import { datosInforme, datosEmbudo, informeHtml } from '../libro/informe.js';
 import { APP_HTML } from '../plataformas/app-html.js';
@@ -546,6 +547,13 @@ export class Estafeta {
     }
     const dominio = q ? q.domain : (quien.includes('@') ? quien.slice(quien.lastIndexOf('@') + 1) : '');
     return (rec.inbox?.allowlist || []).some((x) => String(x).toLowerCase() === quien || String(x).toLowerCase() === dominio);
+  }
+  // Si el que selló (NX-601) puede nombrarse en público: uno de esta casa se consulta en vivo
+  // (su visibilidad puede haber cambiado); uno de otra casa, por lo que se supo al sellar.
+  async _declaranteVisible(doc) {
+    let p; try { p = parseAddress(doc.by); } catch { return false; }
+    if (p.domain !== this.domain) return !doc.secret;
+    return this._visibleA(await this.store.getAgent(p.local), null);
   }
   // Quién pregunta por una tarjeta: un agente de esta casa autenticado, o una casa ajena que firma
   // «lo pido para bob@su-casa» con su llave de dominio. Se evalúa SIEMPRE, exista o no lo que se
@@ -1162,6 +1170,7 @@ export class Estafeta {
     if (op === 'reclaim' && c) return this._evento('escrow_refunded', c.buyer, { contract: c.id, amount: c.amount, by: env.from, reclaimed: true });
     if (op === 'expire' && c) return this._evento('escrow_released', c.seller, { contract: c.id, amount: c.amount, by: env.from, expired: true });
     if (op === 'forfeit' && c) return this._evento('bond_forfeited', c.seller, { contract: c.id, amount: c.amount, by: env.from, vouchee: c.vouchee || null });
+    if (op === 'notarize' && result?.seal && !result.existing) return this._evento('notarized', env.from, { seal: result.seal.id, sha256: result.seal.sha256 });
   }
 
   // Avisos del postmaster al remitente (rebotes y acuses de entrega). Llevan el hash del sobre original.
@@ -1727,6 +1736,17 @@ export class Estafeta {
         const rec = Estafeta.validLocal(local) ? await this.store.getAgent(local) : null;
         if (!rec || !await this._visibleA(rec, quien)) return send(404, { reason: 'no such agent' });
         return send(200, await this.libro.historial(`${local}@${this.domain}`));
+      }
+      // ----- Notaría (NX-601): verificación PÚBLICA de sellos, sin cuenta. Se limita por IP como
+      // /resolve. Un hash sin sellos y un id inexistente contestan el mismo 404. El nombre del
+      // declarante se muestra sólo si «nadie» lo vería (_visibleA con quien = null).
+      if (rx.method === 'GET' && (m = /^\/notaria\/(?:sello\/([^/]+)|([0-9a-fA-F]{64}))$/.exec(path))) {
+        if (!await this.rate.allow(`resolve:${rx.ip || 'x'}`)) return tarde({ reason: 'too many requests' });
+        const docs = m[1] ? [await this.store.notariaGet(decodeURIComponent(m[1]))].filter(Boolean) : await this.store.notariaList(m[2].toLowerCase());
+        if (!docs.length) return send(404, { reason: 'no such seal' });
+        const seals = [];
+        for (const d of docs) seals.push(selloPublico(d, await this._declaranteVisible(d)));
+        return m[1] ? send(200, seals[0]) : send(200, { sha256: m[2].toLowerCase(), house: this.domain, seals });
       }
       if (rx.method === 'GET' && (m = /^\/agents\/([^/]+)$/.exec(path))) {
         // Un secreto responde a quien no lo ve EXACTAMENTE lo que un inexistente: mismo cuerpo,
