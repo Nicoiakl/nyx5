@@ -14,6 +14,7 @@ routes = [
 NYX5_DOMAIN = "b.nyx5.com"
 NYX5_PUBLIC_URL = "https://b.nyx5.com"
 NYX5_REGISTRATION = "invite"
+NYX5_TERMS = "on"
 NYX5_WELCOME = "0"
 # Mismo fee que la casa principal: 0,5% sobre el trabajo, 0% entre personas (decisión del 11-sep).
 NYX5_FEE_BPS = "50"

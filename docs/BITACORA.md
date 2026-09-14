@@ -12,9 +12,7 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 | | Qué | Desde |
 |---|---|---|
-| ⏳ | **DNSSEC** en nyx5.com. NO es un clic pendiente: el panel dice "pending while we automatically add the DS record" y el único botón que ofrece es Cancel Setup, en rojo. Pero el DS no está en el registro .com y whois sigue diciendo `unsigned`, o sea que lleva colgado. Nadie debe tocar ese botón. Si sigue así, hay que cancelar y volver a encender, o abrir un ticket | 9-sep |
 | ☐ | **Leer y aprobar `docs/TERMS.md`**. Se sirven sólo si él los enciende: son declaraciones vinculantes en su nombre | 8-sep |
-| ☐ | **Textos de la app** para contactos con consentimiento (NX-402): `plan/textos-app-borrador.md` (privado). Los de NX-502 ya se aprobaron y están desplegados | 14-sep |
 | ☐ | **Cuenta prepago para el agente** (Mercado Pago empresa de Blue Tuna SpA, $30.000, logueada una vez en Chrome) para repetir la compra chilena con plata del agente | 14-sep |
 | ☐ | **Liberar el escrow** `ae65c82b` (500 tokens a compras@) cuando llegue el pedido de Mercado Libre; recordatorio en su buzón el 15-sep | 14-sep |
 | ☐ | **Marca INAPI** clase 42, en pausa hasta la vuelta (`marca/SOLICITUD-MARCA-NYX5.md`) | 13-sep |
@@ -54,6 +52,7 @@ Nicholas pidió pruebas de impacto real, no de escritorio. Dos compras, con lect
   (`8e5b1e30`, sha256 bf3093ae…); maqueta en construcción con ese contrato de aceptación.
 - **Ruta de conversaciones con proyectos** (`projects`, `pending_by_project`, `?project=`), sexta revisión (7 hallazgos, 34 viñetas rotas del sitio de la spec arregladas, suite `fuente-limpia` contra invisibles y NUL), **desplegada en las dos casas**. Suite: 340 -> 393.
 - **Smithery**: `nicholasiakl/nyx5` publicado con la URL del conector remoto (OAuth del escáner sobre claude.nico@); release SUCCESS, quality score 51/100.
+- **Cierre 1 a 1 con Nicholas (tarde):** DNSSEC quedó firmado solo (DS en .com, whois signedDelegation); **TERMS aprobados y publicados** en /terms de las dos casas (fecha 14-sep, enlace en la portada y en el sitemap; NYX5_TERMS=on; test/terms.test.js); textos de NX-402 aprobados tal cual; **registro oficial de MCP actualizado a 0.7.0** (mcp-publisher con la sesión de gh); la maqueta v2 no le gustó (serif/crema, densidad, estructura): v3 en construcción con estructura WhatsApp y estilo Slack/Linear. Suite 395.
 - **Maqueta v2** de la app (auditoría contra Slack/WhatsApp/Asana/Salesforce → Home «Ahora», cinco lugares, ⌘K, Dinero con tres saldos); 24 de 29 criterios; entregada a Nicholas sin aprobación (viaje de un mes). Escrow de la compra liberado por su decisión; topes de API del mes: US$15.
 
 ### 14-sep-2026 (mañana) — contratar en un paso, plantillas, qa@ como servicio, y el fondo

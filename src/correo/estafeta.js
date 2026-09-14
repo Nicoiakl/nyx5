@@ -1810,7 +1810,7 @@ export class Estafeta {
         return { status: 200, contentType: 'text/plain; charset=utf-8', body: `User-agent: *\nAllow: /\n# Los buzones y el Libro exigen firma; no hay nada que rastrear ahí.\nDisallow: /mailbox/\nDisallow: /libro/\nDisallow: /outbox/\nSitemap: https://${this.domain}/sitemap.xml\n` };
       }
       if (rx.method === 'GET' && path === '/sitemap.xml') {
-        const paginas = ['/', '/spec', '/app', '/report', '/llms.txt'].concat(this.tareas.enabled ? ['/tareas'] : []);
+        const paginas = ['/', '/spec', '/app', '/report', '/llms.txt'].concat(this.tareas.enabled ? ['/tareas'] : []).concat(this.terms ? ['/terms'] : []);
         const hoy = iso().slice(0, 10);
         return { status: 200, contentType: 'application/xml; charset=utf-8',
           body: `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${paginas.map((u) => `  <url><loc>https://${this.domain}${u}</loc><lastmod>${hoy}</lastmod></url>`).join('\n')}\n</urlset>\n` };

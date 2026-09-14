@@ -16,6 +16,7 @@
 //   DB                    binding D1
 
 import { Estafeta } from '../correo/estafeta.js';
+import { TERMS_HTML } from './terms-html.js';
 import { D1Store } from '../nucleo/almacen-d1.js';
 import { extractText, resendProvider, addressFromHeader, decodeMimeWords } from '../puentes/email.js';
 
@@ -60,6 +61,8 @@ function estafetaDesde(env) {
     adminToken: cfg('ADMIN_TOKEN'),
     store: new D1Store(env.DB),
     policy: { registration: cfg('REGISTRATION') || 'invite' },
+    // /terms existe sólo si la casa lo enciende: son declaraciones vinculantes del dueño (aprobadas 14-sep-2026).
+    terms: cfg('TERMS') === 'on' ? TERMS_HTML : null,
     libro: { welcome: Number(cfg('WELCOME') || 0), feeBps: Number(cfg('FEE_BPS') || 1000),
       // Escrow que vence (NX-503), en horas: gracia para que el comprador recupere, y ventana de revisión.
       reclaimGraceMs: (Number(cfg('RECLAIM_GRACE_HOURS')) || 24) * 3600_000, reviewWindowMs: (Number(cfg('REVIEW_WINDOW_HOURS')) || 72) * 3600_000 },
