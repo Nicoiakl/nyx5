@@ -210,6 +210,9 @@ export class Agent {
   charge(house, { mandate, amount, concept }) { return this.libroOp(house, { op: 'charge', mandate, amount, concept }); }
   revoke(house, mandate) { return this.libroOp(house, { op: 'revoke', mandate }); }
   pay(house, { to, amount, concept }) { return this.libroOp(house, { op: 'pay', to, amount, concept }); }
+  // Notaría (NX-601): la casa sella el hash de un documento con fecha y firma; el sello llega como
+  // recibo. Gratis; el mismo hash sellado dos veces por el mismo agente devuelve el mismo sello.
+  notarize(house, { sha256, name, media, note }) { return this.libroOp(house, { op: 'notarize', sha256, name, media, note }); }
 
   // Lecturas directas (sin pasar por correo) en la casa indicada; por defecto, la propia estafeta.
   async balance(house) { return this._callAt(house, 'GET', `/libro/cuenta/${encodeURIComponent(this.address)}`); }
@@ -221,6 +224,20 @@ export class Agent {
     const res = await this.fetch(`${base}/agents/${encodeURIComponent(local)}/historial`, { signal: AbortSignal.timeout(10_000) });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw Object.assign(new Error(json.reason || `HTTP ${res.status}`), { status: res.status });
+    return json;
+  }
+  // Sellos PÚBLICOS de un hash en una casa (sin cuenta): null si no hay ninguno. Cada sello se
+  // verifica contra la tarjeta del dominio; si la casa sirviera uno que no firmó, se rechaza entero.
+  async notarized(sha256, house = this.domain) {
+    const dc = await this.resolver.domainCard(house);
+    const res = await this.fetch(`${dc._estafeta}/notaria/${encodeURIComponent(String(sha256).toLowerCase())}`, { signal: AbortSignal.timeout(10_000) });
+    if (res.status === 404) return null;
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw Object.assign(new Error(json.reason || `HTTP ${res.status}`), { status: res.status });
+    const kids = (dc.keys || []).map((k) => k.sig);
+    for (const s of json.seals || []) {
+      if (!kids.includes(s.signature?.kid) || !verifyObject(s, s.signature.kid)) throw new Error(`seal ${s.id} is not signed by ${house}`);
+    }
     return json;
   }
   async _callAt(house, method, path) {

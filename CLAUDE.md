@@ -24,9 +24,10 @@ src/correo/politica.js   validación de sobres; políticas de buzón: open | all
 src/correo/estafeta.js   servidor HTTP de un dominio: tarjetas, registro (admin|invite|open, prueba de posesión, reservados, invitaciones, directorio), /outbound (cola+reintentos), /inbound (verificación+política), buzones, webhooks, rutas /libro/*
 src/correo/agente.js     cliente: register (admin|invite|open), rotateKeys, directory, send, inbox, open, ack, reply, receipt, delegate, quote, accept, deliver, release, refund, bond, forfeit, mandate, charge, revoke, balance, contract
 src/libro/libro.js       kernel: post() y las primitivas (topup, transfer, hold, release, refund), verifyQuote, handle(), stamp()
-src/libro/contratos.js   máquinas de estado sobre el kernel: ops {accept, deliver, release, refund, bond, forfeit, mandate, charge, revoke, pay, balance, statement, contract}; CONTRATOS {spot, escrow, metered, bond}
+src/libro/contratos.js   máquinas de estado sobre el kernel: ops {accept, deliver, release, refund, reclaim, expire, bond, forfeit, mandate, charge, revoke, pay, balance, statement, contract, notarize}; CONTRATOS {spot, escrow, metered, bond}
 src/libro/errores.js     LibroError(code, message)
-src/puentes/herramientas.js las 22 herramientas MCP, UN módulo para los dos puentes (MENSAJERIA = las 13 del remoto)
+src/libro/notaria.js     notaría (NX-601): sella un hash con fecha y firma de la casa, gratis, sin asiento; verificación pública en /notaria/*
+src/puentes/herramientas.js las 24 herramientas MCP, UN módulo para los dos puentes (MENSAJERIA = las 13 del remoto)
 src/puentes/mcp.js       puente MCP por stdio (la llave del agente en el disco del usuario)
 src/puentes/mcp-remoto.js puente MCP por Streamable HTTP en /mcp (subagente delegado; llave en la bóveda)
 src/puentes/oauth.js     servidor OAuth 2.1 del conector: RFC 9728/8414/7591, PKCE S256, rotación de refresco
@@ -36,7 +37,7 @@ src/nucleo/almacen-d1.js D1Store: la misma interfaz sobre Cloudflare D1; atomici
 src/nucleo/d1-local.js   emulador de la API D1 sobre node:sqlite (tests y desarrollo local)
 src/plataformas/node.js  adaptador node:http (start() lo usa)
 src/plataformas/worker.js adaptador Cloudflare Workers (fetch + scheduled); config por env
-migrations/000{2..6}*.sql   esquema D1, candado, pins, eventos, y 0006: nyx5_kv (OAuth + bóveda) e índice de historial
+migrations/000{2..7}*.sql   esquema D1, candado, pins, eventos, 0006: nyx5_kv (OAuth + bóveda) e índice de historial, 0007: nyx5_notaria
 bin/nyx5.js           CLI
 demo/                    e2e, offline, spam (correo) · contratos (libro) · piloto-d4 (economía de una flota + costo por entrega)
 src/correo/unirse.js     join (alta en un paso) y mandate (tope del humano) como funciones testeables
@@ -46,7 +47,7 @@ src/puentes/x402.js      adaptador x402 v2: PAYMENT-REQUIRED / PAYMENT-SIGNATURE
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad -> `npm test` (249)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · notaria -> `npm test` (257)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
 ```
@@ -54,7 +55,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 249 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 257 pruebas, todas deben pasar antes de cualquier commit
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
 npm run demo             # correo: tarea cifrada, respuesta, acuse
@@ -423,6 +424,17 @@ que hay que saber para no romperlas:
   (barra, u, cuatro hexadecimales), nunca el carácter literal: un carácter invisible en un archivo
   se corrompe en silencio y las herramientas de edición lo pierden al reescribir (pasó esta
   noche, dos veces). Antes de commitear, `grep -P` por los rangos U+200B-200F, 202A-202E, 2060-2064.
+
+**Notaría de documentos (NX-601, 14-sep-2026, GRATIS por decisión de Nicholas).** `src/libro/notaria.js`:
+la op `notarize { sha256, name?, media?, note? }` sella un hash con fecha y firma de la casa; el
+sello vuelve como recibo y cualquiera lo verifica sin cuenta en `GET /notaria/<sha256>` y
+`GET /notaria/sello/<id>` (SPEC §23b). Tres cosas que hay que saber para no romperla:
+- **No hay asiento.** El candado contra el doble sello es el índice único `(sha256, by)` de
+  `nyx5_notaria` (migración 0007), no el número de asiento: mismo agente + mismo hash = UN sello
+  (el primero, `existing: true`); dos agentes = dos sellos. FileStore aplica el mismo candado.
+- **Dos versiones firmadas por sello** (`sello` con `by`, `anonimo` con `by: null`), mismo id: la
+  pública sirve la anónima si el declarante es secreto (`_declaranteVisible`), y sigue verificando.
+- **Qué NO prueba**: autoría (prueba quién lo DECLARÓ), ni que el documento sea anterior a `at`.
 
 **Trampa: los contadores de puertos (11-sep-2026).** Cuatro suites levantan casas con
 `let puerto = N` + `puerto++`. El guard sólo veía constantes, y una suite nueva en 4231 chocaba con

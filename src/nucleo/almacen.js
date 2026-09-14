@@ -27,7 +27,7 @@ const writeJson = (p, v) => {
 export class FileStore {
   constructor(dir) {
     this.dir = dir;
-    for (const d of ['agents', 'mailbox', 'queue', 'outbox', 'invitations', 'libro/diario', 'libro/contratos', 'libro/mandatos', 'libro/ops', 'eventos', 'indice/casas', 'indice/agentes']) fs.mkdirSync(path.join(dir, d), { recursive: true });
+    for (const d of ['agents', 'mailbox', 'queue', 'outbox', 'invitations', 'libro/diario', 'libro/contratos', 'libro/mandatos', 'libro/ops', 'libro/notaria', 'eventos', 'indice/casas', 'indice/agentes']) fs.mkdirSync(path.join(dir, d), { recursive: true });
     this.nonces = new Map(); // anti-replay: en FileStore basta memoria (un proceso)
   }
 
@@ -200,6 +200,23 @@ export class FileStore {
   libroListMandates() { const d = path.join(this.dir, 'libro', 'mandatos'); return fs.readdirSync(d).filter((f) => f.endsWith('.json')).map((f) => readJson(path.join(d, f))); }
   libroGetOp(id) { return readJson(path.join(this.dir, 'libro', 'ops', `${id}.json`)); }
   libroPutOp(id, v) { writeJson(path.join(this.dir, 'libro', 'ops', `${id}.json`), v); }
+
+  // --- notaría (NX-601): sellos de hash. Un archivo por sello; la lectura por hash recorre el
+  // directorio (FileStore es para pruebas y desarrollo; en D1 lo sirve el índice).
+  notariaGet(id) { return readJson(path.join(this.dir, 'libro', 'notaria', `${id}.json`)); }
+  _notariaTodos() { const d = path.join(this.dir, 'libro', 'notaria'); return fs.readdirSync(d).filter((f) => f.endsWith('.json')).map((f) => readJson(path.join(d, f))); }
+  notariaList(sha256) { return this._notariaTodos().filter((s) => s.sha256 === sha256).sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)); }
+  notariaFind(sha256, by) { return this._notariaTodos().find((s) => s.sha256 === sha256 && s.by === by) || null; }
+  // Mismo candado que el índice único de D1: un segundo sello del mismo agente para el mismo hash
+  // falla cerrado con 421 (reintentable), así FileStore no es más permisivo que producción.
+  notariaPut(s) {
+    if (this.notariaFind(s.sha256, s.by)) {
+      const e = new Error(`ledger concurrency conflict: seal already exists for ${s.sha256} by ${s.by}`);
+      e.code = 421; e.transient = true;
+      throw e;
+    }
+    writeJson(path.join(this.dir, 'libro', 'notaria', `${s.id}.json`), s);
+  }
   // ---------- instrumentación (nombre, fecha, actor y números; nunca contenido) ----------
   putEvent(e) { writeJson(path.join(this.dir, 'eventos', `${e.id}.json`), e); }
   listEvents({ name = null, since = null, limit = 500 } = {}) {
@@ -232,6 +249,7 @@ export class FileStore {
     if (bundle.state) this.libroPutState(bundle.state);
     for (const c of bundle.contracts || []) this.libroPutContract(c);
     for (const m of bundle.mandates || []) this.libroPutMandate(m);
+    for (const s of bundle.sellos || []) this.notariaPut(s);
     if (bundle.op) this.libroPutOp(bundle.op.id, bundle.op.result);
   }
 

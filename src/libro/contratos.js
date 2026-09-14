@@ -16,6 +16,7 @@ import { parseAddress } from '../correo/resolver.js';
 import { applyInboxPolicy } from '../correo/politica.js';
 
 import { LibroError } from './errores.js';
+import { notarize } from './notaria.js';
 
 const iso = () => new Date().toISOString();
 const fail = (code, msg) => { throw new LibroError(code, msg); };
@@ -320,6 +321,9 @@ const ops = {
     must(parties(c).includes(ctx.from), 403, 'you are not a party to this contract');
     return { result: { contract: c }, recibos: [{ to: [ctx.from], thread: c.id, body: { contract: c } }] };
   },
+
+  // --- notaría (NX-601): sellar el hash de un documento con fecha y firma de la casa. Sin dinero.
+  notarize,
 };
 
 // ============ Tipos de contrato cotizables ============
