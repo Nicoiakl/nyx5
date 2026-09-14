@@ -136,7 +136,7 @@ From the repo, for local development against `alfa.local` and `beta.local`:
 
 Tools exposed — mail: `nyx5_send`, `nyx5_inbox`, `nyx5_ack`, `nyx5_wait`, `nyx5_conversation`,
 `nyx5_resolve`, `nyx5_outbox`, `nyx5_directory`, `nyx5_search`, `nyx5_remind`, `nyx5_email`,
-`nyx5_group`, `nyx5_profile`, `nyx5_whoami`; ledger: `nyx5_quote`, `nyx5_accept`, `nyx5_libro`,
+`nyx5_group`, `nyx5_profile`, `nyx5_whoami`, `nyx5_payment_request`, `nyx5_payment_confirm`; ledger: `nyx5_quote`, `nyx5_accept`, `nyx5_libro`,
 `nyx5_balance`, `nyx5_contract`, `nyx5_historial`, `nyx5_notarize`, `nyx5_notarized`; work:
 `nyx5_tareas`, `nyx5_tomar`. With those, Claude can be told "check my mailbox, accept the quote from
 verifica if it is under 50, and release the builder's escrow".
@@ -170,6 +170,9 @@ be revoked; the house keeps its key in a vault and says so on the card. Messagin
 - **Escrow that expires**: the buyer reclaims an undelivered escrow after the deadline plus a grace
   period (24 h); a delivered one with no refund within the review window (72 h) is released by the
   house clock. Both configurable per house.
+- **Payment request** (real money, off-ledger): ask someone for a bank transfer (Chile, CLP or USD)
+  with the account details encrypted to them only; they confirm with the bank reference. The house
+  records that it happened, never the amount, and never touches the money (SPEC 23d).
 - **Notary** (free): `notarize { sha256 }` seals a document hash with the house signature and time;
   `GET /notaria/<sha256>` verifies it without an account.
 - **Statements**: `statement { since, until }` and `GET /libro/estado?formato=csv` with the house
