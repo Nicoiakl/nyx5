@@ -22,12 +22,28 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 | | Qué | Desde |
 |---|---|---|
-| ☐ | **Al retomar tras el mes de Nicholas (Mac apagado, nada corre)**: leer el buzón de nicholas@ (recordatorios semanales y sus respuestas por nico@); aprobación de la maqueta v2 (`plan/maquetas/app-colaboracion-v2.html`, entregada sin OK) y luego la app real (NX-408/409, dinero real arriba en «Ahora») | 14-sep |
+| ☐ | **Al retomar tras el mes de Nicholas (Mac apagado desde el 15-sep)**: leer el buzón de nicholas@ e `GET /ideas` (lo que dejó desde el celular); aprobación de la maqueta v3 y luego la app real (NX-408/409, MINIMAL); decisiones de su Claude del celular pendientes: granularidad de verifica@ en lote, rol del token-wallet, qa@ con memoria por cliente | 14-sep |
 | ☐ | Los ~20 hallazgos medios/bajos de la revisión adversarial | 5-sep |
 | ☐ | Ancla DNS TXT `_nyx5.<dominio>` en producción | 5-sep |
 | ☐ | Reclamar el listado de glama.ai con OAuth de GitHub | 8-sep |
 
 ## Hecho
+
+### 14-sep-2026 (noche) — el buzón de vacaciones, las direcciones de Rosetta y el paquete Santander
+Tres pedidos que llegaron por Nyx5 desde el Claude del celular de Nicholas (buzón code.nicholas@):
+- **ideas@nyx5.com** (NX-411): recibe de la lista del dueño, guarda IDEA-nnn con fecha, confirma con
+  texto fijo, y NUNCA ejecuta (la única salida del módulo es la confirmación; guardia por mutación,
+  10/10 mutantes gritan). Séptima revisión: 6 medios cerrados (puerta propia contra intros, cupo diario
+  200 ideas / 5 MB por remitente, rebote SMTP del correo, registro autocurable, paginado, guardia
+  cerrada). Desplegado y dado de alta; **IDEA-001 confirmada en producción** en 48 s por el cron.
+  Falta la prueba desde el celular con el Mac cerrado. Suite 395 -> 409.
+- **Direcciones de Rosetta**: rosetta@ (Rosetta Q Main) y rosetta-security@ inscritos, públicos, con
+  lista blanca, indexados; grupo g.rosetta@ (admin nicholas@); `.mcp.json` del proyecto Rosetta Quantum.
+- **Paquete Santander**: la segunda edición del informe PQC NO existe como medición (sólo un prototipo
+  simulado) y el informe individual de Santander tenía cifras equivocadas en el HTML (46 / «apagado»);
+  se regeneró desde el JSON corregido (56 / borde con PQC) y se entregaron dos PDF para que Nicholas
+  revise y mande él. Evidencia en `Projects/Rosetta Quantum/entregables/santander-2026-09-14/`.
+- qa@ sí contestó sola la pedida del celular (21:20 → 21:22 UTC): el servicio corre sin el Mac.
 
 ### 14-sep-2026 (tarde) — dos compras reales, NX-502 desplegado, el pagador x402 y el Spec de la app
 Nicholas pidió pruebas de impacto real, no de escritorio. Dos compras, con lectura distinta:
