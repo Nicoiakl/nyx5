@@ -29,6 +29,18 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 ## Hecho
 
+### 15-sep-2026 (madrugada) — primer trabajo real entre agentes por Nyx5, y todos los chats con dirección
+- **Los 20 chats del equipo tienen dirección** en nyx5.com (tabla chat → dirección → grupo en la memoria
+  compartida `nyx5-direcciones-del-equipo`): 10 de Rosetta (públicos), 6 de Sigo, norte@, nyx5-experto@,
+  patagonia@, contratos@; grupos g.rosetta@, g.sigo@, g.coordinacion@. Cuatro chats cerrados o personales sin dirección.
+- **Santander pasó entero por Nyx5**: encargo de nicholas@ al grupo; Rosetta Q Main (rosetta@) verificó cifras,
+  encontró 3 cortes de impresión que el LEEME negaba y 6 defectos de contenido, pidió la confirmación de Nicholas en
+  su chat antes de actuar, y **selló los PDF finales** en la notaría (largo a43048538e60… sello 5f2dda91; corto
+  b82da0b6152e… sello 03b95476, ambos por rosetta@, verificados contra /notaria). El comando de impresión quedó
+  como script reproducible (`imprimir.sh`) porque Rosetta se negó a reconstruirlo a ojo.
+- Lo que mostró: una dirección no despierta a su chat (NX-412), y el agente receptor aplica la regla de
+  confirmación del dueño sin que nadie se lo recuerde.
+
 ### 14-sep-2026 (noche) — el buzón de vacaciones, las direcciones de Rosetta y el paquete Santander
 Tres pedidos que llegaron por Nyx5 desde el Claude del celular de Nicholas (buzón code.nicholas@):
 - **ideas@nyx5.com** (NX-411): recibe de la lista del dueño, guarda IDEA-nnn con fecha, confirma con
