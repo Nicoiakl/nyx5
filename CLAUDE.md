@@ -45,6 +45,7 @@ demo/                    e2e, offline, spam (correo) · contratos (libro) · pil
 src/correo/asistente.js  asistentes (contestan solos con la API de Anthropic): tope mensual, sello, y qa@ como servicio (NX-606): crédito por `pay`, Spec y Gate
 src/correo/unirse.js     join (alta en un paso) y mandate (tope del humano) como funciones testeables
 src/correo/ideas.js      ideas@: el buzón de vacaciones (14-sep-2026): registra IDEA-### y confirma con texto fijo; NUNCA ejecuta, sin API ni Libro
+src/correo/acciones.js   las MANOS de un agente vivo (26-oct-2026): lista CERRADA de 5 herramientas que la casa ejecuta con la llave del propio agente. NADA que mueva dinero
 src/correo/indice.js     búsqueda del índice (NX-302): columnas de la tarjeta, puntaje arbitrado, cursor opaco por generación, filtros; UNA definición para FileStore y D1Store
 src/libro/verifica.js    evaluador de referencia: http_status | sha256 | json_path | regex | size | header | exit_0; veredicto y "indeciso"; `pruebaDeAceptacion` (NX-305: la prueba de un pedido al catálogo)
 src/libro/tareas.js      trabajo sembrado: catálogo, cupos por agente/día, y que la cotización coincida
@@ -54,7 +55,7 @@ src/nucleo/keccak.js     Keccak-256 (el de Ethereum, NO sha3-256) en JS puro; sr
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas -> `npm test` (409)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos -> `npm test` (432)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 scripts/revision-adversarial.{md,mjs}  el guion adversarial por versión (NX-903) y su parte automatizable
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
@@ -63,7 +64,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 409 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 432 pruebas, todas deben pasar antes de cualquier commit
 npm run revision         # revisión adversarial automatizable contra una casa local (scripts/revision-adversarial.md)
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
@@ -579,3 +580,51 @@ hay que saber para no romperlo:
   (el edge no), y compite con una llamada directa a `atenderIdeas`; las pruebas apagan `casa.tick`.
   **NO cubre**: el resto de la casa sigue sin tope de bytes por remitente (1 MB × 120/min a un buzón
   `open`), y el cupo se cuenta al aceptar, así que dos casas emisoras a la vez pueden pasarse por uno.
+
+### 26-oct-2026 — agentes VIVOS (rama `vivos`): el `task` silencioso, adopción y manos
+`src/correo/acciones.js` + `atenderAsistentes`/`responder` en `src/correo/asistente.js` +
+`_adoptarAsistente`/`_quitarAsistente` en la estafeta + la excepción del sobre a sí mismo en
+`politica.js`. `test/vivos.test.js` (23 pruebas, 23 mutantes verificados uno a uno), SPEC §23c-bis,
+ARQUITECTURA §4.8. Es la prioridad número uno de Nicholas: que los agentes del equipo piensen y
+actúen desde la casa, sin su Mac. Cinco cosas que hay que saber para no romperlas:
+
+- **Trampa: el `task` quedaba en silencio PARA SIEMPRE.** La línea de filtro de `atenderAsistentes`
+  decía `!['message','result'].includes(e.type) || ... continue`: un sobre de tipo `task` no se
+  contestaba, no rebotaba y no se confirmaba. Medido contra producción el 26-oct: el sobre
+  `1bff694c` de tipo `task` llevaba SEIS SEMANAS en el buzón de `qa@nyx5.com` (desde el 15-sep) y el
+  panel decía `pending: 1`. `task` es el tipo natural de «te encargo esto», así que iba a repetirse
+  entre agentes. Ahora se atiende, y lo que un asistente no sepa atender se CONTESTA (`NO_ATIENDE`:
+  qué tipo llegó y qué tipos atiende) y se confirma. La lección general: **un `continue` en un bucle
+  que recorre un buzón que no se borra es un sobre eterno**, y `pending` miente.
+- **A quién NO se le contesta, y se cierra igual** (cada uno tiene su razón, y su prueba): el recibo
+  de un agente de sistema; lo que llegó por un grupo (su tope en dólares es del dueño y el grupo es
+  un camino que su lista no eligió, revisión del 13-sep); un remitente que la lista NO eligió — un
+  `intro` de 4 KB o un avalado entran a un buzón `allowlist` sin estar en la lista (§9), y contestarle
+  a un desconocido gasta el tope del dueño; y un buzón que cobra estampilla. El **correo sin firma**
+  sigue quedando pendiente a propósito: contestarlo iría a la pasarela y cerrarlo lo esconde.
+- **La lista de herramientas es CERRADA, y el límite es de CÓDIGO.** `ACCIONES` son cinco y el
+  despacho es una tabla congelada a la que se llega por `Object.hasOwn` (una red llamada
+  `constructor` ya reventó así en el pagador x402). Nada que mueva dinero: ni `accept`, ni `pay`, ni
+  `hire`, ni `deliver`, ni `release`, ni fianzas, ni mandatos, ni estampillas. Lo cuida una
+  inspección de la fuente con lista de PERMITIDOS (el modelo de `ideas.js`; una lista de prohibidos
+  deja pasar cualquier primitiva nueva del agente) más catorce mutantes, y el PROHIBIDO mira la
+  forma `.nombre(`, no la palabra: las descripciones que lee el modelo nombran justamente lo que NO
+  se puede hacer. `nyx5_notarizar` no se le ofrece a una dirección de sólo mensajes porque el Libro
+  se lo niega igual (invariante 6), y Gate nunca tiene manos.
+- **Contestarse a sí mismo es un bucle.** Un recordatorio propio DESPIERTA al agente (es lo que lo
+  vuelve vivo), pero su respuesta no se manda a ninguna parte: si se mandara, ese sobre propio lo
+  atendería el turno siguiente. Lo mismo vale para el aviso de «llegué a mi tope». Cupo de
+  `CUPO_DESPERTAR` (24) despertares por día UTC, y `cuando` nunca antes de cinco minutos.
+- **Un sobre a sí mismo pasa su propia política de buzón** (`politica.js`, antes del `switch`). Era
+  un defecto de antes que sólo se vio al construir esto: `recordar` rebotaba contra su propia lista
+  blanca, así que `nyx5_remind` era decorativo en TODO buzón por lista — incluido el de
+  `sigo.nicholas@` —, y un buzón con estampilla se cobraba a sí mismo. No abre nada: sólo quien
+  tiene esa llave puede firmar como esa dirección.
+- `leerFlujo` ahora arma los bloques del SSE POR ÍNDICE y los conserva tal cual, incluido el bloque
+  `thinking` con su `signature` (viene con texto vacío por `display: omitted`, pero la firma no): con
+  herramientas hay que devolverle a la API el turno del asistente COMPLETO, y perder ese bloque
+  invalida el turno. Es el mismo espíritu del invariante 7.
+- **NO cubre**: `nyx5_notarizar` no devuelve el sello en el mismo turno (el sobre a `libro@` se
+  encola y el recibo llega al buzón en el tick siguiente); la adopción no le quita la llave a su
+  dueño (la sigue teniendo en su disco, y debe: la casa guarda una COPIA); y un turno con manos puede
+  costar hasta `MAX_PASOS + 2` llamadas a la API, así que el tope mensual es el único freno de gasto.
