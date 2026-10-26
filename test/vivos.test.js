@@ -287,6 +287,30 @@ test('encendido explícito: PUT config { enabled: true } y recién entonces cont
   assert.equal((await admin('GET', '/admin/assistants/rosetta')).body.tools, true, 'un rechazo no cambió lo guardado');
 });
 
+// El agujero del 14-sep por la otra puerta: el rebote también es un sobre, y la estampilla la paga
+// QUIEN MANDA. Una dirección adoptada es raíz, así que tiene cuenta y saldo que perder.
+test('no se rebota a un remitente cuyo buzón cobra estampilla: el rebote se lo cobraría al asistente', async () => {
+  const atacante = Agent.create(`atacante@${H}`, URL_CASA, { hosts });
+  await atacante.register({ adminToken: 't', inbox: { policy: 'stamp', price: 25 } });
+  await casa.libro.topup(rosetta.address, 5000, 'carga de prueba');
+  await casa.agregarContactos('rosetta', [atacante.address]);
+  casa.resolver.invalidate(`agent:${rosetta.address}`);
+  const saldoAntes = (await rosetta.balance(H)).balance;
+  const n = pedidos.length;
+  const env = await atacante.send({ to: rosetta.address, type: 'intro', body: 'cóbrame el rebote' });
+  await espera(700); await casa.tick({ programado: true });
+  await espera(400); await casa.tick({ programado: true });
+  assert.equal(pedidos.length, n, 'un tipo que no se atiende no cuesta una llamada a la API');
+  assert.equal((await casa.store.listMail('rosetta')).length, 0, 'el sobre quedó confirmado, no eterno');
+  const suyos = (await atacante.inbox()).filter((x) => x.envelope.from === rosetta.address && x.envelope.in_reply_to === env.id);
+  assert.deepEqual(suyos, [], 'se le rebotó a un buzón que cobra estampilla');
+  assert.equal((await rosetta.balance(H)).balance, saldoAntes, 'el asistente pagó una estampilla por rebotar');
+  // Y a un remitente normal de la lista sí se le rebota (silencio): el guardia es por estampilla.
+  const env2 = await amiga.send({ to: rosetta.address, type: 'intro', body: 'yo sí' });
+  const r = await amiga.waitFor((e) => e.from === rosetta.address && e.in_reply_to === env2.id, { timeoutMs: 8000 });
+  assert.equal((await amiga.open(r.envelope)).content.body, NO_ATIENDE('intro', TIPOS_ATENDIDOS));
+});
+
 // ---------- 3. las manos ----------
 
 test('sin `tools` no hay manos, y una dirección de sólo mensajes nunca recibe la de la notaría', () => {

@@ -195,6 +195,17 @@ export const NO_ATIENDE = (tipo, tipos) => `I do not handle envelopes of type "$
 export const CUPO_DESPERTAR = 24;
 const DIA_MS = 24 * 3600 * 1000;
 
+// ¿El buzón de esa dirección cobra estampilla? La paga QUIEN MANDA, así que contestarle le cuesta
+// saldo al asistente. Sólo se puede saber de una dirección de esta casa; de una ajena se asume que
+// no (el envío fallaría con 402 y nada se cobra, porque la cobra la casa del receptor).
+async function cobraEstampilla(est, dir) {
+  try {
+    const { local, domain } = parseAddress(dir);
+    if (domain !== est.domain) return false;
+    return (await est.store.getAgent(local))?.inbox?.policy === 'stamp';
+  } catch { return true; }
+}
+
 export async function atenderAsistentes(est, { maxPorTick = 3, maxRebotesPorTick = 10, maxCierresPorTick = 50, nowMs = Date.now() } = {}) {
   if (!est.asistente?.apiKey || !est.store.kvGet) return 0;
   const indice = (await est.store.kvGet('asistente', '_indice')) || [];
@@ -221,7 +232,10 @@ export async function atenderAsistentes(est, { maxPorTick = 3, maxRebotesPorTick
       if (cierres >= maxCierresPorTick) return;
       cierres++;
       est.log(`asistente ${local}: sobre ${e.id} de ${e.from} cerrado sin contestar (${razon})`);
-      if (rebote && rebotes < maxRebotesPorTick) {
+      // Un remitente cuyo buzón cobra estampilla la cobraría al ASISTENTE por el rebote (la paga
+      // quien manda). Es el mismo agujero que se cerró el 14-sep para la respuesta, por otra puerta:
+      // se cierra sin contestarle. Un buzón abierto (qa@) recibe de cualquiera, así que esto importa.
+      if (rebote && rebotes < maxRebotesPorTick && !(await cobraEstampilla(est, e.from))) {
         rebotes++;
         const agente = await agenteDe();
         await agente?.send({ to: e.from, body: rebote, thread: e.thread || e.id, inReplyTo: e.id }).catch(() => {});

@@ -55,7 +55,7 @@ src/nucleo/keccak.js     Keccak-256 (el de Ethereum, NO sha3-256) en JS puro; sr
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos -> `npm test` (432)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos -> `npm test` (433)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 scripts/revision-adversarial.{md,mjs}  el guion adversarial por versión (NX-903) y su parte automatizable
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
@@ -64,7 +64,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 432 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 433 pruebas, todas deben pasar antes de cualquier commit
 npm run revision         # revisión adversarial automatizable contra una casa local (scripts/revision-adversarial.md)
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
@@ -584,7 +584,7 @@ hay que saber para no romperlo:
 ### 26-oct-2026 — agentes VIVOS (rama `vivos`): el `task` silencioso, adopción y manos
 `src/correo/acciones.js` + `atenderAsistentes`/`responder` en `src/correo/asistente.js` +
 `_adoptarAsistente`/`_quitarAsistente` en la estafeta + la excepción del sobre a sí mismo en
-`politica.js`. `test/vivos.test.js` (23 pruebas, 23 mutantes verificados uno a uno), SPEC §23c-bis,
+`politica.js`. `test/vivos.test.js` (24 pruebas, 25 mutantes verificados uno a uno), SPEC §23c-bis,
 ARQUITECTURA §4.8. Es la prioridad número uno de Nicholas: que los agentes del equipo piensen y
 actúen desde la casa, sin su Mac. Cinco cosas que hay que saber para no romperlas:
 
@@ -600,7 +600,9 @@ actúen desde la casa, sin su Mac. Cinco cosas que hay que saber para no romperl
   de un agente de sistema; lo que llegó por un grupo (su tope en dólares es del dueño y el grupo es
   un camino que su lista no eligió, revisión del 13-sep); un remitente que la lista NO eligió — un
   `intro` de 4 KB o un avalado entran a un buzón `allowlist` sin estar en la lista (§9), y contestarle
-  a un desconocido gasta el tope del dueño; y un buzón que cobra estampilla. El **correo sin firma**
+  a un desconocido gasta el tope del dueño; y un buzón que cobra estampilla — **el rebote también es
+  un sobre y la estampilla la paga quien manda**, así que rebotarle le costaría saldo al asistente:
+  es el agujero del 14-sep por otra puerta, y lo cierra `cobraEstampilla`. El **correo sin firma**
   sigue quedando pendiente a propósito: contestarlo iría a la pasarela y cerrarlo lo esconde.
 - **La lista de herramientas es CERRADA, y el límite es de CÓDIGO.** `ACCIONES` son cinco y el
   despacho es una tabla congelada a la que se llega por `Object.hasOwn` (una red llamada

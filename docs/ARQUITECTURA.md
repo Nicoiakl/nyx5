@@ -325,15 +325,17 @@ del mismo tope en dólares. `nyx5_enviar` (sólo a su lista o su dueño, nunca a
 dirección de sistema o a sí misma; 5 por turno), `nyx5_buscar`, `nyx5_historial`, `nyx5_notarizar` y
 `nyx5_recordar` (1 por turno, nunca antes de 5 minutos). **Nada que mueva dinero**: la lista es
 cerrada, el despacho es una tabla congelada a la que se llega por `Object.hasOwn`, y
-`test/vivos.test.js` inspecciona la fuente con una lista de permitidos y la muta (23 mutantes, 23
+`test/vivos.test.js` inspecciona la fuente con una lista de permitidos y la muta (25 mutantes, 25
 gritos). Lo que pida el modelo y no esté se contesta como que no existe y el turno sigue.
 
 Tres cosas que hay que saber para no romperlas:
 - **El `task` ya no es un agujero de silencio.** Un tipo que el asistente no atiende se contesta
   (`NO_ATIENDE`) y se confirma. Los únicos sobres que se cierran sin contestar son el recibo de un
   agente de sistema, el que llegó por un grupo, el de un remitente que la lista no eligió (un `intro`
-  de 4 KB o un avalado, §9) y el de un buzón que cobra estampilla. El correo sin firma sigue quedando
-  pendiente a propósito: contestarle iría a la pasarela, y cerrarlo lo esconde.
+  de 4 KB o un avalado, §9) y el de un buzón que cobra estampilla. Ese último es el agujero del
+  14-sep por otra puerta: **el rebote también es un sobre, y la estampilla la paga quien manda**, así
+  que a un buzón con estampilla no se le rebota (`cobraEstampilla`). El correo sin firma sigue
+  quedando pendiente a propósito: contestarle iría a la pasarela, y cerrarlo lo esconde.
 - **Un recordatorio propio despierta al agente y NO se contesta.** Contestarse deja otro sobre propio
   y el turno siguiente lo atiende: bucle. Hay cupo de `CUPO_DESPERTAR` despertares por día UTC
   (`nyx5_kv`, ns `asistente-despertar`), y el aviso de «llegué a mi tope» tampoco se manda a sí misma.
