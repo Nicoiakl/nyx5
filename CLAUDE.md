@@ -634,3 +634,15 @@ actúen desde la casa, sin su Mac. Cinco cosas que hay que saber para no romperl
   (dos isolates) que vieran el mismo sobre pendiente mandarían dos rebotes iguales. La carrera no se
   ve corriendo el reloj dos veces en Node (el servidor local serializa): se golpea el método, con dos
   `atenderAsistentes` concurrentes sobre el mismo almacén. Verificado por mutación, los dos caminos.
+- **ABIERTO, medido el 26-oct y es lo primero que hay que cerrar: una pregunta enorme no tiene tope,
+  y el historial la vuelve a mandar.** El cuerpo más grande que entra a un asistente son ~760 KB (el
+  sobre tope 1 MB, y cifrar + base64 infla ~1,4x). Medido con tres mensajes de 760 KB seguidos, lo
+  que se le manda a la API fue 614 KB, 1,33 MB y 2,10 MB: el historial (`limit: 13`) reenvía cada
+  pregunta anterior, así que el costo crece con el CUADRADO de los mensajes. A precio de
+  `claude-sonnet-5` (2 US$/MTok de entrada) ese tercer turno cuesta ~US$1, así que un remitente DE LA
+  LISTA quema un tope de US$10 con ocho mensajes; y al llegar a los 13 turnos la petición pasa del
+  millón de tokens de contexto, la API devuelve 400 y esa conversación queda trabada PARA SIEMPRE
+  (toda pregunta futura en ese hilo arrastra los mismos bytes). El tope mensual es el único freno y no
+  es suficiente. Es de ANTES de este trabajo, pero `task` le agregó una puerta. Arreglo propuesto: un
+  tope de caracteres por pregunta y por historial, con un texto que diga cuánto se aceptó — el texto
+  lo tiene que aprobar Nicholas (§4).
