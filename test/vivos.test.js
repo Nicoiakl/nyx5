@@ -22,7 +22,7 @@ import { randomBytes } from 'node:crypto';
 import { generateKeys } from '../src/nucleo/crypto.js';
 import { Estafeta } from '../src/correo/estafeta.js';
 import { Agent } from '../src/correo/agente.js';
-import { TIPOS_ATENDIDOS, NO_ATIENDE, CUPO_DESPERTAR, leerFlujo } from '../src/correo/asistente.js';
+import { TIPOS_ATENDIDOS, NO_ATIENDE, CUPO_DESPERTAR, atenderAsistentes, leerFlujo } from '../src/correo/asistente.js';
 import { ACCIONES, NOMBRES, MAX_ENVIOS, MAX_RECORDATORIOS, MAX_PASOS, SOLO_RAIZ, destinosDe, ejecutar, herramientasDe } from '../src/correo/acciones.js';
 
 // Puerto propio de esta suite (npm test corre los archivos en paralelo). Lo cuida test/puertos.test.js.
@@ -220,6 +220,35 @@ test('un mensaje de alguien que no está en la lista (entrado con un intro previ
   await casa.tick({ programado: true });
   assert.equal(pedidos.length, n, 'un remitente fuera de la lista no llega a costar nada');
   assert.equal((await casa.store.listMail(asis.local)).length, 0, 'y no queda eterno');
+});
+
+// La trampa de este proyecto: una carrera no se ve corriendo el reloj dos veces en Node, porque el
+// servidor local serializa. Se golpea el MÉTODO: dos pasadas concurrentes sobre el mismo almacén.
+test('dos relojes sobre el mismo sobre: una sola respuesta, un solo rebote (el turno por sobre cubre los dos caminos)', async () => {
+  const asis = await altaDelegado('sigo5', { budget_usd: 5 });
+  clearInterval(casa.timer);
+  const tickReal = casa.tick.bind(casa);
+  casa.tick = async () => {};  // el adaptador de Node dispara un tick completo tras cada petición
+  try {
+    const pregunta = await duena.send({ to: asis.address, type: 'task', body: 'contéstame una vez' });
+    const intro = await duena.send({ to: asis.address, type: 'intro', body: 'y rebótame una vez' });
+    // `programado: false` entrega la cola sin atender asistentes: es justo para esto que existe.
+    for (let i = 0; i < 3; i++) { await tickReal({ programado: false }); await espera(50); }
+    assert.equal((await casa.store.listMail(asis.local)).length, 2, 'los dos sobres están pendientes');
+    const n = pedidos.length;
+    await Promise.all([atenderAsistentes(casa), atenderAsistentes(casa)]);
+    assert.equal(pedidos.length - n, 1, `dos relojes llamaron a la API ${pedidos.length - n} veces por el mismo sobre`);
+    await tickReal({ programado: true });
+    const respuestas = (await duena.inbox()).filter((x) => x.envelope.in_reply_to === pregunta.id && x.envelope.from === asis.address);
+    assert.equal(respuestas.length, 1, `llegaron ${respuestas.length} respuestas a la misma pregunta`);
+    const rebotes = (await duena.inbox()).filter((x) => x.envelope.in_reply_to === intro.id && x.envelope.from === asis.address);
+    assert.equal(rebotes.length, 1, `llegaron ${rebotes.length} rebotes por el mismo sobre`);
+  } finally {
+    casa.tick = tickReal;
+    // Devolver el reloj: sin esto el resto del archivo corre sin trabajador y se cuelga entero.
+    casa.timer = setInterval(() => casa.tick().catch(() => {}), casa.workerIntervalMs);
+    casa.timer.unref?.();
+  }
 });
 
 // ---------- 2. adopción de una dirección que ya existe ----------

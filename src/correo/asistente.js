@@ -235,7 +235,10 @@ export async function atenderAsistentes(est, { maxPorTick = 3, maxRebotesPorTick
       // Un remitente cuyo buzón cobra estampilla la cobraría al ASISTENTE por el rebote (la paga
       // quien manda). Es el mismo agujero que se cerró el 14-sep para la respuesta, por otra puerta:
       // se cierra sin contestarle. Un buzón abierto (qa@) recibe de cualquiera, así que esto importa.
-      if (rebote && rebotes < maxRebotesPorTick && !(await cobraEstampilla(est, e.from))) {
+      // El rebote va bajo el MISMO turno por sobre que la respuesta: dos relojes (dos isolates) que
+      // vieran el mismo sobre pendiente mandarían dos rebotes iguales.
+      if (rebote && rebotes < maxRebotesPorTick && !(await cobraEstampilla(est, e.from))
+        && await est.store.kvPutIfAbsent('asistente-turno', e.id, { at: new Date().toISOString() }, Date.now() + 15 * 60_000)) {
         rebotes++;
         const agente = await agenteDe();
         await agente?.send({ to: e.from, body: rebote, thread: e.thread || e.id, inReplyTo: e.id }).catch(() => {});

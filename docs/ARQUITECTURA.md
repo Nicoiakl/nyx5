@@ -325,7 +325,7 @@ del mismo tope en dólares. `nyx5_enviar` (sólo a su lista o su dueño, nunca a
 dirección de sistema o a sí misma; 5 por turno), `nyx5_buscar`, `nyx5_historial`, `nyx5_notarizar` y
 `nyx5_recordar` (1 por turno, nunca antes de 5 minutos). **Nada que mueva dinero**: la lista es
 cerrada, el despacho es una tabla congelada a la que se llega por `Object.hasOwn`, y
-`test/vivos.test.js` inspecciona la fuente con una lista de permitidos y la muta (25 mutantes, 25
+`test/vivos.test.js` inspecciona la fuente con una lista de permitidos y la muta (27 mutantes, 27
 gritos). Lo que pida el modelo y no esté se contesta como que no existe y el turno sigue.
 
 Tres cosas que hay que saber para no romperlas:

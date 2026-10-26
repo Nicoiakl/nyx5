@@ -55,7 +55,7 @@ src/nucleo/keccak.js     Keccak-256 (el de Ethereum, NO sha3-256) en JS puro; sr
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos -> `npm test` (433)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos -> `npm test` (434)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 scripts/revision-adversarial.{md,mjs}  el guion adversarial por versión (NX-903) y su parte automatizable
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
@@ -64,7 +64,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 433 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 434 pruebas, todas deben pasar antes de cualquier commit
 npm run revision         # revisión adversarial automatizable contra una casa local (scripts/revision-adversarial.md)
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
@@ -584,7 +584,7 @@ hay que saber para no romperlo:
 ### 26-oct-2026 — agentes VIVOS (rama `vivos`): el `task` silencioso, adopción y manos
 `src/correo/acciones.js` + `atenderAsistentes`/`responder` en `src/correo/asistente.js` +
 `_adoptarAsistente`/`_quitarAsistente` en la estafeta + la excepción del sobre a sí mismo en
-`politica.js`. `test/vivos.test.js` (24 pruebas, 25 mutantes verificados uno a uno), SPEC §23c-bis,
+`politica.js`. `test/vivos.test.js` (25 pruebas, 27 mutantes verificados uno a uno), SPEC §23c-bis,
 ARQUITECTURA §4.8. Es la prioridad número uno de Nicholas: que los agentes del equipo piensen y
 actúen desde la casa, sin su Mac. Cinco cosas que hay que saber para no romperlas:
 
@@ -630,3 +630,7 @@ actúen desde la casa, sin su Mac. Cinco cosas que hay que saber para no romperl
   encola y el recibo llega al buzón en el tick siguiente); la adopción no le quita la llave a su
   dueño (la sigue teniendo en su disco, y debe: la casa guarda una COPIA); y un turno con manos puede
   costar hasta `MAX_PASOS + 2` llamadas a la API, así que el tope mensual es el único freno de gasto.
+- **El rebote y la respuesta van bajo el MISMO turno por sobre** (`asistente-turno`): dos relojes
+  (dos isolates) que vieran el mismo sobre pendiente mandarían dos rebotes iguales. La carrera no se
+  ve corriendo el reloj dos veces en Node (el servidor local serializa): se golpea el método, con dos
+  `atenderAsistentes` concurrentes sobre el mismo almacén. Verificado por mutación, los dos caminos.
