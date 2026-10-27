@@ -14,6 +14,7 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 |---|---|---|
 | ☐ | **Cuenta prepago para el agente** (Mercado Pago empresa de Blue Tuna SpA, $30.000, logueada una vez en Chrome) para repetir la compra chilena con plata del agente | 14-sep |
 | ☐ | **Liberar el escrow** `ae65c82b` (500 tokens a compras@) cuando llegue el pedido de Mercado Libre; recordatorio en su buzón el 15-sep | 14-sep |
+| ☐ | **Enchufar los ejecutores de la fábrica de Rosetta**: (1) decidir a qué repositorio apunta cada rol (hoy la fábrica no tiene uno solo; `RosettaQuantum/quantum-run` es el candidato), (2) un PAT con *Contents: read and write* sobre ese repo — va a la casa por `POST /admin/executors`, nunca por el chat, (3) el workflow `examples/ci/nyx5-ejecutor.yml` y el secret `NYX5_KEY` en ese repo. La casa ya está desplegada y espera | 27-oct |
 | ☐ | **Marca INAPI** clase 42, en pausa hasta la vuelta (`marca/SOLICITUD-MARCA-NYX5.md`) | 13-sep |
 | ☐ | **AP2**: ¿se queda mapeado o se le construye la segunda llave ECDSA? Recomendación: dejarlo mapeado | 9-sep |
 | ☐ | **x402**: ¿la comisión de la casa puede seguir saliendo de lo que recibe el receptor? Si x402 responde que no, el binding exige cambiar cómo se asienta la comisión. Preguntado en su issue #3435 | 9-sep |
@@ -28,6 +29,35 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 | ☐ | Reclamar el listado de glama.ai con OAuth de GitHub | 8-sep |
 
 ## Hecho
+
+### 27-oct-2026 (tarde) — ejecutores: el aviso de la casa cableado al CI de los roles que trabajan sobre archivos
+Desplegado en las dos casas (`chsq` a744f50a, `chsq-b` 28c41226) y verificado contra el terreno:
+`/admin/executors` contesta 401 en nyx5.com y b.nyx5.com, y una ruta inexistente sigue dando 404.
+Es la otra mitad de NX-412: lo de la mañana despertó a los agentes que **piensan**; esto despierta a
+los que **ejecutan**. Medido con la fábrica de Rosetta: 7 de sus 8 roles trabajan sobre archivos.
+- **Lo que hace:** cuando un encargo llega a una dirección con ejecutor, la casa dispara el CI del
+  proyecto. El aviso **no lleva el contenido**: el cuerpo sigue cifrado en el buzón y lo abre el job
+  con la llave del rol, que vive en un secret del repositorio y nunca pasó por la casa.
+- **La casa avisa y no cierra el sobre.** Tres intentos con espera creciente y, al agotarse, el dueño
+  recibe un sobre que nombra el encargo, el repo, la razón y cómo reintentarlo. Nada se calla.
+- **El token de CI** va cifrado en la bóveda y es de **sólo escritura**: ninguna lectura lo devuelve.
+  El destino se **deriva** del `repo` (lista cerrada de proveedores): con una URL libre la casa sería
+  un diputado confundido que manda ese token a donde le digan.
+- **Un sobre lo contesta UNO**: cerebro en la casa o ejecutor en CI, con 409 en los dos sentidos.
+- **La revisión encontró tres**, los tres arreglados con prueba de grito: la configuración de CI se
+  leía en CADA entrega a CUALQUIER dirección (una lectura de base por sobre y por destinatario);
+  el cupo del día se cobraba antes de leer el token, así que un ejecutor sin token gastaba despachos
+  que nunca salieron; y la redacción del token miraba sólo su forma, no su valor.
+- **Un defecto que la suite no veía**, cazado mirando un archivo de verdad de la fábrica: `ejecutor`
+  esperaba la llave PLANA y `nyx5 keygen` escribe `{address, estafeta, keys:{…}}`. Un secret armado
+  con el archivo del disco habría fallado en el primer job con todo verde. Ahora acepta las dos
+  formas y un mapa de varias, para que un repositorio sirva a los siete roles con un solo secret.
+- **Recorrido en workerd REAL** (token de CI falso, cero gasto): el disparo SALE del borde y GitHub
+  contesta `401 Bad credentials` — o sea que la petición llegó con su cabecera —, el token se abre de
+  la bóveda en D1 real, el estado y el cupo quedan escritos, el buzón sigue pendiente, y un aviso con
+  firma falsa se rechaza sin leer nada. Suite 444 -> 472. SPEC §23f, ARQUITECTURA §4.9.
+- **Lo que NO está probado y lo digo:** que GitHub ACEPTE el cuerpo del disparo. Eso exige un token
+  real, y el token es de Nicholas.
 
 ### 27-oct-2026 — agentes vivos: una dirección puede pensar y actuar sin el Mac de Nicholas
 Desplegado en las dos casas. Cualquier dirección se **adopta** (su llave va a la bóveda, la tarjeta
