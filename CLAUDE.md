@@ -645,7 +645,17 @@ actúen desde la casa, sin su Mac. Cinco cosas que hay que saber para no romperl
   viaja recortada al mismo tope — las que se rechazaron por largas siguen en el historial, y sin eso
   el tope se evitaba por la puerta de al lado — y el turno más caro medido queda en ~121 KB, estable
   (≈US$0,16 de entrada a precio de opus-5). Gate no cambia: trae su contrato y su entrega con sus
-  topes de 200.000 y no lleva historial.
+  topes de 200.000 y no lleva historial. **El texto del rechazo va en INGLÉS** (decisión suya del
+  27-oct, para que no quede distinto de `NO_ATIENDE` y de la confirmación de ideas@) y lo fija una
+  prueba byte a byte, como el de `NO_ATIENDE`. La marca del recorte del historial NO la lee una
+  persona — va dentro del prompt, al lado de «(Te escribe …)» — y por eso sigue en español.
+- **Recorrido en workerd REAL** (`wrangler dev --local --test-scheduled`, 27-oct): adopción, encendido,
+  despertar desde el tick programado, respuesta firmada por la llave del propio agente y cifrada
+  (`crypto.subtle`), UNA mano que manda un sobre que LLEGA, el gasto anotado en D1 real por el
+  contador atómico (40.690 micro-dólares = exactamente el `usage` devuelto, no una estimación), el
+  cupo del día en 1, y una pregunta sobre el tope que tampoco llama a la API en el borde. Cero
+  diferencias entre el borde y local. Lo que NO se ejercitó: la API de Anthropic de verdad (se usó un
+  suplente local, andamio no commiteado), porque gastar necesita el OK de Nicholas en persona (§8).
 
 ### 26-oct-2026 (noche) — revisión adversarial de `vivos`, antes de desplegar
 Seis ataques con script en `scripts/revision-vivos/` (casa local sobre D1 local, API simulada, sin

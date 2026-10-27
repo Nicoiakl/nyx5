@@ -39,7 +39,8 @@ const SISTEMA = new Set(['postmaster', 'libro', 'verifica', 'tareas']);
 const mesDe = (t = Date.now()) => new Date(t).toISOString().slice(0, 7);
 const diaDe = (t = Date.now()) => new Date(t).toISOString().slice(0, 10);
 // Separador de miles sin ICU: `toLocaleString` depende de datos de idioma que workerd puede no traer.
-const miles = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+// El separador va EXPLÍCITO en cada uso: coma en el texto en inglés, punto en el español.
+const miles = (n, sep = ',') => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, sep);
 
 // EL TOPE DE ENTRADA (26-oct-2026, decisión de Nicholas). UNA constante, porque el tope vive en un
 // solo lugar: el texto del rechazo, el recorte del historial y la prueba del turno más caro leen de
@@ -55,8 +56,12 @@ const miles = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 // Qué NO cubre: Gate trae su propio contrato y su propia entrega, con los topes de `LIMITES_GATE`
 // (200.000 cada uno, aprobados el 14-sep); Gate no lleva historial, así que no crece con los turnos.
 export const LIMITES_ENTRADA = Object.freeze({ pregunta: 40_000, turnos: 6 });
-export const DEMASIADO_LARGO = (largo) => `Tu mensaje tiene ${miles(largo)} caracteres y el máximo que puedo leer son ${miles(LIMITES_ENTRADA.pregunta)}. No lo leí: mándalo de nuevo más corto, o por partes.`;
-export const CORTADO = `\n[cortado aquí: supera el tope de ${miles(LIMITES_ENTRADA.pregunta)} caracteres]`;
+// El texto que lee quien escribió de más. En INGLÉS por decisión de Nicholas (27-oct-2026), para que
+// no quede distinto de `NO_ATIENDE` y de la confirmación de ideas@. Lo fija una prueba byte a byte.
+export const DEMASIADO_LARGO = (largo) => `Your message is ${miles(largo)} characters and the most I can read is ${miles(LIMITES_ENTRADA.pregunta)}. I did not read it: send it again shorter, or in parts.`;
+// Esta marca NO la lee una persona: va dentro del prompt, al lado de «(Te escribe …)», y por eso
+// sigue en español como el resto del armazón de la conversación.
+export const CORTADO = `\n[cortado aquí: supera el tope de ${miles(LIMITES_ENTRADA.pregunta, '.')} caracteres]`;
 
 // El GASTO del mes es el único freno de plata de un asistente que corre solo, así que se cuenta con
 // un contador ATÓMICO en micro-dólares (`kvIncrement`), no leyendo-sumando-escribiendo un objeto:

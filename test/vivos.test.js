@@ -791,9 +791,15 @@ test('una mano no le escribe a una dirección de protocolo de NINGUNA casa (grit
   assert.match((await ejecutar(ctx, 'nyx5_enviar', { to: `libro@${H}`, body: 'x' })).content, /only takes signed operations/);
 });
 
-test('el texto de NO_ATIENDE es el que Nicholas aprobó el 26-oct-2026: no se cambia sin mostrárselo (CLAUDE.md §5)', () => {
+test('los dos textos que lee quien escribe son los que Nicholas aprobó: fijados byte a byte (CLAUDE.md §5)', () => {
   assert.equal(NO_ATIENDE('intro', ['message', 'task', 'result']),
     'I do not handle envelopes of type "intro". I handle: message, task, result. Nothing was done with this one; send it again as one of those types if you want an answer.');
+  // Aprobado el 27-oct-2026, en inglés como el de arriba, y con separador de miles en coma.
+  assert.equal(DEMASIADO_LARGO(41_000),
+    'Your message is 41,000 characters and the most I can read is 40,000. I did not read it: send it again shorter, or in parts.');
+  assert.equal(DEMASIADO_LARGO(1_234_567).startsWith('Your message is 1,234,567 characters '), true);
+  // La marca del historial NO la lee una persona: va en el prompt y sigue en español.
+  assert.equal(CORTADO, '\n[cortado aquí: supera el tope de 40.000 caracteres]');
 });
 
 // ---------- 6. los contadores que son el único freno: el gasto y el volumen ----------
