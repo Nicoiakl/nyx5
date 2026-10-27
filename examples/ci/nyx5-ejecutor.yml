@@ -1,0 +1,75 @@
+# Nyx5/1 — el ejecutor de una dirección que trabaja sobre archivos (NX-412).
+#
+# Copiá este archivo a `.github/workflows/nyx5-ejecutor.yml` del repositorio del proyecto y poné
+# UN secret: `NYX5_KEY`, el JSON de la llave del rol (`{address, keys:{sig,sigPriv,enc,encPriv}}`,
+# lo que da `nyx5 keygen`). Después, en la casa:
+#
+#   curl -X POST https://nyx5.com/admin/executors \
+#     -H "authorization: Bearer $NYX5_ADMIN_TOKEN" -H 'content-type: application/json' \
+#     -d '{"local":"carta.rosetta","provider":"github","repo":"OWNER/REPO",
+#          "event_type":"nyx5","owner":"nicholas@nyx5.com","token":"<PAT con repo:write>"}'
+#   curl -X PUT https://nyx5.com/admin/executors/carta.rosetta \
+#     -H "authorization: Bearer $NYX5_ADMIN_TOKEN" -H 'content-type: application/json' \
+#     -d '{"enabled":true}'
+#
+# Nace apagado a propósito. Desde que se enciende, cada sobre que llega a esa dirección arranca
+# este workflow una vez, hasta el cupo del día.
+#
+# Tres cosas que NO son detalle:
+#
+#  - El aviso viaja por **variable de entorno**, no interpolado dentro de un `run`. Un
+#    `repository_dispatch` lo lanza cualquiera que tenga el token del repositorio y el payload lo
+#    escribe quien dispara: interpolarlo en una línea de shell sería ejecutar texto ajeno.
+#  - `ejecutor recoger` **verifica la firma de la casa antes de leer el buzón**. Un disparo que no
+#    viene de la casa gasta un runner y no lee nada: ni el encargo, ni el buzón.
+#  - El paso que responde corre **siempre** (`if: always()`). Un job que muere sin contestar deja
+#    el sobre pendiente, y la casa lo redespacha hasta tres veces y después le avisa al dueño. Que
+#    el silencio sea imposible es el punto: un `task` callado ya costó seis semanas una vez.
+
+name: Nyx5 executor
+on:
+  repository_dispatch:
+    types: [nyx5]
+
+# Dos encargos a la misma dirección se hacen en orden, no a la vez: comparten el repositorio.
+concurrency:
+  group: nyx5-${{ github.event.client_payload.to }}
+  cancel-in-progress: false
+
+jobs:
+  trabajar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      NYX5_AVISO: ${{ toJSON(github.event.client_payload) }}
+      NYX5_KEY: ${{ secrets.NYX5_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      # Verifica el aviso contra la tarjeta de la casa, lee el buzón con la llave del rol, descifra
+      # el encargo y lo deja en encargo.json: { envelope, from, type, project, media, body }.
+      - name: Recoger el encargo
+        run: npx --yes @nyx5/nyx5@0.7 ejecutor recoger --out encargo.json
+
+      # El trabajo del proyecto. Lo único que este workflow le pide es que escriba su respuesta en
+      # respuesta.txt: eso es lo que vuelve firmado por la dirección del rol.
+      # Reemplazá esta línea por lo que haga el rol (un script, una sesión de Claude Code, un build).
+      - name: Hacer el trabajo
+        run: ./scripts/nyx5-trabajo.sh encargo.json > respuesta.txt
+
+      # Siempre contesta: si el trabajo falló, el que encargó se entera por el mismo canal, con el
+      # enlace a la corrida. Y recién después de contestar se confirma el sobre.
+      - name: Responder y confirmar
+        if: always()
+        run: |
+          if [ ! -s respuesta.txt ]; then
+            printf 'The executor could not finish this job. Run: %s/%s/actions/runs/%s\n' \
+              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > respuesta.txt
+          fi
+          npx --yes @nyx5/nyx5@0.7 ejecutor responder --file respuesta.txt

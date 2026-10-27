@@ -43,6 +43,7 @@ import { Agent } from './agente.js';
 import { eventoDeCobro } from './cobro.js';
 import { atenderAsistentes, gastoDe, PRECIOS, MEDIA_GATE } from './asistente.js';
 import { atenderIdeas, paginaDeIdeas, puertaIdeas, LOCAL as IDEAS_LOCAL, VIA as IDEAS_VIA } from './ideas.js';
+import { atenderEjecutores, despachar as despacharCi, despachable, validarConfig as validarCi, urlDe as urlCi, PROVEEDORES as CI_PROVEEDORES, INTENTOS as CI_INTENTOS, CUPO_DESPACHOS_DIA } from './ci.js';
 import { validarFiltros, puntajeDe, precioMinimo, FILTROS } from './indice.js';
 
 const now = () => Date.now();
@@ -1009,6 +1010,12 @@ export class Estafeta {
     const indice = async () => (await this.store.kvGet('asistente', '_indice')) || [];
     if (rx.method === 'POST' && !local && !accion) {
       if (!this.boveda) return { status: 503, body: { reason: 'this house has no vault key' } };
+      // El recíproco del guard de /admin/executors: un sobre lo contesta UNO. Si esta dirección ya
+      // trabaja en CI, darle cerebro la haría contestar dos veces el mismo encargo.
+      const conEjecutor = String(b.local || '').toLowerCase();
+      if (conEjecutor && await this.store.kvGet('ci', conEjecutor)) {
+        return { status: 409, body: { reason: `${conEjecutor}@${this.domain} already has an executor in CI: an address answers with a brain or with an executor, not both. Remove it with DELETE /admin/executors/${conEjecutor}` } };
+      }
       if (b.adopt === true) return this._adoptarAsistente(b);
       if (b.system === true) return this._altaAsistenteSistema(b);
       const l = String(b.local || '').toLowerCase();
@@ -1061,6 +1068,99 @@ export class Estafeta {
       const gasto = await gastoDe(this.store, local, mes);
       const con = await this.store.kvGet('asistente-conocimiento', local);
       return { status: 200, body: { address: `${local}@${this.domain}`, enabled: cfg.enabled, system: cfg.system === true, adopted: cfg.adopted === true, tools: cfg.tools === true, owner: cfg.owner || null, free_for: cfg.free_for || [], model: cfg.model, effort: cfg.effort, budget_usd: cfg.budget_usd, price_tokens: cfg.price_tokens ?? 0, gate: cfg.gate === true, gate_price_tokens: cfg.gate_price_tokens ?? 0, gate_abstain_tokens: cfg.gate_abstain_tokens ?? 0, month: mes, spent_usd: Math.round(gasto.usd * 10000) / 10000, calls: gasto.llamadas, knowledge_bytes: con ? Buffer.byteLength(con.texto) : 0, knowledge_updated: con?.updated || null, api_key: !!this.asistente, pending: (await this.store.listMail(local)).length } };
+    }
+    return { status: 405, body: { reason: 'method not allowed here' } };
+  }
+
+  // ----- ejecutores: la dirección que trabaja sobre archivos (NX-412) -----
+  // Lo que la casa guarda es el TOKEN de CI y a dónde dispararlo. El trabajo lo hace el ejecutor,
+  // con la llave del rol en los secrets de su repositorio: aquí no se guarda ninguna llave de agente.
+  // El token es de SÓLO ESCRITURA (como los secrets de Cloudflare): se rota, nunca se lee de vuelta.
+  async _adminEjecutor(rx, local, accion) {
+    const b = rx.body || {};
+    const indice = async () => (await this.store.kvGet('ci', '_indice')) || [];
+    const publico = (c) => ({
+      address: `${c.local}@${this.domain}`, provider: c.provider, repo: c.repo, event_type: c.event_type,
+      owner: c.owner, cupo_dia: c.cupo_dia, enabled: c.enabled === true, url: urlCi(c),
+      token: c.token_last4 ? `…${c.token_last4}` : null, created: c.created, updated: c.updated || null,
+    });
+    if (rx.method === 'GET' && !local) {
+      const todos = [];
+      for (const l of await indice()) { const c = await this.store.kvGet('ci', l); if (c) todos.push(publico(c)); }
+      return { status: 200, body: { executors: todos, providers: Object.keys(CI_PROVEEDORES), attempts: CI_INTENTOS, default_quota: CUPO_DESPACHOS_DIA } };
+    }
+    if (rx.method === 'POST' && !local && !accion) {
+      if (!this.boveda) return { status: 503, body: { reason: 'this house has no vault key' } };
+      const l = String(b.local || '').toLowerCase();
+      const rec = Estafeta.validLocal(l) ? await this.store.getAgent(l) : null;
+      if (!rec || rec.revoked) return { status: 404, body: { reason: 'an executor must be an existing address of this house' } };
+      // Un sobre lo contesta UNO: un cerebro en la casa o un ejecutor afuera. Los dos juntos
+      // contestarían el mismo encargo dos veces, y el segundo no sabría que el primero ya respondió.
+      if (await this.store.kvGet('asistente', l)) return { status: 409, body: { reason: `${l}@${this.domain} already has a brain in this house: an address answers with a brain or with an executor, not both. Remove it with DELETE /admin/assistants/${l}` } };
+      if (await this.store.kvGet('ci', l)) return { status: 409, body: { reason: `${l}@${this.domain} already has an executor: change it with PUT /admin/executors/${l}, or remove it with DELETE /admin/executors/${l}` } };
+      const { local: _l, ...campos } = b;
+      const v = validarCi(campos);
+      if (v.error) return { status: 400, body: { reason: v.error } };
+      const token = String(b.token);
+      await this.store.kvPut('boveda', `ci:${l}`, { sellado: this.boveda.sellar({ token }, `ci:${l}`), since: iso() });
+      const cfg = { local: l, ...v, token_last4: token.slice(-4), enabled: b.enabled === true, created: iso() };
+      await this.store.kvPut('ci', l, cfg);
+      const i = await indice();
+      if (!i.includes(l)) await this.store.kvPut('ci', '_indice', [...i, l]);
+      this._ciIdx = null;
+      await this._evento('executor_created', `${l}@${this.domain}`, { provider: cfg.provider, repo: cfg.repo });
+      return { status: 201, body: publico(cfg) };
+    }
+    const cfg = local ? await this.store.kvGet('ci', local) : null;
+    if (!cfg) return { status: 404, body: { reason: 'no such executor' } };
+    if (rx.method === 'GET' && !accion) {
+      const pendientes = await this.store.listMail(local);
+      const rec = await this.store.getAgent(local);
+      const sobres = [];
+      for (const m of pendientes) {
+        if (!despachable(this, local, rec, m)) continue;
+        const d = await this.store.kvGet('ci-despacho', `${local}:${m.envelope.id}`);
+        sobres.push({ envelope: m.envelope.id, from: m.envelope.from, type: m.envelope.type, state: d?.estado || 'nuevo', attempts: Number(d?.intentos || 0), last: d?.ultimo || null, reason: d?.razon || null });
+      }
+      const usado = Number(await this.store.kvGet('ci-cupo', `${local}:${iso().slice(0, 10)}`)) || 0;
+      return { status: 200, body: { ...publico(cfg), pending: pendientes.length, dispatchable: sobres, used_today: usado } };
+    }
+    if (rx.method === 'PUT' && !accion) {
+      const { local: _l2, ...campos } = b;
+      const v = validarCi(campos, cfg);
+      if (v.error) return { status: 400, body: { reason: v.error } };
+      if (b.token != null) {
+        if (!this.boveda) return { status: 503, body: { reason: 'this house has no vault key' } };
+        await this.store.kvPut('boveda', `ci:${local}`, { sellado: this.boveda.sellar({ token: String(b.token) }, `ci:${local}`), since: iso() });
+      }
+      const nueva = { ...cfg, ...v, ...(b.token != null ? { token_last4: String(b.token).slice(-4) } : {}), ...(typeof b.enabled === 'boolean' ? { enabled: b.enabled } : {}), updated: iso() };
+      await this.store.kvPut('ci', local, nueva);
+      return { status: 200, body: publico(nueva) };
+    }
+    if (rx.method === 'DELETE' && !accion) {
+      await this.store.kvDelete('ci', local);
+      await this.store.kvDelete('boveda', `ci:${local}`);
+      await this.store.kvPut('ci', '_indice', (await indice()).filter((x) => x !== local));
+      this._ciIdx = null;
+      await this._evento('executor_removed', `${local}@${this.domain}`, {});
+      return { status: 200, body: { removed: `${local}@${this.domain}` } };
+    }
+    // Volver a intentar a mano lo que agotó sus intentos: es la salida que nombra el aviso al dueño.
+    // Borra el estado del sobre, no el cupo del día: el freno de plata no se levanta por aquí.
+    if (rx.method === 'POST' && accion === 'dispatch') {
+      const rec = await this.store.getAgent(local);
+      const hechos = [];
+      for (const m of await this.store.listMail(local)) {
+        if (!despachable(this, local, rec, m)) continue;
+        const d = await this.store.kvGet('ci-despacho', `${local}:${m.envelope.id}`);
+        if (d?.estado === 'ok') continue;
+        for (let i = 0; i < CI_INTENTOS; i++) await this.store.kvDelete('ci-turno', `${local}:${m.envelope.id}:${i}`);
+        await this.store.kvDelete('ci-despacho', `${local}:${m.envelope.id}`);
+        await this.store.kvDelete('ci-aviso', `${local}:${m.envelope.id}`);
+        const r = await despacharCi(this, local, m.envelope, { cfg });
+        hechos.push({ envelope: m.envelope.id, ok: r.ok === true, status: r.status || null, reason: r.reason || r.skipped || null });
+      }
+      return { status: 200, body: { dispatched: hechos } };
     }
     return { status: 405, body: { reason: 'method not allowed here' } };
   }
@@ -1209,6 +1309,7 @@ export class Estafeta {
     if (programado) await this._liberarVencidos();
     if (programado) { try { await atenderAsistentes(this); } catch (e) { this.log(`asistentes: ${e.message}`); } }
     if (programado && this.ideas.enabled) { try { await atenderIdeas(this); } catch (e) { this.log(`ideas: ${e.message}`); } }
+    if (programado) { try { await atenderEjecutores(this); } catch (e) { this.log(`ejecutores: ${e.message}`); } }
     await this.flushPushes();
   }
   async _deliver(job) {
@@ -1619,6 +1720,36 @@ export class Estafeta {
       return this.fetch(rec.webhook, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nyx5-push': `domain=${this.domain}; kid=${this.keys.sig}; sig=${sig}` }, body, signal: AbortSignal.timeout(5000) });
     }).catch((e) => this.log(`webhook ${local} falló: ${e.message} / ${e.cause?.message}`));
     this._pushes.push(pendiente);
+    this._ci(local, env);
+    return pendiente;
+  }
+  // Aviso al EJECUTOR (NX-412): si esta dirección trabaja sobre archivos, la casa no hace el
+  // trabajo — dispara el CI del proyecto y el ejecutor contesta firmando con la llave del rol. El
+  // primer intento sale aquí, al entregar; el reloj reintenta lo que se perdió (`atenderEjecutores`).
+  // Se acumula en `_pushes` por lo mismo que el webhook: una promesa suelta la cancela el runtime.
+  // El índice se cachea en la instancia: `_ci` corre en CADA entrega a CUALQUIER dirección, y sin
+  // esto era una lectura de la base por sobre y por destinatario para algo que casi ninguna
+  // dirección usa. Una casa sin ejecutores paga una lectura por minuto y por isolate. Precio
+  // declarado: un ejecutor recién creado puede tardar hasta un minuto en despachar al entregar; el
+  // reloj, que lee el índice fresco, lo atrapa igual.
+  async _ciIndice() {
+    if (this._ciIdx && this._ciIdx.until > now()) return this._ciIdx.lista;
+    const lista = (await this.store.kvGet('ci', '_indice')) || [];
+    this._ciIdx = { lista, until: now() + 60_000 };
+    return lista;
+  }
+  _ci(local, env) {
+    if (!this.store.kvGet) return null;
+    const pendiente = this._ciIndice().then(async (idx) => {
+      if (!idx.includes(local)) return;
+      const cfg = await this.store.kvGet('ci', local);
+      if (!cfg?.enabled) return;
+      const rec = await this.store.getAgent(local);
+      if (!rec || rec.revoked) return;
+      if (!despachable(this, local, rec, { envelope: env, from_verified: !!env.signature })) return;
+      await despacharCi(this, local, env, { cfg });
+    }).catch((e) => this.log(`ci ${local} falló: ${e.message}`));
+    this._pushes.push(pendiente);
     return pendiente;
   }
   // Aviso por email: si el agente registró `notify_email` y la casa tiene proveedor de salida, le
@@ -1838,6 +1969,10 @@ export class Estafeta {
       if (this.remoto.enabled && rx.method === 'POST' && path === '/contact-invites') return this.crearInvitacion(rx);
       if (this.remoto.enabled && rx.method === 'GET' && (m = /^\/i\/([A-Za-z0-9_-]{16,64})$/.exec(path))) return this._paginaInvitacion(m[1], rx.query.get('source'), rx.ip);
       // ----- Asistentes (sólo la casa los configura; el dueño los pide) -----
+      if ((m = /^\/admin\/executors(?:\/([^/]+))?(?:\/(dispatch))?$/.exec(path))) {
+        if ((rx.headers.authorization || '') !== `Bearer ${this.adminToken}`) return send(401, { reason: 'only the house configures executors' });
+        return this._adminEjecutor(rx, m[1] ? dec(m[1]).toLowerCase() : null, m[2] || null);
+      }
       if ((m = /^\/admin\/assistants(?:\/([^/]+))?(?:\/(knowledge|config|pause|resume))?$/.exec(path))) {
         if ((rx.headers.authorization || '') !== `Bearer ${this.adminToken}`) return send(401, { reason: 'only the house configures assistants' });
         return this._adminAsistente(rx, m[1] ? dec(m[1]).toLowerCase() : null, m[2] || null);

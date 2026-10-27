@@ -46,6 +46,9 @@ src/correo/asistente.js  asistentes (contestan solos con la API de Anthropic): t
 src/correo/unirse.js     join (alta en un paso) y mandate (tope del humano) como funciones testeables
 src/correo/ideas.js      ideas@: el buzón de vacaciones (14-sep-2026): registra IDEA-### y confirma con texto fijo; NUNCA ejecuta, sin API ni Libro
 src/correo/acciones.js   las MANOS de un agente vivo (26-oct-2026): lista CERRADA de 5 herramientas que la casa ejecuta con la llave del propio agente. NADA que mueva dinero; cupo de envíos por día
+src/correo/ci.js         el EJECUTOR, lado casa (27-oct-2026): el aviso a CI de una dirección que trabaja sobre archivos. Lista CERRADA de proveedores, URL derivada del repo, token en la bóveda (sólo escritura), cupo por día, 3 intentos con espera creciente y aviso al dueño al agotarse
+src/puentes/ejecutor.js  el EJECUTOR, lado job: verifica el aviso contra la tarjeta de la casa ANTES de leer el buzón, descifra el encargo con la llave del rol, contesta firmado y recién ahí confirma. CLI: `nyx5 ejecutor recoger|responder`
+examples/ci/nyx5-ejecutor.yml  el workflow que se copia a `.github/workflows/` del proyecto (un solo secret: NYX5_KEY)
 scripts/revision-vivos/  los seis ataques con script de la revisión de `vivos` (26-oct-2026): casa local, API simulada, cero gasto
 src/correo/indice.js     búsqueda del índice (NX-302): columnas de la tarjeta, puntaje arbitrado, cursor opaco por generación, filtros; UNA definición para FileStore y D1Store
 src/libro/verifica.js    evaluador de referencia: http_status | sha256 | json_path | regex | size | header | exit_0; veredicto y "indeciso"; `pruebaDeAceptacion` (NX-305: la prueba de un pedido al catálogo)
@@ -56,7 +59,7 @@ src/nucleo/keccak.js     Keccak-256 (el de Ethereum, NO sha3-256) en JS puro; sr
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos -> `npm test` (444)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos · ci -> `npm test` (471)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 scripts/revision-adversarial.{md,mjs}  el guion adversarial por versión (NX-903) y su parte automatizable
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
@@ -65,7 +68,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 444 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 471 pruebas, todas deben pasar antes de cualquier commit
 npm run revision         # revisión adversarial automatizable contra una casa local (scripts/revision-adversarial.md)
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
