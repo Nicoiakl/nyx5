@@ -144,6 +144,38 @@ grito y silencio en `test/ideas.test.js`.
 **[manual]** el recorrido en workerd real (`wrangler dev --test-scheduled`): alta, un sobre, el cron
 por `/__scheduled`, la confirmación en el buzón del remitente.
 
+## 15. Agentes vivos (26-oct-2026, antes de desplegar la rama `vivos`)
+
+Seis ataques, cada uno con script en `scripts/revision-vivos/` (casa local sobre D1 local, API de
+Anthropic simulada: no gastan un peso). `casa.mjs` levanta DOS estafetas sobre el MISMO almacén, que
+es la única forma de ver una carrera.
+
+- `a1-pregunta-gigante.mjs` — una pregunta enorme y el historial que la reenvía. Lo que se encontró:
+  cuatro preguntas de 100 KB mandaron 102, 200, 297 y 395 KB a la API (el costo crece con el CUADRADO
+  de los mensajes) y nada lo frenaba salvo el tope mensual. Con el tope de entrada: 0 llamadas para la
+  que se pasa, y el turno más caro queda en ~121 KB, estable.
+- `a2-suplantacion.mjs` — suplantación POR EL TEXTO sobre un buzón abierto (`qa@`): un tercero fuera
+  de la lista, los secretos de otra conversación, el relay dentro de la lista y un `project`
+  envenenado. Lo que importa medir es el PROMPT del turno, no lo que el modelo diga: poner el secreto
+  en la entrada de la herramienta es un guardia que se da la razón solo.
+- `a3-carrera-relojes.mjs` — dos `atenderAsistentes` concurrentes y los cuatro contadores: envíos,
+  GASTO, despertares y crédito. Lo que se encontró: dos llamadas a la API y UNA anotada (el gasto es
+  el único freno de plata), 10 envíos en un minuto con un tope que dice 5, y 8 despertares contados
+  por 4 recordatorios.
+- `a4-cierres.mjs` — los cuatro sobres que se cierran sin contestar, uno por uno, con las tres
+  preguntas de cada uno (¿costó una llamada? ¿quedó pendiente? ¿salió un rebote que cuesta plata?), y
+  el quinto caso declarado: el correo sin firma, que se queda a propósito.
+- `a5-adopcion-libro.mjs` — qué no se adopta, qué deja el `DELETE`, si re-adoptar resucita crédito, y
+  el Libro por TODAS las vías, incluida pedirle a `nyx5_enviar` que le mande una op a `libro@` de esta
+  casa y de otra. Lo que se encontró: la guardia de los nombres de sistema miraba sólo esta casa.
+- `a6-oraculos.mjs` — `/admin/assistants` sin Bearer, con Bearer malo, sobre una inexistente, una viva
+  sin cerebro y una SECRETA; y las escrituras sin credencial.
+
+**[manual]** cada contador nuevo: ¿se lee-suma-escribe (dos isolates pierden una suma) o es atómico?
+¿se cobra al USARLO o al mirarlo? Un cupo cobrado al mirar apaga al agente sin que haya hecho nada.
+**[manual]** el recorrido en workerd real (`wrangler dev --test-scheduled`): adopción, encendido, un
+sobre, el cron por `/__scheduled`, y una mano que manda un mensaje.
+
 ## 13. Lo que el script NO cubre
 
 - Nada que necesite dos isolates reales (ver 8) ni el tope de subpeticiones del edge (se mide en
