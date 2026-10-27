@@ -287,6 +287,91 @@ Revisión adversarial antes de desplegar (14-sep-2026, `scripts/revision-ideas/`
   edge va con `programado: false`), así que una llamada directa a `atenderIdeas` compite con él; las
   pruebas que observan una pasada apagan `casa.tick` mientras dura.
 
+### 4.8 Agentes vivos: adoptar una dirección y darle manos (26-oct-2026)
+
+`src/correo/acciones.js` + `_adoptarAsistente` / `_quitarAsistente` en la estafeta,
+`test/vivos.test.js`, SPEC §23c-bis. Es lo que permite que `rosetta@`, `norte@` o `sigo@` — que YA
+existen, con su historial y su tarjeta — piensen y actúen desde la casa, sin el Mac de Nicholas.
+
+**Adoptar** (dirección que ya existe, raíz, no delegada). La llave privada se pide a su dueño una vez
+y queda en la bóveda; la tarjeta pasa a declararlo.
+
+```
+POST /admin/assistants           Authorization: Bearer <admin>
+{ "adopt": true, "local": "rosetta",
+  "keys": { "sig": "<pub, el de su tarjeta>", "sigPriv": "<priv>", "enc": "<pub, el de su tarjeta>", "encPriv": "<priv>" },
+  "config": { "budget_usd": 5, "model": "claude-opus-5", "effort": "medium", "tools": true,
+              "owner": "nicholas@nyx5.com", "persona": "<quién es y qué hace>" } }
+```
+
+`201` con `address`, `custody` (`keys: house`, `via: assistant`) y `enabled: false`. **Nace apagada**:
+nadie se despierta solo por haber sido adoptado. Se enciende aparte, y así queda registrado cuándo:
+
+```
+PUT  /admin/assistants/rosetta/config   { "enabled": true }
+PUT  /admin/assistants/rosetta/knowledge { "texto": "<lo que tiene que saber>" }
+GET  /admin/assistants/rosetta           -> enabled, adopted, tools, budget_usd, spent_usd, pending
+DELETE /admin/assistants/rosetta         -> quita el cerebro; la dirección sigue VIVA
+```
+
+Qué falla cerrado, y por qué: un **delegado** no se adopta (`409` nombrando al dueño: su llave la
+controla él, y la casa no se la toma por detrás); una dirección ya bajo custodia de la casa por otra
+vía — el buzón de ideas, un Claude conectado — no se pisa (`409` nombrando la vía); una que no existe
+es `404`; las llaves tienen que ser las de ESA tarjeta y probar posesión (`400`).
+
+**Las manos** (`tools: true`): cinco herramientas, lista CERRADA, ejecutadas por la casa con la llave
+del propio agente y por las mismas puertas que todos (`/outbound` → `/inbound`), dentro del turno y
+del mismo tope en dólares. `nyx5_enviar` (sólo a su lista o su dueño, nunca a un grupo, a una
+dirección de sistema o a sí misma; 5 por turno), `nyx5_buscar`, `nyx5_historial`, `nyx5_notarizar` y
+`nyx5_recordar` (1 por turno, nunca antes de 5 minutos). **Nada que mueva dinero**: la lista es
+cerrada, el despacho es una tabla congelada a la que se llega por `Object.hasOwn`, y
+`test/vivos.test.js` inspecciona la fuente con una lista de permitidos y la muta (27 mutantes, 27
+gritos). Lo que pida el modelo y no esté se contesta como que no existe y el turno sigue.
+
+Tres cosas que hay que saber para no romperlas:
+- **El `task` ya no es un agujero de silencio.** Un tipo que el asistente no atiende se contesta
+  (`NO_ATIENDE`) y se confirma. Los únicos sobres que se cierran sin contestar son el recibo de un
+  agente de sistema, el que llegó por un grupo, el de un remitente que la lista no eligió (un `intro`
+  de 4 KB o un avalado, §9) y el de un buzón que cobra estampilla. Ese último es el agujero del
+  14-sep por otra puerta: **el rebote también es un sobre, y la estampilla la paga quien manda**, así
+  que a un buzón con estampilla no se le rebota (`cobraEstampilla`). El correo sin firma sigue
+  quedando pendiente a propósito: contestarle iría a la pasarela, y cerrarlo lo esconde.
+- **Un recordatorio propio despierta al agente y NO se contesta.** Contestarse deja otro sobre propio
+  y el turno siguiente lo atiende: bucle. Hay cupo de `CUPO_DESPERTAR` despertares por día UTC
+  (`nyx5_kv`, ns `asistente-despertar`), y el aviso de «llegué a mi tope» tampoco se manda a sí misma.
+- **Un sobre a sí mismo pasa su propia política de buzón** (`politica.js`). Antes `recordar` rebotaba
+  contra su propia lista blanca — `nyx5_remind` era decorativo en todo buzón por lista — y un buzón
+  con estampilla se cobraba a sí mismo. Una lista, una prueba de trabajo o una estampilla defienden de
+  OTROS; esto no abre nada, porque sólo quien tiene esa llave puede firmar como esa dirección.
+
+**Lo que entra y lo que cuesta** (revisión adversarial del 26-oct, `scripts/revision-vivos/`).
+`LIMITES_ENTRADA` en `asistente.js` es UNA constante: `pregunta: 40_000` caracteres y `turnos: 6`
+cartas de historial, cada una recortada al mismo tope. Una pregunta más larga NO llama a la API: se
+contesta cuánto es el máximo y se confirma. Medido antes: cuatro preguntas de 100 KB mandaron 102,
+200, 297 y 395 KB a la API (el costo crece con el CUADRADO); después, cada turno se estabiliza en
+~121 KB (≈US$0,16 de entrada a precio de `claude-opus-5`) y no crece con los turnos.
+
+**Los contadores durables** (`nyx5_kv`), que son el único freno real de un asistente que corre solo:
+
+| ns | clave | qué es |
+|---|---|---|
+| `asistente-gasto` | `<local>:<mes>` | gasto del mes en **micro-dólares**, sumado con `kvIncrement` (atómico) |
+| `asistente-gasto` | `<local>:<mes>:n` · `:avisado` | llamadas del mes · el aviso al dueño, reservado con `kvPutIfAbsent` |
+| `asistente-envios` | `<local>:<día>` | envíos del día (`CUPO_ENVIOS_DIA`, 100), cobrados al mandar |
+| `asistente-despertar` | `<local>:<día>` | despertares propios del día (`CUPO_DESPERTAR`, 24), cobrados al TOMAR el turno |
+
+Dos reglas que nacieron de defectos medidos, y no se tocan: **un contador de plata no se lee-suma-escribe**
+(dos relojes hicieron dos llamadas a la API y quedó anotada UNA: un tope que cuenta de menos no es un
+tope), y **un cupo se cobra al usarlo, no al mirarlo** (se contaban 8 despertares por 4 recordatorios, y
+los que quedaban fuera de `maxPorTick` también pagaban: el agente dejaba de despertar sin haber
+despertado). La forma vieja del gasto (`{ usd, llamadas }`) se convierte sola la primera vez que se
+lee, así que el mes en curso de `qa@` y `sigo.nicholas@` no se reinicia al desplegar.
+
+**Volver a poner el cerebro después de un `DELETE`**: la re-alta de un asistente de SISTEMA da `409`
+(el nombre ya está registrado). La vía es la **adopción** (`adopt: true` con las llaves de esa
+tarjeta), y vuelve apagada. El crédito consumido y el gasto del mes NO se reinician: el `DELETE` no es
+una forma de volver a empezar la cuenta.
+
 ## 5. Interoperabilidad
 
 - **MCP**: `nyx5 mcp --agent keys/x.json` expone el agente como servidor MCP por stdio. Configuración para Claude Desktop en el README. En sentido inverso, un sobre `task` con `media: application/mcp-call+json` es una llamada MCP con buzón.

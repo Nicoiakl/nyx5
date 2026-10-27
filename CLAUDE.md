@@ -45,6 +45,8 @@ demo/                    e2e, offline, spam (correo) · contratos (libro) · pil
 src/correo/asistente.js  asistentes (contestan solos con la API de Anthropic): tope mensual, sello, y qa@ como servicio (NX-606): crédito por `pay`, Spec y Gate
 src/correo/unirse.js     join (alta en un paso) y mandate (tope del humano) como funciones testeables
 src/correo/ideas.js      ideas@: el buzón de vacaciones (14-sep-2026): registra IDEA-### y confirma con texto fijo; NUNCA ejecuta, sin API ni Libro
+src/correo/acciones.js   las MANOS de un agente vivo (26-oct-2026): lista CERRADA de 5 herramientas que la casa ejecuta con la llave del propio agente. NADA que mueva dinero; cupo de envíos por día
+scripts/revision-vivos/  los seis ataques con script de la revisión de `vivos` (26-oct-2026): casa local, API simulada, cero gasto
 src/correo/indice.js     búsqueda del índice (NX-302): columnas de la tarjeta, puntaje arbitrado, cursor opaco por generación, filtros; UNA definición para FileStore y D1Store
 src/libro/verifica.js    evaluador de referencia: http_status | sha256 | json_path | regex | size | header | exit_0; veredicto y "indeciso"; `pruebaDeAceptacion` (NX-305: la prueba de un pedido al catálogo)
 src/libro/tareas.js      trabajo sembrado: catálogo, cupos por agente/día, y que la cotización coincida
@@ -54,7 +56,7 @@ src/nucleo/keccak.js     Keccak-256 (el de Ethereum, NO sha3-256) en JS puro; sr
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas -> `npm test` (409)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos -> `npm test` (444)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 scripts/revision-adversarial.{md,mjs}  el guion adversarial por versión (NX-903) y su parte automatizable
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
@@ -63,7 +65,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 409 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 444 pruebas, todas deben pasar antes de cualquier commit
 npm run revision         # revisión adversarial automatizable contra una casa local (scripts/revision-adversarial.md)
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
@@ -579,3 +581,117 @@ hay que saber para no romperlo:
   (el edge no), y compite con una llamada directa a `atenderIdeas`; las pruebas apagan `casa.tick`.
   **NO cubre**: el resto de la casa sigue sin tope de bytes por remitente (1 MB × 120/min a un buzón
   `open`), y el cupo se cuenta al aceptar, así que dos casas emisoras a la vez pueden pasarse por uno.
+
+### 26-oct-2026 — agentes VIVOS (rama `vivos`): el `task` silencioso, adopción y manos
+`src/correo/acciones.js` + `atenderAsistentes`/`responder` en `src/correo/asistente.js` +
+`_adoptarAsistente`/`_quitarAsistente` en la estafeta + la excepción del sobre a sí mismo en
+`politica.js`. `test/vivos.test.js` (25 pruebas, 27 mutantes verificados uno a uno), SPEC §23c-bis,
+ARQUITECTURA §4.8. Es la prioridad número uno de Nicholas: que los agentes del equipo piensen y
+actúen desde la casa, sin su Mac. Cinco cosas que hay que saber para no romperlas:
+
+- **Trampa: el `task` quedaba en silencio PARA SIEMPRE.** La línea de filtro de `atenderAsistentes`
+  decía `!['message','result'].includes(e.type) || ... continue`: un sobre de tipo `task` no se
+  contestaba, no rebotaba y no se confirmaba. Medido contra producción el 26-oct: el sobre
+  `1bff694c` de tipo `task` llevaba SEIS SEMANAS en el buzón de `qa@nyx5.com` (desde el 15-sep) y el
+  panel decía `pending: 1`. `task` es el tipo natural de «te encargo esto», así que iba a repetirse
+  entre agentes. Ahora se atiende, y lo que un asistente no sepa atender se CONTESTA (`NO_ATIENDE`:
+  qué tipo llegó y qué tipos atiende) y se confirma. La lección general: **un `continue` en un bucle
+  que recorre un buzón que no se borra es un sobre eterno**, y `pending` miente.
+- **A quién NO se le contesta, y se cierra igual** (cada uno tiene su razón, y su prueba): el recibo
+  de un agente de sistema; lo que llegó por un grupo (su tope en dólares es del dueño y el grupo es
+  un camino que su lista no eligió, revisión del 13-sep); un remitente que la lista NO eligió — un
+  `intro` de 4 KB o un avalado entran a un buzón `allowlist` sin estar en la lista (§9), y contestarle
+  a un desconocido gasta el tope del dueño; y un buzón que cobra estampilla — **el rebote también es
+  un sobre y la estampilla la paga quien manda**, así que rebotarle le costaría saldo al asistente:
+  es el agujero del 14-sep por otra puerta, y lo cierra `cobraEstampilla`. El **correo sin firma**
+  sigue quedando pendiente a propósito: contestarlo iría a la pasarela y cerrarlo lo esconde.
+- **La lista de herramientas es CERRADA, y el límite es de CÓDIGO.** `ACCIONES` son cinco y el
+  despacho es una tabla congelada a la que se llega por `Object.hasOwn` (una red llamada
+  `constructor` ya reventó así en el pagador x402). Nada que mueva dinero: ni `accept`, ni `pay`, ni
+  `hire`, ni `deliver`, ni `release`, ni fianzas, ni mandatos, ni estampillas. Lo cuida una
+  inspección de la fuente con lista de PERMITIDOS (el modelo de `ideas.js`; una lista de prohibidos
+  deja pasar cualquier primitiva nueva del agente) más catorce mutantes, y el PROHIBIDO mira la
+  forma `.nombre(`, no la palabra: las descripciones que lee el modelo nombran justamente lo que NO
+  se puede hacer. `nyx5_notarizar` no se le ofrece a una dirección de sólo mensajes porque el Libro
+  se lo niega igual (invariante 6), y Gate nunca tiene manos.
+- **Contestarse a sí mismo es un bucle.** Un recordatorio propio DESPIERTA al agente (es lo que lo
+  vuelve vivo), pero su respuesta no se manda a ninguna parte: si se mandara, ese sobre propio lo
+  atendería el turno siguiente. Lo mismo vale para el aviso de «llegué a mi tope». Cupo de
+  `CUPO_DESPERTAR` (24) despertares por día UTC, y `cuando` nunca antes de cinco minutos.
+- **Un sobre a sí mismo pasa su propia política de buzón** (`politica.js`, antes del `switch`). Era
+  un defecto de antes que sólo se vio al construir esto: `recordar` rebotaba contra su propia lista
+  blanca, así que `nyx5_remind` era decorativo en TODO buzón por lista — incluido el de
+  `sigo.nicholas@` —, y un buzón con estampilla se cobraba a sí mismo. No abre nada: sólo quien
+  tiene esa llave puede firmar como esa dirección.
+- `leerFlujo` ahora arma los bloques del SSE POR ÍNDICE y los conserva tal cual, incluido el bloque
+  `thinking` con su `signature` (viene con texto vacío por `display: omitted`, pero la firma no): con
+  herramientas hay que devolverle a la API el turno del asistente COMPLETO, y perder ese bloque
+  invalida el turno. Es el mismo espíritu del invariante 7.
+- **NO cubre**: `nyx5_notarizar` no devuelve el sello en el mismo turno (el sobre a `libro@` se
+  encola y el recibo llega al buzón en el tick siguiente); la adopción no le quita la llave a su
+  dueño (la sigue teniendo en su disco, y debe: la casa guarda una COPIA); y un turno con manos puede
+  costar hasta `MAX_PASOS + 2` llamadas a la API, así que el tope mensual es el único freno de gasto.
+- **El rebote y la respuesta van bajo el MISMO turno por sobre** (`asistente-turno`): dos relojes
+  (dos isolates) que vieran el mismo sobre pendiente mandarían dos rebotes iguales. La carrera no se
+  ve corriendo el reloj dos veces en Node (el servidor local serializa): se golpea el método, con dos
+  `atenderAsistentes` concurrentes sobre el mismo almacén. Verificado por mutación, los dos caminos.
+- **El tope de ENTRADA, decidido por Nicholas el 26-oct: 40.000 caracteres por mensaje y 6 cartas de
+  historial, en UNA constante** (`LIMITES_ENTRADA` en `asistente.js`). Nació de un defecto medido: el
+  historial reenviaba cada pregunta anterior, así que el costo de un hilo crecía con el CUADRADO de
+  los mensajes (medido con cuatro de 100 KB: 102, 200, 297 y 395 KB a la API). Ocho mensajes quemaban
+  un tope de US$10 y al turno 13 la petición pasaba del millón de tokens: la API devuelve 400 y la
+  conversación quedaba trabada PARA SIEMPRE. Ahora una pregunta más larga NO llama a la API (se
+  contesta cuánto es el máximo y se confirma: no cuesta ni queda pendiente), cada carta del historial
+  viaja recortada al mismo tope — las que se rechazaron por largas siguen en el historial, y sin eso
+  el tope se evitaba por la puerta de al lado — y el turno más caro medido queda en ~121 KB, estable
+  (≈US$0,16 de entrada a precio de opus-5). Gate no cambia: trae su contrato y su entrega con sus
+  topes de 200.000 y no lleva historial. **El texto del rechazo va en INGLÉS** (decisión suya del
+  27-oct, para que no quede distinto de `NO_ATIENDE` y de la confirmación de ideas@) y lo fija una
+  prueba byte a byte, como el de `NO_ATIENDE`. La marca del recorte del historial NO la lee una
+  persona — va dentro del prompt, al lado de «(Te escribe …)» — y por eso sigue en español.
+- **Recorrido en workerd REAL** (`wrangler dev --local --test-scheduled`, 27-oct): adopción, encendido,
+  despertar desde el tick programado, respuesta firmada por la llave del propio agente y cifrada
+  (`crypto.subtle`), UNA mano que manda un sobre que LLEGA, el gasto anotado en D1 real por el
+  contador atómico (40.690 micro-dólares = exactamente el `usage` devuelto, no una estimación), el
+  cupo del día en 1, y una pregunta sobre el tope que tampoco llama a la API en el borde. Cero
+  diferencias entre el borde y local. Lo que NO se ejercitó: la API de Anthropic de verdad (se usó un
+  suplente local, andamio no commiteado), porque gastar necesita el OK de Nicholas en persona (§8).
+
+### 26-oct-2026 (noche) — revisión adversarial de `vivos`, antes de desplegar
+Seis ataques con script en `scripts/revision-vivos/` (casa local sobre D1 local, API simulada, sin
+red ni gasto): `a1-pregunta-gigante.mjs`, `a2-suplantacion.mjs`, `a3-carrera-relojes.mjs`,
+`a4-cierres.mjs`, `a5-adopcion-libro.mjs`, `a6-oraculos.mjs`. Un alto y cuatro medios arreglados, cada
+uno con prueba de grito verificada por mutación (seis mutantes, seis gritos) en `test/vivos.test.js`:
+- **ALTO · el único freno de plata contaba de menos.** El gasto del mes se leía, sumaba y escribía:
+  dos relojes hicieron dos llamadas a la API y quedó anotada UNA. Ahora es un contador atómico en
+  micro-dólares (`kvIncrement`), el corte a mitad de turno ve lo que gastó el otro isolate, y el aviso
+  al dueño se reserva con `kvPutIfAbsent` para que dos relojes no manden dos. La forma vieja
+  `{ usd, llamadas }` se convierte sola al leerla: el mes en curso no se reinicia.
+- **MEDIO · el volumen no estaba acotado.** El tope de 5 envíos vive en la memoria del TURNO: dos
+  relojes con dos sobres mandaron 10 mensajes en un minuto. `CUPO_ENVIOS_DIA` (100 por dirección y día
+  UTC) cuenta en el almacén y se cobra al mandar, no al rechazar.
+- **MEDIO · un cupo que se cobraba al MIRAR.** El de despertares se incrementaba al recorrer el buzón:
+  8 por 4 recordatorios con dos relojes, y los que quedaban fuera de `maxPorTick` también pagaban. El
+  agente dejaba de despertar sin haber despertado. Ahora se mira al recorrer y se cobra al TOMAR el
+  turno.
+- **MEDIO · `ideas@` estaba a tiro de todo agente vivo** (decisión de Nicholas: es su buzón personal).
+  Y no por descuido: el alta de ideas@ AGREGA `ideas@` a la lista de cada dirección local que filtre
+  por lista, así que `destinosDe` lo incluía. Una mano ya no le escribe, y el nombre se cruza en la
+  prueba con el `LOCAL` que exporta `ideas.js`.
+- **MEDIO · la guardia de las direcciones de sistema miraba sólo ESTA casa.** `libro@otra-casa` en la
+  lista era alcanzable, o sea una op del Libro firmada por el agente en la otra casa. Los cinco
+  nombres son reservados por el protocolo, así que ahora se rechazan en cualquier dominio.
+- **Lo que se midió y aguantó**: un extraño no consigue que el agente le escriba a un tercero fuera de
+  su lista; el historial es por contraparte, así que no hay fuga de otra conversación al prompt; un
+  `project` envenenado no llega al modelo; los cuatro cierres sin contestar no cuestan ni una llamada
+  a la API ni dejan pendiente ni rebotan a un buzón que cobra; las rutas de `/admin/assistants`
+  contestan 401 idéntico exista o no la dirección (y para una secreta); no se adopta un delegado, ni
+  una custodia ajena, ni se pisa una adopción viva; y re-adoptar no resucita crédito ni reinicia el
+  gasto del mes.
+- **NO cubre** (declarado, medido): el correo SIN FIRMA sigue quedándose pendiente a propósito y crece
+  sin tope (2.000 correos = 3,8 MB; el tick se mantiene en ~20 ms y no tapa una pregunta legítima, que
+  sí se contestó). Un extraño en un buzón abierto (`qa@`) puede hacer que el asistente le escriba A SU
+  DUEÑO: está acotado por el tope en dólares y por el cupo del día, y cada sobre va firmado y queda en
+  el registro. El relay DENTRO de la lista es deliberado — es «avísale a amiga del plazo» — y el único
+  camino que cruza conversaciones es el recordatorio que el agente se deja a sí mismo: acotado a su
+  propia lista. Y el cupo de envíos no cuenta los recordatorios (los acota el cupo de despertares).

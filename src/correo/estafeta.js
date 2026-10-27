@@ -41,7 +41,7 @@ import { abrirBoveda } from '../nucleo/boveda.js';
 import { ICONOS } from '../plataformas/iconos.js';
 import { Agent } from './agente.js';
 import { eventoDeCobro } from './cobro.js';
-import { atenderAsistentes, PRECIOS, MEDIA_GATE } from './asistente.js';
+import { atenderAsistentes, gastoDe, PRECIOS, MEDIA_GATE } from './asistente.js';
 import { atenderIdeas, paginaDeIdeas, puertaIdeas, LOCAL as IDEAS_LOCAL, VIA as IDEAS_VIA } from './ideas.js';
 import { validarFiltros, puntajeDe, precioMinimo, FILTROS } from './indice.js';
 
@@ -844,7 +844,11 @@ export class Estafeta {
     if (typeof gate !== 'boolean') return { error: 'gate must be true or false' };
     const persona_gate = c.persona_gate ?? base.persona_gate ?? '';
     if (typeof persona_gate !== 'string' || persona_gate.length > 20_000) return { error: 'persona_gate must be a string of at most 20000 characters' };
-    return { model, effort, max_tokens, budget_usd, seal, price_tokens, gate_price_tokens, gate_abstain_tokens, gate, persona_gate, free_for };
+    // `tools` (26-oct-2026): las manos del agente vivo (src/correo/acciones.js), APAGADAS por
+    // defecto. Un cerebro no recibe manos por existir: hay que decirlo, y la lista es cerrada.
+    const tools = c.tools ?? base.tools ?? false;
+    if (typeof tools !== 'boolean') return { error: 'tools must be true or false' };
+    return { model, effort, max_tokens, budget_usd, seal, price_tokens, gate_price_tokens, gate_abstain_tokens, gate, persona_gate, free_for, tools };
   }
   // Alta de un asistente de SISTEMA (NX-606): `<local>@<casa>` con llaves propias guardadas en la
   // bóveda, tarjeta certificada por la casa, buzón abierto y cuenta en el Libro (recibe `pay`).
@@ -880,6 +884,70 @@ export class Estafeta {
     if (!i.includes(l)) await this.store.kvPut('asistente', '_indice', [...i, l]);
     await this._evento('assistant_created', card.address, { budget_usd: cfg.budget_usd, system: true, price_tokens: cfg.price_tokens });
     return { status: 201, body: { address: card.address, custody: card.custody, system: true, config: { ...cfg, persona: `${cfg.persona.length} chars`, persona_gate: `${cfg.persona_gate.length} chars` } } };
+  }
+  // ADOPCIÓN (26-oct-2026): un cerebro para una dirección que YA EXISTE. Nació de la prioridad de
+  // Nicholas — «que los agentes y sus funciones persistan y funcionen sin mi máquina» —: rosetta@,
+  // norte@ o sigo@ ya viven, tienen historial y tarjeta; lo que les falta es poder pensar desde la
+  // casa. No se crea nada: se toma la dirección viva, su tarjeta pasa a declarar que desde ahora la
+  // casa guarda su llave (la excepción declarada al invariante 8, visible para quien le escriba), y
+  // queda APAGADA. Nadie se despierta solo por haber sido adoptado: hay que encenderlo a mano.
+  async _adoptarAsistente(b) {
+    const l = String(b.local || '').toLowerCase();
+    if (!Estafeta.validLocal(l)) return { status: 400, body: { reason: 'local must be a valid address name' } };
+    if (this.isSystem(l)) return { status: 409, body: { reason: `${l}@ is a protocol address, not an assistant` } };
+    const rec = await this.store.getAgent(l);
+    if (!rec || rec.revoked) return { status: 404, body: { reason: `${l}@${this.domain} does not exist: adoption is for an address that is already alive` } };
+    if (l.startsWith('g.') || rec.group) return { status: 409, body: { reason: `${l}@${this.domain} is a group, not an agent` } };
+    // Un DELEGADO no se adopta: su llave la controla su dueño y la casa no se la toma por detrás.
+    // El modo delegado existe y pide la llave al dueño (POST sin `adopt`); aquí se nombra a quién pedírsela.
+    if (rec.delegation) return { status: 409, body: { reason: `${l}@${this.domain} is a delegated address of ${rec.delegation.by}: its owner registers it as a delegated assistant, or adopt the root address instead` } };
+    // Ya bajo custodia de la casa por OTRA vía (el buzón de ideas, un Claude conectado): no se pisa.
+    if (rec.custody?.keys === 'house' && rec.custody.via !== 'assistant') return { status: 409, body: { reason: `${l}@${this.domain} is already under house custody via ${rec.custody.via}: that brain is not replaced from here` } };
+    if (await this.store.kvGet('asistente', l)) return { status: 409, body: { reason: `${l}@${this.domain} already has an assistant brain: change it with PUT /admin/assistants/${l}/config, or remove it with DELETE /admin/assistants/${l}` } };
+    const k = b.keys || {};
+    if (k.sig !== rec.sig || k.enc !== rec.enc || !k.sigPriv || !k.encPriv) return { status: 400, body: { reason: 'keys do not match the card of that address' } };
+    // Prueba de posesión (invariante 9): la privada firma y la pública de la tarjeta verifica.
+    let posee = false; try { posee = verifyObject(signObject({ nyx5: '1', prueba: l }, k), k.sig); } catch { posee = false; }
+    if (!posee) return { status: 400, body: { reason: 'sigPriv does not match sig' } };
+    const c = b.config || {};
+    const v = this._configAsistente(c);
+    if (v.error) return { status: 400, body: { reason: v.error } };
+    let owner = null;
+    if (c.owner != null) {
+      try { const p = parseAddress(String(c.owner)); owner = `${p.local}@${p.domain}`; } catch { return { status: 400, body: { reason: 'owner must be an address' } }; }
+    }
+    const since = iso();
+    const { certification: _c, webhook, notify_email, ...cuerpo } = rec;
+    const card = signObject({ ...cuerpo, custody: { keys: 'house', via: 'assistant', since } }, this.keys, 'certification');
+    await this.store.putAgent(l, { ...card, webhook, notify_email });
+    this.resolver.invalidate(`agent:${l}@${this.domain}`);
+    await this.store.kvPut('boveda', l, { sellado: this.boveda.sellar({ sig: k.sig, sigPriv: k.sigPriv, enc: k.enc, encPriv: k.encPriv }, l), root: null, since });
+    const cfg = { local: l, owner, adopted: true, ...v, persona: String(c.persona || ''), enabled: false, created: since };
+    await this.store.kvPut('asistente', l, cfg);
+    const i = (await this.store.kvGet('asistente', '_indice')) || [];
+    if (!i.includes(l)) await this.store.kvPut('asistente', '_indice', [...i, l]);
+    await this._evento('assistant_adopted', card.address, { budget_usd: cfg.budget_usd, tools: cfg.tools === true });
+    return { status: 201, body: { address: card.address, custody: card.custody, adopted: true, enabled: false, config: { ...cfg, persona: `${cfg.persona.length} chars`, persona_gate: `${cfg.persona_gate.length} chars` } } };
+  }
+  // Quitar el cerebro: la dirección sigue VIVA y queda sin cerebro. La llave sale de la bóveda, así
+  // que la casa deja de poder firmar y descifrar en su nombre, y la tarjeta lo dice.
+  async _quitarAsistente(local, cfg) {
+    const rec = await this.store.getAgent(local);
+    let custody = null;
+    if (rec && rec.custody?.via === 'assistant') {
+      const { certification: _c, webhook, notify_email, custody: _cu, ...cuerpo } = rec;
+      custody = { keys: 'self', via: null, ended: iso(), was: 'assistant' };
+      const card = signObject({ ...cuerpo, custody }, this.keys, 'certification');
+      await this.store.putAgent(local, { ...card, webhook, notify_email });
+      this.resolver.invalidate(`agent:${local}@${this.domain}`);
+    }
+    await this.store.kvDelete?.('boveda', local);
+    await this.store.kvDelete?.('asistente', local);
+    await this.store.kvDelete?.('asistente-conocimiento', local);
+    const i = (await this.store.kvGet('asistente', '_indice')) || [];
+    await this.store.kvPut('asistente', '_indice', i.filter((x) => x !== local));
+    await this._evento('assistant_removed', `${local}@${this.domain}`, { adopted: cfg?.adopted === true });
+    return { status: 200, body: { address: `${local}@${this.domain}`, removed: true, alive: !!(rec && !rec.revoked), custody } };
   }
   // Alta del buzón de vacaciones ideas@ (src/correo/ideas.js): dirección raíz de la casa con llaves
   // propias en la bóveda, tarjeta `custody.via = ideas`, buzón por lista (el dueño y quien él diga) y
@@ -941,6 +1009,7 @@ export class Estafeta {
     const indice = async () => (await this.store.kvGet('asistente', '_indice')) || [];
     if (rx.method === 'POST' && !local && !accion) {
       if (!this.boveda) return { status: 503, body: { reason: 'this house has no vault key' } };
+      if (b.adopt === true) return this._adoptarAsistente(b);
       if (b.system === true) return this._altaAsistenteSistema(b);
       const l = String(b.local || '').toLowerCase();
       const rec = Estafeta.validLocal(l) ? await this.store.getAgent(l) : null;
@@ -976,19 +1045,22 @@ export class Estafeta {
     if (rx.method === 'PUT' && accion === 'config') {
       const v = this._configAsistente(b, cfg);
       if (v.error) return { status: 400, body: { reason: v.error } };
-      const nueva = { ...cfg, ...v, ...(typeof b.persona === 'string' ? { persona: b.persona } : {}), updated: iso() };
+      if (b.enabled != null && typeof b.enabled !== 'boolean') return { status: 400, body: { reason: 'enabled must be true or false' } };
+      // `enabled` por aquí es lo que ENCIENDE un cerebro adoptado: nace apagado a propósito.
+      const nueva = { ...cfg, ...v, ...(typeof b.persona === 'string' ? { persona: b.persona } : {}), ...(typeof b.enabled === 'boolean' ? { enabled: b.enabled } : {}), updated: iso() };
       await this.store.kvPut('asistente', local, nueva);
-      return { status: 200, body: { model: nueva.model, effort: nueva.effort, max_tokens: nueva.max_tokens, budget_usd: nueva.budget_usd, seal: nueva.seal === true, price_tokens: nueva.price_tokens, gate: nueva.gate === true, gate_price_tokens: nueva.gate_price_tokens, gate_abstain_tokens: nueva.gate_abstain_tokens, free_for: nueva.free_for || [] } };
+      return { status: 200, body: { enabled: nueva.enabled === true, model: nueva.model, effort: nueva.effort, max_tokens: nueva.max_tokens, budget_usd: nueva.budget_usd, seal: nueva.seal === true, tools: nueva.tools === true, price_tokens: nueva.price_tokens, gate: nueva.gate === true, gate_price_tokens: nueva.gate_price_tokens, gate_abstain_tokens: nueva.gate_abstain_tokens, free_for: nueva.free_for || [] } };
     }
+    if (rx.method === 'DELETE' && !accion) return this._quitarAsistente(local, cfg);
     if (rx.method === 'POST' && (accion === 'pause' || accion === 'resume')) {
       await this.store.kvPut('asistente', local, { ...cfg, enabled: accion === 'resume' });
       return { status: 200, body: { enabled: accion === 'resume' } };
     }
     if (rx.method === 'GET' && !accion) {
       const mes = new Date().toISOString().slice(0, 7);
-      const gasto = (await this.store.kvGet('asistente-gasto', `${local}:${mes}`)) || { usd: 0, llamadas: 0 };
+      const gasto = await gastoDe(this.store, local, mes);
       const con = await this.store.kvGet('asistente-conocimiento', local);
-      return { status: 200, body: { address: `${local}@${this.domain}`, enabled: cfg.enabled, system: cfg.system === true, owner: cfg.owner || null, free_for: cfg.free_for || [], model: cfg.model, effort: cfg.effort, budget_usd: cfg.budget_usd, price_tokens: cfg.price_tokens ?? 0, gate: cfg.gate === true, gate_price_tokens: cfg.gate_price_tokens ?? 0, gate_abstain_tokens: cfg.gate_abstain_tokens ?? 0, month: mes, spent_usd: Math.round(gasto.usd * 10000) / 10000, calls: gasto.llamadas, knowledge_bytes: con ? Buffer.byteLength(con.texto) : 0, knowledge_updated: con?.updated || null, api_key: !!this.asistente, pending: (await this.store.listMail(local)).length } };
+      return { status: 200, body: { address: `${local}@${this.domain}`, enabled: cfg.enabled, system: cfg.system === true, adopted: cfg.adopted === true, tools: cfg.tools === true, owner: cfg.owner || null, free_for: cfg.free_for || [], model: cfg.model, effort: cfg.effort, budget_usd: cfg.budget_usd, price_tokens: cfg.price_tokens ?? 0, gate: cfg.gate === true, gate_price_tokens: cfg.gate_price_tokens ?? 0, gate_abstain_tokens: cfg.gate_abstain_tokens ?? 0, month: mes, spent_usd: Math.round(gasto.usd * 10000) / 10000, calls: gasto.llamadas, knowledge_bytes: con ? Buffer.byteLength(con.texto) : 0, knowledge_updated: con?.updated || null, api_key: !!this.asistente, pending: (await this.store.listMail(local)).length } };
     }
     return { status: 405, body: { reason: 'method not allowed here' } };
   }

@@ -261,6 +261,13 @@ export function applyInboxPolicy(env, agentRecord, senderDomain) {
   const esLibro = String(agentRecord.address || '').startsWith('libro@');
   if (!esLibro && senderDomain?.policy?.outbound === 'sealed' && !env.encrypted) return permanent('el dominio emisor exige cifrado y el sobre viene en claro');
 
+  // Un sobre de una dirección a SÍ MISMA pasa su propia política (26-oct-2026). Es lo que sostiene
+  // `recordar`, la memoria entre sesiones: un sobre diferido al propio buzón. Antes rebotaba contra
+  // su propia lista blanca — `nyx5_remind` quedaba decorativo en todo buzón por lista — y en un buzón
+  // con estampilla se cobraba a sí mismo. Una lista, una prueba de trabajo o una estampilla defienden
+  // de OTROS; no abren nada, porque sólo quien tiene esa llave puede firmar como esa dirección.
+  if (env.from === agentRecord.address) return { ok: true };
+
   switch (inbox.policy) {
     case 'open':
       break;
