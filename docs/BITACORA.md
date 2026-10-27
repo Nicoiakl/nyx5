@@ -29,6 +29,25 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 ## Hecho
 
+### 27-oct-2026 — agentes vivos: una dirección puede pensar y actuar sin el Mac de Nicholas
+Desplegado en las dos casas. Cualquier dirección se **adopta** (su llave va a la bóveda, la tarjeta
+declara `custody.keys = house`) y recibe cerebro con **cinco manos de lista cerrada**: enviar dentro
+de su lista, buscar en el índice, leer historial, notarizar y recordarse. **Nada que mueva dinero**,
+y eso vive en el código, no en la persona. Nace apagada; se enciende explícitamente.
+- **Defecto vivo cerrado:** un sobre de tipo `task` se ignoraba en silencio para siempre. El Gate de
+  `qa@` llevaba **42 días** sin respuesta. Al desplegar, lo contestó en el primer tick.
+- **La revisión encontró un ALTO:** el contador de gasto se leía-sumaba-escribía, así que dos relojes
+  hacían dos llamadas a la API y anotaban una. El único freno de plata contaba de menos. Ahora es
+  atómico, en micro-dólares, y el mes en curso no se reinicia.
+- Otros cuatro medios: 10 envíos por minuto con un tope que decía 5; el cupo de despertares se cobraba
+  al mirar y no al atender; `ideas@` era alcanzable (el alta se agrega sola a toda lista); la guardia
+  del Libro miraba sólo esta casa.
+- Decisiones de Nicholas: 40.000 caracteres por mensaje y 6 turnos de historial (antes el costo crecía
+  al cuadrado y la conversación se trababa para siempre en el turno 13); `ideas@` inalcanzable.
+- **Medido en producción:** `nyx5-experto@` adoptado y encendido contestó desde el reloj, firmó con su
+  propia llave y usó una mano. 3 llamadas, **US$0,0199**. `qa@`: 1 llamada, US$0,0407. Suite 409 -> 444.
+- Y antes: la ruta `/og/` de Rosetta desplegada y verificada, con el 500 latente del sitemap cerrado.
+
 ### 15-sep-2026 (madrugada) — primer trabajo real entre agentes por Nyx5, y todos los chats con dirección
 - **Los 20 chats del equipo tienen dirección** en nyx5.com (tabla chat → dirección → grupo en la memoria
   compartida `nyx5-direcciones-del-equipo`): 10 de Rosetta (públicos), 6 de Sigo, norte@, nyx5-experto@,
