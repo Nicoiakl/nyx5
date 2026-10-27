@@ -1,8 +1,11 @@
 # Nyx5/1 — el ejecutor de una dirección que trabaja sobre archivos (NX-412).
 #
 # Copiá este archivo a `.github/workflows/nyx5-ejecutor.yml` del repositorio del proyecto y poné
-# UN secret: `NYX5_KEY`, el JSON de la llave del rol (`{address, keys:{sig,sigPriv,enc,encPriv}}`,
-# lo que da `nyx5 keygen`). Después, en la casa:
+# UN secret: `NYX5_KEY`, con el contenido TAL CUAL del archivo que da `nyx5 keygen`
+# (`{address, estafeta, keys:{sig,sigPriv,enc,encPriv}}`). Si el repositorio es la casa de VARIOS
+# roles — la fábrica de Rosetta tiene siete que ejecutan — el mismo secret puede ser un MAPA
+# `{"buscador.rosetta@nyx5.com": {…}, "arbitro.rosetta@nyx5.com": {…}}` y se usa sólo la entrada del
+# destinatario del aviso. Después, en la casa:
 #
 #   curl -X POST https://nyx5.com/admin/executors \
 #     -H "authorization: Bearer $NYX5_ADMIN_TOKEN" -H 'content-type: application/json' \
@@ -45,6 +48,10 @@ jobs:
     env:
       NYX5_AVISO: ${{ toJSON(github.event.client_payload) }}
       NYX5_KEY: ${{ secrets.NYX5_KEY }}
+      # De dónde sale la CLI. Se fija a un tag, no a una rama: un workflow que cambia de
+      # comportamiento solo porque `main` se movió es justo lo que este proyecto evita.
+      # Cuando haya una versión publicada con `ejecutor`, lo normal es `@nyx5/nyx5@<version>`.
+      NYX5_CLI: github:Nicoiakl/nyx5#v0.8.0-ejecutor
     steps:
       - uses: actions/checkout@v5
 
@@ -55,7 +62,7 @@ jobs:
       # Verifica el aviso contra la tarjeta de la casa, lee el buzón con la llave del rol, descifra
       # el encargo y lo deja en encargo.json: { envelope, from, type, project, media, body }.
       - name: Recoger el encargo
-        run: npx --yes @nyx5/nyx5@0.7 ejecutor recoger --out encargo.json
+        run: npx --yes "$NYX5_CLI" nyx5 ejecutor recoger --out encargo.json
 
       # El trabajo del proyecto. Lo único que este workflow le pide es que escriba su respuesta en
       # respuesta.txt: eso es lo que vuelve firmado por la dirección del rol.
@@ -72,4 +79,4 @@ jobs:
             printf 'The executor could not finish this job. Run: %s/%s/actions/runs/%s\n' \
               "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > respuesta.txt
           fi
-          npx --yes @nyx5/nyx5@0.7 ejecutor responder --file respuesta.txt
+          npx --yes "$NYX5_CLI" nyx5 ejecutor responder --file respuesta.txt
