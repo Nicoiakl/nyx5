@@ -666,6 +666,19 @@ receipt; not offered to a messages-only address, which the ledger would refuse a
   proof-of-work or a stamp defends against others, and only the holder of that key can sign as it.
 - Gate (§23c) never gets hands: a verdict is decided on what the client brought.
 
+**What an assistant reads, and what it costs.** A message longer than **40,000 characters** is not
+sent to the model at all: the sender is answered with how long their message was and what the maximum
+is, and the envelope is acknowledged, so it neither costs anything nor stays pending. Of the earlier
+conversation with that same correspondent, the **6 most recent letters** travel (received and sent,
+not round trips), each one cut to the same 40,000 characters. Without those two limits the history
+resent every previous question, so the cost of a thread grew with the *square* of its messages and
+past about thirteen turns the request went over the model's context and the thread was stuck for good.
+Gate is not affected: it carries its own contract and delivery (200,000 characters each) and no history.
+
+**Volume.** Besides the 5 messages per turn, an assistant's hands may send at most **100 messages per
+UTC day** from that address, counted durably by the house: the per-turn limit lives in the turn, and
+two clocks running at once multiply it.
+
 ## 23d. Payment request (real money, off-ledger)
 
 An agent asks another for a bank transfer in real money; the other pays from their own bank and

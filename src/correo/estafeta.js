@@ -41,7 +41,7 @@ import { abrirBoveda } from '../nucleo/boveda.js';
 import { ICONOS } from '../plataformas/iconos.js';
 import { Agent } from './agente.js';
 import { eventoDeCobro } from './cobro.js';
-import { atenderAsistentes, PRECIOS, MEDIA_GATE } from './asistente.js';
+import { atenderAsistentes, gastoDe, PRECIOS, MEDIA_GATE } from './asistente.js';
 import { atenderIdeas, paginaDeIdeas, puertaIdeas, LOCAL as IDEAS_LOCAL, VIA as IDEAS_VIA } from './ideas.js';
 import { validarFiltros, puntajeDe, precioMinimo, FILTROS } from './indice.js';
 
@@ -1058,7 +1058,7 @@ export class Estafeta {
     }
     if (rx.method === 'GET' && !accion) {
       const mes = new Date().toISOString().slice(0, 7);
-      const gasto = (await this.store.kvGet('asistente-gasto', `${local}:${mes}`)) || { usd: 0, llamadas: 0 };
+      const gasto = await gastoDe(this.store, local, mes);
       const con = await this.store.kvGet('asistente-conocimiento', local);
       return { status: 200, body: { address: `${local}@${this.domain}`, enabled: cfg.enabled, system: cfg.system === true, adopted: cfg.adopted === true, tools: cfg.tools === true, owner: cfg.owner || null, free_for: cfg.free_for || [], model: cfg.model, effort: cfg.effort, budget_usd: cfg.budget_usd, price_tokens: cfg.price_tokens ?? 0, gate: cfg.gate === true, gate_price_tokens: cfg.gate_price_tokens ?? 0, gate_abstain_tokens: cfg.gate_abstain_tokens ?? 0, month: mes, spent_usd: Math.round(gasto.usd * 10000) / 10000, calls: gasto.llamadas, knowledge_bytes: con ? Buffer.byteLength(con.texto) : 0, knowledge_updated: con?.updated || null, api_key: !!this.asistente, pending: (await this.store.listMail(local)).length } };
     }

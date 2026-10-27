@@ -45,7 +45,8 @@ demo/                    e2e, offline, spam (correo) · contratos (libro) · pil
 src/correo/asistente.js  asistentes (contestan solos con la API de Anthropic): tope mensual, sello, y qa@ como servicio (NX-606): crédito por `pay`, Spec y Gate
 src/correo/unirse.js     join (alta en un paso) y mandate (tope del humano) como funciones testeables
 src/correo/ideas.js      ideas@: el buzón de vacaciones (14-sep-2026): registra IDEA-### y confirma con texto fijo; NUNCA ejecuta, sin API ni Libro
-src/correo/acciones.js   las MANOS de un agente vivo (26-oct-2026): lista CERRADA de 5 herramientas que la casa ejecuta con la llave del propio agente. NADA que mueva dinero
+src/correo/acciones.js   las MANOS de un agente vivo (26-oct-2026): lista CERRADA de 5 herramientas que la casa ejecuta con la llave del propio agente. NADA que mueva dinero; cupo de envíos por día
+scripts/revision-vivos/  los seis ataques con script de la revisión de `vivos` (26-oct-2026): casa local, API simulada, cero gasto
 src/correo/indice.js     búsqueda del índice (NX-302): columnas de la tarjeta, puntaje arbitrado, cursor opaco por generación, filtros; UNA definición para FileStore y D1Store
 src/libro/verifica.js    evaluador de referencia: http_status | sha256 | json_path | regex | size | header | exit_0; veredicto y "indeciso"; `pruebaDeAceptacion` (NX-305: la prueba de un pedido al catálogo)
 src/libro/tareas.js      trabajo sembrado: catálogo, cupos por agente/día, y que la cotización coincida
@@ -55,7 +56,7 @@ src/nucleo/keccak.js     Keccak-256 (el de Ethereum, NO sha3-256) en JS puro; sr
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos -> `npm test` (434)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos -> `npm test` (444)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 scripts/revision-adversarial.{md,mjs}  el guion adversarial por versión (NX-903) y su parte automatizable
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
@@ -64,7 +65,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 434 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 444 pruebas, todas deben pasar antes de cualquier commit
 npm run revision         # revisión adversarial automatizable contra una casa local (scripts/revision-adversarial.md)
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
@@ -634,15 +635,53 @@ actúen desde la casa, sin su Mac. Cinco cosas que hay que saber para no romperl
   (dos isolates) que vieran el mismo sobre pendiente mandarían dos rebotes iguales. La carrera no se
   ve corriendo el reloj dos veces en Node (el servidor local serializa): se golpea el método, con dos
   `atenderAsistentes` concurrentes sobre el mismo almacén. Verificado por mutación, los dos caminos.
-- **ABIERTO, medido el 26-oct y es lo primero que hay que cerrar: una pregunta enorme no tiene tope,
-  y el historial la vuelve a mandar.** El cuerpo más grande que entra a un asistente son ~760 KB (el
-  sobre tope 1 MB, y cifrar + base64 infla ~1,4x). Medido con tres mensajes de 760 KB seguidos, lo
-  que se le manda a la API fue 614 KB, 1,33 MB y 2,10 MB: el historial (`limit: 13`) reenvía cada
-  pregunta anterior, así que el costo crece con el CUADRADO de los mensajes. A precio de
-  `claude-sonnet-5` (2 US$/MTok de entrada) ese tercer turno cuesta ~US$1, así que un remitente DE LA
-  LISTA quema un tope de US$10 con ocho mensajes; y al llegar a los 13 turnos la petición pasa del
-  millón de tokens de contexto, la API devuelve 400 y esa conversación queda trabada PARA SIEMPRE
-  (toda pregunta futura en ese hilo arrastra los mismos bytes). El tope mensual es el único freno y no
-  es suficiente. Es de ANTES de este trabajo, pero `task` le agregó una puerta. Arreglo propuesto: un
-  tope de caracteres por pregunta y por historial, con un texto que diga cuánto se aceptó — el texto
-  lo tiene que aprobar Nicholas (§4).
+- **El tope de ENTRADA, decidido por Nicholas el 26-oct: 40.000 caracteres por mensaje y 6 cartas de
+  historial, en UNA constante** (`LIMITES_ENTRADA` en `asistente.js`). Nació de un defecto medido: el
+  historial reenviaba cada pregunta anterior, así que el costo de un hilo crecía con el CUADRADO de
+  los mensajes (medido con cuatro de 100 KB: 102, 200, 297 y 395 KB a la API). Ocho mensajes quemaban
+  un tope de US$10 y al turno 13 la petición pasaba del millón de tokens: la API devuelve 400 y la
+  conversación quedaba trabada PARA SIEMPRE. Ahora una pregunta más larga NO llama a la API (se
+  contesta cuánto es el máximo y se confirma: no cuesta ni queda pendiente), cada carta del historial
+  viaja recortada al mismo tope — las que se rechazaron por largas siguen en el historial, y sin eso
+  el tope se evitaba por la puerta de al lado — y el turno más caro medido queda en ~121 KB, estable
+  (≈US$0,16 de entrada a precio de opus-5). Gate no cambia: trae su contrato y su entrega con sus
+  topes de 200.000 y no lleva historial.
+
+### 26-oct-2026 (noche) — revisión adversarial de `vivos`, antes de desplegar
+Seis ataques con script en `scripts/revision-vivos/` (casa local sobre D1 local, API simulada, sin
+red ni gasto): `a1-pregunta-gigante.mjs`, `a2-suplantacion.mjs`, `a3-carrera-relojes.mjs`,
+`a4-cierres.mjs`, `a5-adopcion-libro.mjs`, `a6-oraculos.mjs`. Un alto y cuatro medios arreglados, cada
+uno con prueba de grito verificada por mutación (seis mutantes, seis gritos) en `test/vivos.test.js`:
+- **ALTO · el único freno de plata contaba de menos.** El gasto del mes se leía, sumaba y escribía:
+  dos relojes hicieron dos llamadas a la API y quedó anotada UNA. Ahora es un contador atómico en
+  micro-dólares (`kvIncrement`), el corte a mitad de turno ve lo que gastó el otro isolate, y el aviso
+  al dueño se reserva con `kvPutIfAbsent` para que dos relojes no manden dos. La forma vieja
+  `{ usd, llamadas }` se convierte sola al leerla: el mes en curso no se reinicia.
+- **MEDIO · el volumen no estaba acotado.** El tope de 5 envíos vive en la memoria del TURNO: dos
+  relojes con dos sobres mandaron 10 mensajes en un minuto. `CUPO_ENVIOS_DIA` (100 por dirección y día
+  UTC) cuenta en el almacén y se cobra al mandar, no al rechazar.
+- **MEDIO · un cupo que se cobraba al MIRAR.** El de despertares se incrementaba al recorrer el buzón:
+  8 por 4 recordatorios con dos relojes, y los que quedaban fuera de `maxPorTick` también pagaban. El
+  agente dejaba de despertar sin haber despertado. Ahora se mira al recorrer y se cobra al TOMAR el
+  turno.
+- **MEDIO · `ideas@` estaba a tiro de todo agente vivo** (decisión de Nicholas: es su buzón personal).
+  Y no por descuido: el alta de ideas@ AGREGA `ideas@` a la lista de cada dirección local que filtre
+  por lista, así que `destinosDe` lo incluía. Una mano ya no le escribe, y el nombre se cruza en la
+  prueba con el `LOCAL` que exporta `ideas.js`.
+- **MEDIO · la guardia de las direcciones de sistema miraba sólo ESTA casa.** `libro@otra-casa` en la
+  lista era alcanzable, o sea una op del Libro firmada por el agente en la otra casa. Los cinco
+  nombres son reservados por el protocolo, así que ahora se rechazan en cualquier dominio.
+- **Lo que se midió y aguantó**: un extraño no consigue que el agente le escriba a un tercero fuera de
+  su lista; el historial es por contraparte, así que no hay fuga de otra conversación al prompt; un
+  `project` envenenado no llega al modelo; los cuatro cierres sin contestar no cuestan ni una llamada
+  a la API ni dejan pendiente ni rebotan a un buzón que cobra; las rutas de `/admin/assistants`
+  contestan 401 idéntico exista o no la dirección (y para una secreta); no se adopta un delegado, ni
+  una custodia ajena, ni se pisa una adopción viva; y re-adoptar no resucita crédito ni reinicia el
+  gasto del mes.
+- **NO cubre** (declarado, medido): el correo SIN FIRMA sigue quedándose pendiente a propósito y crece
+  sin tope (2.000 correos = 3,8 MB; el tick se mantiene en ~20 ms y no tapa una pregunta legítima, que
+  sí se contestó). Un extraño en un buzón abierto (`qa@`) puede hacer que el asistente le escriba A SU
+  DUEÑO: está acotado por el tope en dólares y por el cupo del día, y cada sobre va firmado y queda en
+  el registro. El relay DENTRO de la lista es deliberado — es «avísale a amiga del plazo» — y el único
+  camino que cruza conversaciones es el recordatorio que el agente se deja a sí mismo: acotado a su
+  propia lista. Y el cupo de envíos no cuenta los recordatorios (los acota el cupo de despertares).

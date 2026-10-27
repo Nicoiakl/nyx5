@@ -18,7 +18,9 @@
 //
 // Y los límites de volumen, que son los que impiden que un turno se vuelva un grifo:
 //   - `nyx5_enviar` sólo a la lista del buzón o al dueño, nunca a un grupo, nunca a una dirección
-//     de sistema, y como máximo `MAX_ENVIOS` por turno.
+//     de sistema de NINGUNA casa, nunca a `ideas@` (es el buzón de una persona), como máximo
+//     `MAX_ENVIOS` por turno y `CUPO_ENVIOS_DIA` por día UTC contados en el almacén: el tope por
+//     turno vive en la memoria del turno y dos relojes a la vez lo multiplican (medido).
 //   - `nyx5_recordar` como máximo uno por turno, y nunca antes de `ESPERA_MINIMA_MS`: un
 //     recordatorio inmediato es un bucle que se come el tope en dólares del dueño.
 import { parseAddress } from './resolver.js';
@@ -27,10 +29,18 @@ import { SHA256_HEX } from '../libro/notaria.js';
 export const MAX_ENVIOS = 5;            // envíos por turno
 export const MAX_RECORDATORIOS = 1;     // recordatorios por turno
 export const MAX_PASOS = 3;             // rondas de herramientas por turno (cada una cuesta una llamada)
+export const CUPO_ENVIOS_DIA = 100;    // envíos por dirección y día UTC, contados en el almacén
 export const ESPERA_MINIMA_MS = 5 * 60_000;
 export const ESPERA_MAXIMA_MS = 90 * 24 * 3600 * 1000;
 export const LIMITES = Object.freeze({ body: 20_000, q: 200, tag: 64, lang: 16, name: 200, project: 64, resultado: 8_000 });
-const SISTEMA = new Set(['postmaster', 'libro', 'verifica', 'tareas']);
+// Direcciones a las que una mano NUNCA le escribe, en CUALQUIER casa (los nombres son reservados por
+// el protocolo, no por esta casa: `Estafeta.RESERVED`). Las cuatro de protocolo porque no se les
+// escribe en prosa — a `libro@` se le mandan ops firmadas, y una mano no tiene ninguna — y `ideas`
+// porque es el buzón de una PERSONA: registra lo que escribe Nicholas, no lo que un agente decide
+// mandarle (26-oct-2026, decisión suya). El alta de ideas@ se agrega a la lista de cada dirección
+// local que filtre por lista, así que sin esto TODO agente vivo lo tenía a tiro.
+export const NO_ESCRIBIR = Object.freeze(['postmaster', 'libro', 'verifica', 'tareas']);
+export const IDEAS = 'ideas';
 
 // Las herramientas que el Libro le niega a una dirección de sólo mensajes (invariante 6): no se le
 // ofrecen, porque ofrecer una herramienta que la casa va a rechazar es prometer de gratis.
@@ -145,13 +155,20 @@ const MANOS = Object.freeze({
     let to; try { const p = parseAddress(String(a.to || '')); to = `${p.local}@${p.domain}`; } catch { return err(`${String(a.to || '').slice(0, 80)} is not an address of the form agent@house.`); }
     const { local, domain } = parseAddress(to);
     if (local.startsWith('g.')) return err('You cannot write to a group: one message, one recipient you can answer for.');
-    if (domain === ctx.domain && SISTEMA.has(local)) return err(`${to} is a protocol address of the house, not someone you write to.`);
+    if (NO_ESCRIBIR.includes(local)) return err(`${to} is a protocol address of the house, not someone you write to.${local === 'libro' ? ' The ledger only takes signed operations, and you have no tool that moves money.' : ''}`);
+    if (local === IDEAS) return err(`${to} is the inbox of a person, not an address an agent writes to: it records what someone writes there by hand. Say what you wanted to leave there in your answer instead.`);
     if (to === ctx.propia) return err('That is your own address. To leave yourself a note in the future, use nyx5_recordar.');
     const permitidos = destinosDe(ctx.cfg, ctx.rec);
     if (!permitidos.includes(to)) return err(`${to} is not on your list, so you cannot write to it. You can write to: ${permitidos.join(', ') || '(nobody: your mailbox has no list and you have no owner)'}. If the person asking wants you to reach someone else, say so and let them ask that address themselves.`);
     const cuerpo = texto(a.body, LIMITES.body);
     if (!cuerpo.trim()) return err('body is empty: there is nothing to send.');
     const proyecto = texto(a.project, LIMITES.project).trim() || undefined;
+    // El cupo del DÍA, que cuenta en el almacén, y se pide recién aquí: lo que se rechazó por destino
+    // o por forma no gasta cupo. El tope de arriba vive en la memoria del turno y no acota el
+    // volumen — medido el 26-oct: dos relojes con dos sobres mandaron 10 mensajes en un minuto.
+    // (Un intento que llega al tope suma igual al contador, que ya está pasado: sólo se compara.)
+    const cupo = await ctx.cupo();
+    if (!cupo.ok) return err(`Your house limit of ${cupo.tope} messages a day for this address is already used up (it resets at midnight UTC). Say what is left in your answer instead.`);
     const r = await ctx.agente.send({ to, body: cuerpo, project: proyecto });
     ctx.estado.envios += 1;
     return { content: corta({ sent: true, to, id: r.id, encrypted: !!r.encrypted }) };

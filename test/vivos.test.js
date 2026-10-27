@@ -22,8 +22,9 @@ import { randomBytes } from 'node:crypto';
 import { generateKeys } from '../src/nucleo/crypto.js';
 import { Estafeta } from '../src/correo/estafeta.js';
 import { Agent } from '../src/correo/agente.js';
-import { TIPOS_ATENDIDOS, NO_ATIENDE, CUPO_DESPERTAR, atenderAsistentes, leerFlujo } from '../src/correo/asistente.js';
-import { ACCIONES, NOMBRES, MAX_ENVIOS, MAX_RECORDATORIOS, MAX_PASOS, SOLO_RAIZ, destinosDe, ejecutar, herramientasDe } from '../src/correo/acciones.js';
+import { TIPOS_ATENDIDOS, NO_ATIENDE, CUPO_DESPERTAR, LIMITES_ENTRADA, DEMASIADO_LARGO, CORTADO, atenderAsistentes, gastoDe, leerFlujo } from '../src/correo/asistente.js';
+import { ACCIONES, CUPO_ENVIOS_DIA, NOMBRES, NO_ESCRIBIR, IDEAS, MAX_ENVIOS, MAX_RECORDATORIOS, MAX_PASOS, SOLO_RAIZ, destinosDe, ejecutar, herramientasDe } from '../src/correo/acciones.js';
+import { LOCAL as IDEAS_LOCAL } from '../src/correo/ideas.js';
 
 // Puerto propio de esta suite (npm test corre los archivos en paralelo). Lo cuida test/puertos.test.js.
 const P = 4831;
@@ -68,9 +69,11 @@ const usa = (llamadas, cola = 'listo') => ({
   json: { content: [{ type: 'thinking', thinking: '', signature: 'firma-de-prueba' }, ...llamadas.map((x, n) => ({ type: 'tool_use', id: `tu_${n}_${Math.random().toString(36).slice(2, 8)}`, name: x.name, input: x.input }))], stop_reason: 'tool_use', usage: USO },
   cola,
 });
+let demora = 0;   // milisegundos de la API simulada: abre la ventana de una carrera a mano
 const apiFalsa = async (url, init) => {
   const body = JSON.parse(init.body);
-  pedidos.push({ url, headers: init.headers, body });
+  pedidos.push({ url, headers: init.headers, body, bytes: init.body.length });
+  if (demora) await espera(demora);
   const r = proximas.length ? proximas.shift() : texto(`respuesta ${pedidos.length}`);
   assert.equal(body.stream, true, 'toda llamada va en flujo');
   if (r.status !== 200) return new Response(JSON.stringify(r.json), { status: r.status, headers: { 'content-type': 'application/json' } });
@@ -138,7 +141,9 @@ test('ninguna herramienta mueve dinero: la fuente se inspecciona con lista de PE
 // con una lista de PROHIBIDOS, cualquier primitiva nueva del agente o del almacén pasaría callada.
 const PERMITIDO = {
   imports: ['./resolver.js', '../libro/notaria.js'],
-  ctx: ['estado', 'agente', 'domain', 'propia', 'cfg', 'rec', 'nowMs', 'disponibles'],
+  // `cupo`: el contador del día que vive en el almacén. Entra a la lista porque no mueve dinero ni
+  // escribe fuera de las manos: cuenta. Lo pone `asistente.js`, que es quien puede tocar el almacén.
+  ctx: ['estado', 'agente', 'domain', 'propia', 'cfg', 'rec', 'nowMs', 'disponibles', 'cupo'],
   agente: ['send', 'search', 'historial', 'notarize', 'recordar'],
   est: [],
   store: [],
@@ -654,3 +659,242 @@ async function altaDelegado(nombre, config) {
   assert.equal(r.status, 201, JSON.stringify(r.body));
   return d;
 }
+
+// ---------- 4. el tope de ENTRADA (decisión de Nicholas, 26-oct-2026) ----------
+// Nació de un defecto medido: el historial reenviaba cada pregunta anterior, así que el costo de un
+// hilo crecía con el CUADRADO de los mensajes y al turno 13 la petición pasaba del millón de tokens
+// (400 de la API) y el hilo quedaba trabado para siempre. `scripts/revision-vivos/a1-*.mjs` lo mide.
+
+test('una pregunta sobre el tope NO llama a la API, contesta cuánto es el máximo y no queda eterna (grito); una justo por debajo sí pasa (silencio)', async () => {
+  const asis = await altaDelegado('topes', { budget_usd: 5 });
+  const n = pedidos.length;
+  const largo = LIMITES_ENTRADA.pregunta + 1_000;
+  const larga = await duena.send({ to: asis.address, body: 'L'.repeat(largo) });
+  const r = await duena.waitFor((e) => e.from === asis.address && e.in_reply_to === larga.id, { timeoutMs: 15_000 });
+  assert.equal((await duena.open(r.envelope)).content.body, DEMASIADO_LARGO(largo));
+  assert.equal(pedidos.length, n, `una pregunta sobre el tope costó ${pedidos.length - n} llamadas a la API`);
+  assert.equal((await casa.store.listMail(asis.local)).length, 0, 'la pregunta larga quedó pendiente para siempre');
+  const bajo = await duena.send({ to: asis.address, body: 'c'.repeat(LIMITES_ENTRADA.pregunta - 1_000) });
+  const r2 = await duena.waitFor((e) => e.from === asis.address && e.in_reply_to === bajo.id, { timeoutMs: 15_000 });
+  assert.match((await duena.open(r2.envelope)).content.body, /^respuesta \d+/, 'una pregunta bajo el tope no se contestó');
+  assert.ok(pedidos.length > n, 'una pregunta bajo el tope tiene que llamar a la API');
+});
+
+test('del historial viajan seis cartas: con siete turnos previos las primeras ya no van, y una carta sobre el tope viaja cortada', async () => {
+  const asis = await altaDelegado('hist', { budget_usd: 5 });
+  for (let i = 1; i <= 7; i++) {
+    const e = await duena.send({ to: asis.address, body: `marca-${i}` });
+    await duena.waitFor((x) => x.from === asis.address && x.in_reply_to === e.id, { timeoutMs: 15_000 });
+  }
+  const n = pedidos.length;
+  const ultima = await duena.send({ to: asis.address, body: 'la pregunta de ahora' });
+  await duena.waitFor((x) => x.from === asis.address && x.in_reply_to === ultima.id, { timeoutMs: 15_000 });
+  const enviado = JSON.stringify(pedidos[n].body.messages);
+  // Seis CARTAS, propias y ajenas: con siete preguntas contestadas, las seis últimas son las tres
+  // más recientes y sus tres respuestas. Las cuatro primeras preguntas ya no viajan.
+  const presentes = [1, 2, 3, 4, 5, 6, 7].filter((i) => enviado.includes(`marca-${i}`));
+  const respuestas = (enviado.match(/respuesta \d+/g) || []).length;
+  const cartas = presentes.length + respuestas;
+  assert.ok(cartas <= LIMITES_ENTRADA.turnos, `viajaron ${cartas} cartas de historial (marcas ${presentes.join(',')} + ${respuestas} respuestas), y el tope es ${LIMITES_ENTRADA.turnos}`);
+  assert.ok(!presentes.includes(1) && !presentes.includes(2), `viajaron las marcas ${presentes.join(',')}: las primeras tienen que quedar fuera`);
+  assert.ok(presentes.includes(7), 'la última pregunta contestada tiene que seguir en el historial');
+  assert.ok(enviado.includes('la pregunta de ahora'), 'la pregunta de ahora tiene que viajar');
+  // Una carta que se rechazó por larga SIGUE en el historial: tiene que viajar cortada, o el tope
+  // se evita por la puerta de al lado (mandar una enorme y después una corta).
+  await duena.send({ to: asis.address, body: 'X'.repeat(LIMITES_ENTRADA.pregunta + 5_000) });
+  await duena.waitFor((x) => x.from === asis.address && /máximo que puedo leer/.test(x.content?.body || ''), { timeoutMs: 15_000 }).catch(() => {});
+  await espera(600); await casa.tick({ programado: true });
+  const n2 = pedidos.length;
+  const corta = await duena.send({ to: asis.address, body: 'y esta sí es corta' });
+  await duena.waitFor((x) => x.from === asis.address && x.in_reply_to === corta.id, { timeoutMs: 15_000 });
+  const conCorte = JSON.stringify(pedidos[n2].body.messages);
+  assert.ok(conCorte.includes(CORTADO.trim()), 'la carta larga del historial viajó sin cortar');
+  assert.ok(conCorte.length < (LIMITES_ENTRADA.turnos + 1) * LIMITES_ENTRADA.pregunta, `el historial pesó ${conCorte.length}`);
+});
+
+test('el turno más caro posible queda acotado y NO crece con los turnos: cada petición cabe en (6+1) topes', async () => {
+  const asis = await altaDelegado('caro', { budget_usd: 50 });
+  const bytes = [];
+  for (let i = 0; i < 6; i++) {
+    const n = pedidos.length;
+    const e = await duena.send({ to: asis.address, body: `T${i} ` + 'g'.repeat(LIMITES_ENTRADA.pregunta - 10) });
+    await duena.waitFor((x) => x.from === asis.address && x.in_reply_to === e.id, { timeoutMs: 20_000 });
+    if (pedidos.length > n) bytes.push(pedidos[n].bytes);
+  }
+  const cota = (LIMITES_ENTRADA.turnos + 1) * LIMITES_ENTRADA.pregunta;
+  assert.ok(bytes.length >= 4, `se midieron ${bytes.length} turnos`);
+  for (const b of bytes) assert.ok(b <= cota, `una petición pesó ${b} bytes, sobre la cota ${cota}`);
+  // Lo que importa no es sólo el tope: es que el turno 6 no cueste más que el turno 3. Con el
+  // historial sin tope, la última medía 4 veces la primera (medido: 102, 200, 297 y 395 KB).
+  const ultimas = bytes.slice(-3);
+  assert.ok(Math.max(...ultimas) <= Math.min(...ultimas) * 1.5, `el costo por turno sigue creciendo: ${bytes.join(', ')}`);
+});
+
+test('el tope vive en UNA constante: la fuente no trae otra copia del número ni otro límite de historial', () => {
+  const fuente = fs.readFileSync(path.join(raiz, 'src/correo/asistente.js'), 'utf8')
+    .replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  const sinDefinicion = fuente.replace(/export const LIMITES_ENTRADA[^\n]*\n/, '');
+  assert.equal(/\b40[._]?000\b/.test(sinDefinicion), false, 'hay una segunda copia del tope en la fuente');
+  assert.match(fuente, /conversacion\(local, \{ con: de, limit: LIMITES_ENTRADA\.turnos \}\)/, 'el historial no lee el tope de la constante');
+  assert.ok((sinDefinicion.match(/LIMITES_ENTRADA\.pregunta/g) || []).length >= 3, 'el tope se usa en menos lugares de los que debería (rechazo, recorte, y la propia cota)');
+  assert.deepEqual(Object.keys(LIMITES_ENTRADA), ['pregunta', 'turnos']);
+  assert.equal(Object.isFrozen(LIMITES_ENTRADA), true);
+});
+
+// ---------- 5. ideas@ no es alcanzable por una mano (decisión de Nicholas, 26-oct-2026) ----------
+// Importa que sea GRITO de verdad: el alta de ideas@ AGREGA ideas@ a la lista de cada dirección
+// local que filtre por lista, así que sin esta guardia todo agente vivo lo tenía a tiro.
+
+test('ideas@ no es alcanzable por una mano aunque esté en la lista del buzón (grito), ni en otra casa, y el nombre es el que reserva el protocolo', async () => {
+  assert.equal(IDEAS, IDEAS_LOCAL, 'la guardia de las manos y el buzón de ideas no se llaman igual');
+  const asis = await altaDelegado('conideas', { budget_usd: 5, tools: true });
+  // Lo que hace el alta de ideas@ con las direcciones que ya existían: meterse en su lista.
+  await casa.agregarContactos(asis.local, [`ideas@${H}`]);
+  casa.resolver.invalidate(`agent:${asis.address}`);
+  const rec = await casa.store.getAgent(asis.local);
+  const cfg = await casa.store.kvGet('asistente', asis.local);
+  assert.ok(destinosDe(cfg, rec).includes(`ideas@${H}`), 'la prueba no reprodujo la condición: ideas@ no quedó en la lista');
+  const ctx = { est: casa, agente: await casa.agenteDeBoveda(asis.local), cfg, rec, propia: asis.address, domain: H, nowMs: Date.now(), disponibles: [...NOMBRES], estado: { envios: 0, recordatorios: 0 }, cupo: async () => ({ ok: true, tope: CUPO_ENVIOS_DIA }) };
+  const ideasAntes = (await casa.store.listMail(IDEAS_LOCAL)).length;
+  for (const destino of [`ideas@${H}`, 'ideas@otra.test']) {
+    const r = await ejecutar(ctx, 'nyx5_enviar', { to: destino, body: 'anótame esta idea' });
+    assert.equal(r.is_error, true, `una mano le escribió a ${destino}`);
+    assert.match(r.content, /inbox of a person/);
+  }
+  assert.equal(ctx.estado.envios, 0, 'se contó un envío que no salió');
+  await espera(300); await casa.tick({ programado: true });
+  assert.equal((await casa.store.listMail(IDEAS_LOCAL)).length, ideasAntes, 'algo llegó al buzón de ideas');
+  // Silencio: a una dirección normal de su lista sí le escribe.
+  const ok = await ejecutar(ctx, 'nyx5_enviar', { to: duena.address, body: 'esto sí puede salir' });
+  assert.ok(!ok.is_error, `la guardia se llevó lo bueno: ${ok.content}`);
+});
+
+test('una mano no le escribe a una dirección de protocolo de NINGUNA casa (grito: antes sólo se miraba la de esta casa)', async () => {
+  const asis = await altaDelegado('ajenas', { budget_usd: 5, tools: true });
+  await casa.agregarContactos(asis.local, ['libro@otra.test', 'postmaster@otra.test', 'verifica@otra.test', 'tareas@otra.test']);
+  casa.resolver.invalidate(`agent:${asis.address}`);
+  const rec = await casa.store.getAgent(asis.local);
+  const cfg = await casa.store.kvGet('asistente', asis.local);
+  const ctx = { est: casa, agente: await casa.agenteDeBoveda(asis.local), cfg, rec, propia: asis.address, domain: H, nowMs: Date.now(), disponibles: [...NOMBRES], estado: { envios: 0, recordatorios: 0 }, cupo: async () => ({ ok: true, tope: CUPO_ENVIOS_DIA }) };
+  const destinos = destinosDe(cfg, rec);
+  for (const nombre of NO_ESCRIBIR) {
+    const ajena = `${nombre}@otra.test`;
+    assert.ok(destinos.includes(ajena), `la prueba no reprodujo la condición: ${ajena} no quedó en la lista`);
+    const r = await ejecutar(ctx, 'nyx5_enviar', { to: ajena, body: JSON.stringify({ op: 'pay', amount: 999 }) });
+    assert.equal(r.is_error, true, `una mano le mandó una op a ${ajena}`);
+    assert.match(r.content, /protocol address/);
+    const propia2 = `${nombre}@${H}`;
+    const r2 = await ejecutar(ctx, 'nyx5_enviar', { to: propia2, body: 'x' });
+    assert.equal(r2.is_error, true, `una mano le escribió a ${propia2}`);
+  }
+  assert.equal(ctx.estado.envios, 0);
+  assert.match((await ejecutar(ctx, 'nyx5_enviar', { to: `libro@${H}`, body: 'x' })).content, /only takes signed operations/);
+});
+
+test('el texto de NO_ATIENDE es el que Nicholas aprobó el 26-oct-2026: no se cambia sin mostrárselo (CLAUDE.md §5)', () => {
+  assert.equal(NO_ATIENDE('intro', ['message', 'task', 'result']),
+    'I do not handle envelopes of type "intro". I handle: message, task, result. Nothing was done with this one; send it again as one of those types if you want an answer.');
+});
+
+// ---------- 6. los contadores que son el único freno: el gasto y el volumen ----------
+
+test('el gasto del mes se cuenta ATÓMICO: dos turnos a la vez no pierden una llamada (grito con la suma leída-sumada-escrita)', async () => {
+  const asis = await altaDelegado('plata', { budget_usd: 5 });
+  const mes = new Date().toISOString().slice(0, 7);
+  clearInterval(casa.timer);
+  const tickReal = casa.tick.bind(casa);
+  casa.tick = async () => {};
+  try {
+    await casa.store.kvDelete('asistente-gasto', `${asis.local}:${mes}`);
+    await casa.store.kvDelete('asistente-gasto', `${asis.local}:${mes}:n`);
+    await duena.send({ to: asis.address, body: 'una' });
+    await amiga.send({ to: asis.address, body: 'otra' });
+    for (let i = 0; i < 3; i++) { await tickReal({ programado: false }); await espera(50); }
+    assert.equal((await casa.store.listMail(asis.local)).length, 2, 'los dos sobres tienen que estar pendientes');
+    const n = pedidos.length;
+    demora = 80;   // la ventana de la carrera: sin ella el servidor local serializa
+    await Promise.all([atenderAsistentes(casa, { maxPorTick: 2 }), atenderAsistentes(casa, { maxPorTick: 2 })]);
+    demora = 0;
+    const llamadas = pedidos.length - n;
+    assert.equal(llamadas, 2, `se esperaban dos llamadas concurrentes y hubo ${llamadas}`);
+    const g = await gastoDe(casa.store, asis.local, mes);
+    assert.equal(g.llamadas, llamadas, `la API se llamó ${llamadas} veces y quedaron anotadas ${g.llamadas}: el tope mensual cuenta de menos`);
+    assert.ok(g.usd > 0, 'no se anotó gasto');
+    // Y el lector sigue entendiendo la forma vieja `{ usd, llamadas }` que ya hay en producción.
+    await casa.store.kvPut('asistente-gasto', `${asis.local}:${mes}`, { usd: 2.5, llamadas: 7, avisado: true });
+    const viejo = await gastoDe(casa.store, asis.local, mes);
+    assert.deepEqual([viejo.usd, viejo.llamadas, viejo.avisado], [2.5, 7, true], 'el gasto del mes en curso se perdió al cambiar de forma');
+    assert.equal(await casa.store.kvGet('asistente-gasto', `${asis.local}:${mes}`), 2_500_000, 'no se convirtió a micro-dólares');
+  } finally {
+    casa.tick = tickReal;
+    casa.timer = setInterval(() => casa.tick().catch(() => {}), casa.workerIntervalMs);
+    casa.timer.unref?.();
+  }
+});
+
+test('el cupo de envíos del DÍA acota el volumen que el tope por turno no acota (grito), y con cupo los cinco del turno salen (silencio)', async () => {
+  const asis = await altaDelegado('volumen', { budget_usd: 5, tools: true });
+  const dia = new Date().toISOString().slice(0, 10);
+  const clave = `${asis.local}:${dia}`;
+  // Silencio primero: con el contador en cero, los cinco del turno salen.
+  await casa.store.kvPut('asistente-envios', clave, 0);
+  const t0 = Date.now();
+  proximas.push(usa(Array.from({ length: MAX_ENVIOS }, (_, i) => ({ name: 'nyx5_enviar', input: { to: amiga.address, body: `cupo-si ${i}` } }))));
+  proximas.push(texto('salieron'));
+  await duena.send({ to: asis.address, body: 'manda cinco' });
+  await respuestaA(duena, t0, asis.address);
+  const conCupo = pedidos.at(-1).body.messages.at(-1).content;
+  assert.equal(conCupo.filter((x) => !x.is_error).length, MAX_ENVIOS, `con cupo salieron ${conCupo.filter((x) => !x.is_error).length} de ${MAX_ENVIOS}`);
+  assert.equal(Number(await casa.store.kvGet('asistente-envios', clave)), MAX_ENVIOS, 'el cupo del día no contó lo que salió');
+  // Grito: a uno del tope del día, el turno siguiente manda UNO y los demás vuelven con el motivo.
+  await casa.store.kvPut('asistente-envios', clave, CUPO_ENVIOS_DIA - 1);
+  const t1 = Date.now();
+  proximas.push(usa(Array.from({ length: MAX_ENVIOS }, (_, i) => ({ name: 'nyx5_enviar', input: { to: amiga.address, body: `cupo-no ${i}` } }))));
+  proximas.push(texto('no pude'));
+  await duena.send({ to: asis.address, body: 'manda cinco más' });
+  await respuestaA(duena, t1, asis.address);
+  const alTope = pedidos.at(-1).body.messages.at(-1).content;
+  assert.equal(alTope.filter((x) => !x.is_error).length, 1, `salieron ${alTope.filter((x) => !x.is_error).length} con el cupo del día en ${CUPO_ENVIOS_DIA - 1}`);
+  assert.match(alTope.at(-1).content, new RegExp(`${CUPO_ENVIOS_DIA} messages a day`));
+  await espera(600); await casa.tick({ programado: true });
+  let llegaron = 0;
+  for (const x of await amiga.inbox()) {
+    try { if (/^cupo-no /.test((await amiga.open(x.envelope)).content?.body ?? '')) llegaron++; } catch { /* no es para ella */ }
+  }
+  assert.equal(llegaron, 1, `llegaron ${llegaron} mensajes del turno que estaba al tope`);
+  await casa.store.kvPut('asistente-envios', clave, 0);
+});
+
+test('el cupo de despertares se cobra al TOMAR el turno, no al mirar el buzón (grito: dos relojes contaban dos por un recordatorio)', async () => {
+  const asis = await altaDelegado('reloj', { budget_usd: 5, tools: true });
+  const agente = await casa.agenteDeBoveda(asis.local);
+  const dia = new Date().toISOString().slice(0, 10);
+  const clave = `${asis.local}:${dia}`;
+  clearInterval(casa.timer);
+  const tickReal = casa.tick.bind(casa);
+  casa.tick = async () => {};
+  try {
+    await casa.store.kvPut('asistente-despertar', clave, 0);
+    await agente.recordar({ cuando: new Date(Date.now() - 1000).toISOString(), body: 'retoma esto' });
+    for (let i = 0; i < 3; i++) { await tickReal({ programado: false }); await espera(50); }
+    assert.equal((await casa.store.listMail(asis.local)).length, 1);
+    const n = pedidos.length;
+    demora = 80;
+    await Promise.all([atenderAsistentes(casa), atenderAsistentes(casa)]);
+    demora = 0;
+    assert.equal(pedidos.length - n, 1, 'dos relojes despertaron dos veces por el mismo recordatorio');
+    assert.equal(Number(await casa.store.kvGet('asistente-despertar', clave)), 1, `el cupo del día contó ${await casa.store.kvGet('asistente-despertar', clave)} despertares para UN recordatorio`);
+    // Y lo que queda fuera de `maxPorTick` no paga: antes se cobraba por mirarlo.
+    await casa.store.kvPut('asistente-despertar', clave, 0);
+    for (let i = 0; i < 4; i++) await agente.recordar({ cuando: new Date(Date.now() - 1000).toISOString(), body: `otro ${i}` });
+    for (let i = 0; i < 3; i++) { await tickReal({ programado: false }); await espera(50); }
+    const m = pedidos.length;
+    await atenderAsistentes(casa, { maxPorTick: 1 });
+    assert.equal(pedidos.length - m, 1, 'maxPorTick 1 tiene que atender uno');
+    assert.equal(Number(await casa.store.kvGet('asistente-despertar', clave)), 1, 'se cobró el cupo de los recordatorios que ni se atendieron');
+  } finally {
+    casa.tick = tickReal;
+    casa.timer = setInterval(() => casa.tick().catch(() => {}), casa.workerIntervalMs);
+    casa.timer.unref?.();
+  }
+});

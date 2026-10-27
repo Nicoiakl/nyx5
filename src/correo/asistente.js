@@ -20,7 +20,7 @@
 import { parseAddress } from './resolver.js';
 import { sha256hex, signObject, uuid } from '../nucleo/crypto.js';
 import { SHA256_HEX } from '../libro/notaria.js';
-import { INSTRUCCION_MANOS, MAX_PASOS, destinosDe, ejecutar, herramientasDe } from './acciones.js';
+import { CUPO_ENVIOS_DIA, INSTRUCCION_MANOS, MAX_PASOS, destinosDe, ejecutar, herramientasDe } from './acciones.js';
 
 export const API_MENSAJES = 'https://api.anthropic.com/v1/messages';
 // Dólares por millón de tokens. La escritura en caché de 5 minutos cuesta 1,25x la entrada y la
@@ -37,6 +37,53 @@ export const PRECIOS = {
 export const CON_RESPALDO = new Set(['claude-opus-5']);
 const SISTEMA = new Set(['postmaster', 'libro', 'verifica', 'tareas']);
 const mesDe = (t = Date.now()) => new Date(t).toISOString().slice(0, 7);
+const diaDe = (t = Date.now()) => new Date(t).toISOString().slice(0, 10);
+// Separador de miles sin ICU: `toLocaleString` depende de datos de idioma que workerd puede no traer.
+const miles = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+
+// EL TOPE DE ENTRADA (26-oct-2026, decisión de Nicholas). UNA constante, porque el tope vive en un
+// solo lugar: el texto del rechazo, el recorte del historial y la prueba del turno más caro leen de
+// aquí. Nació de un defecto MEDIDO, no de una idea: el cuerpo más grande que entra a un asistente
+// son ~760 KB y el historial reenviaba cada pregunta anterior, así que el costo crecía con el
+// CUADRADO de los mensajes (medido el 26-oct con cuatro de 100 KB: 102, 200, 297 y 395 KB a la API).
+// Ocho mensajes quemaban un tope de US$10 y al turno 13 la petición pasaba del millón de tokens: la
+// API devuelve 400 y esa conversación quedaba trabada PARA SIEMPRE.
+//   - `pregunta`: caracteres de un mensaje. Uno más largo NO llama a la API: se contesta diciendo
+//     cuánto es el máximo y se cierra, así que no queda eterno ni cuesta un peso.
+//   - `turnos`: CARTAS del historial que viajan (propias y ajenas, no pares de ida y vuelta). Antes
+//     eran 13 y cada una podía pesar lo que quisiera.
+// Qué NO cubre: Gate trae su propio contrato y su propia entrega, con los topes de `LIMITES_GATE`
+// (200.000 cada uno, aprobados el 14-sep); Gate no lleva historial, así que no crece con los turnos.
+export const LIMITES_ENTRADA = Object.freeze({ pregunta: 40_000, turnos: 6 });
+export const DEMASIADO_LARGO = (largo) => `Tu mensaje tiene ${miles(largo)} caracteres y el máximo que puedo leer son ${miles(LIMITES_ENTRADA.pregunta)}. No lo leí: mándalo de nuevo más corto, o por partes.`;
+export const CORTADO = `\n[cortado aquí: supera el tope de ${miles(LIMITES_ENTRADA.pregunta)} caracteres]`;
+
+// El GASTO del mes es el único freno de plata de un asistente que corre solo, así que se cuenta con
+// un contador ATÓMICO en micro-dólares (`kvIncrement`), no leyendo-sumando-escribiendo un objeto:
+// medido el 26-oct, dos relojes hicieron dos llamadas a la API y quedó anotada UNA. Un tope que
+// cuenta de menos no es un tope. Las claves del mes son tres: el total, las llamadas y el aviso.
+export const MICRO = 1_000_000;
+export async function gastoDe(store, local, mes) {
+  const clave = `${local}:${mes}`;
+  const v = await store.kvGet('asistente-gasto', clave);
+  // Forma vieja `{ usd, llamadas, avisado }`: en producción ya hay entradas así. Se convierte al
+  // contador entero la primera vez que se lee, para no reiniciar el gasto del mes en curso.
+  if (v !== null && typeof v === 'object') {
+    const micro = Math.round((Number(v.usd) || 0) * MICRO);
+    await store.kvPut('asistente-gasto', clave, micro);
+    await store.kvPut('asistente-gasto', `${clave}:n`, Number(v.llamadas) || 0);
+    // La forma vieja manda sobre el aviso: escribirla a mano con `avisado: false` (reiniciar el mes)
+    // tiene que volver a permitir el aviso, no quedarse con la bandera de antes.
+    if (v.avisado) await store.kvPutIfAbsent('asistente-gasto', `${clave}:avisado`, { at: new Date().toISOString() });
+    else await store.kvDelete?.('asistente-gasto', `${clave}:avisado`);
+    return { usd: micro / MICRO, llamadas: Number(v.llamadas) || 0, avisado: !!v.avisado };
+  }
+  return {
+    usd: (Number(v) || 0) / MICRO,
+    llamadas: Number(await store.kvGet('asistente-gasto', `${clave}:n`)) || 0,
+    avisado: (await store.kvGet('asistente-gasto', `${clave}:avisado`)) !== null,
+  };
+}
 
 // ---------- qa@ como servicio (NX-606, fase 1) ----------
 // Dos personas en una dirección: Spec (una pedida -> contrato de aceptación, la conversación de
@@ -267,10 +314,11 @@ export async function atenderAsistentes(est, { maxPorTick = 3, maxRebotesPorTick
       // con él (la respuesta no tendría a quién ir), y con manos cuenta contra el cupo del día.
       if (propio) {
         if (!conManos) { await cerrar(e, 'recordatorio propio y este asistente no tiene herramientas'); continue; }
-        if (est.store.kvIncrement) {
-          const dia = new Date(nowMs).toISOString().slice(0, 10);
-          const n = await est.store.kvIncrement('asistente-despertar', `${local}:${dia}`, (Math.floor(nowMs / DIA_MS) + 2) * DIA_MS, nowMs);
-          if (n > CUPO_DESPERTAR) { await cerrar(e, `cupo de ${CUPO_DESPERTAR} despertares propios de ${dia} agotado`); continue; }
+        // Aquí sólo se MIRA el cupo. Cobrarlo al mirar lo gastaba sin despertar a nadie: medido el
+        // 26-oct, dos relojes contaron 8 despertares por 4 recordatorios, y los que quedaban fuera
+        // de `maxPorTick` también pagaban. El agente dejaba de despertar sin haber despertado.
+        if ((Number(await est.store.kvGet('asistente-despertar', `${local}:${diaDe(nowMs)}`)) || 0) >= CUPO_DESPERTAR) {
+          await cerrar(e, `cupo de ${CUPO_DESPERTAR} despertares propios de ${diaDe(nowMs)} agotado`); continue;
         }
       }
       if (pendientes.length >= maxPorTick) continue;
@@ -280,6 +328,11 @@ export async function atenderAsistentes(est, { maxPorTick = 3, maxRebotesPorTick
       // Un turno por mensaje: dos relojes que se pisan no contestan dos veces. Si la respuesta falla,
       // el turno vence a los 15 minutos y se reintenta; a la tercera falla se avisa y se cierra.
       if (!(await est.store.kvPutIfAbsent('asistente-turno', m.envelope.id, { at: new Date().toISOString() }, Date.now() + 15 * 60_000))) continue;
+      // Con el turno ganado, un despertar propio se COBRA (atómico): un solo reloj lo cuenta una vez.
+      if (m.envelope.from === propia && est.store.kvIncrement) {
+        const n = await est.store.kvIncrement('asistente-despertar', `${local}:${diaDe(nowMs)}`, (Math.floor(nowMs / DIA_MS) + 2) * DIA_MS, nowMs);
+        if (n > CUPO_DESPERTAR) { est.log(`asistente ${local}: cupo de despertares agotado al tomar el turno`); await est.store.ackMail(local, m.envelope.id); continue; }
+      }
       try {
         const r = await responder(est, local, cfg, rec, m);
         // Otro reloj está cobrándole a este mismo cliente: se suelta el turno y se reintenta al siguiente.
@@ -323,13 +376,12 @@ async function responder(est, local, cfg, rec, m) {
   const esGate = abierto.content?.media === MEDIA_GATE;
   const pregunta = textoDe(abierto.content);
   const clave = `${local}:${mesDe()}`;
-  const gasto = (await est.store.kvGet('asistente-gasto', clave)) || { usd: 0, llamadas: 0, avisado: false };
+  const gasto = await gastoDe(est.store, local, mesDe());
   if (gasto.usd >= cfg.budget_usd) {
     await contestar({ to: de, body: `Llegué a mi tope de gasto de este mes (US$${cfg.budget_usd}) y no puedo contestar hasta el próximo. Tu mensaje quedó guardado.`, ...hilo });
-    if (!gasto.avisado && cfg.owner) {
+    // El aviso al dueño se reserva ANTES de mandarlo: dos relojes al tope mandarían dos avisos.
+    if (cfg.owner && await est.store.kvPutIfAbsent('asistente-gasto', `${clave}:avisado`, { at: new Date().toISOString() })) {
       await agente.send({ to: cfg.owner, body: `Tu asistente ${local}@${est.domain} llegó al tope de US$${cfg.budget_usd} de ${mesDe()} y dejó de contestar.` }).catch(() => {});
-      gasto.avisado = true;
-      await est.store.kvPut('asistente-gasto', clave, gasto);
     }
     await est.store.ackMail(local, m.envelope.id);
     return;
@@ -337,6 +389,9 @@ async function responder(est, local, cfg, rec, m) {
   // Contestar sin llamar a la API: el mensaje queda confirmado y no cuesta nada.
   const rechazar = async (texto) => { await contestar({ to: de, body: texto, ...hilo }); await est.store.ackMail(local, m.envelope.id); };
   if (esGate && cfg.gate !== true) return rechazar('Esta dirección no atiende Gate: sólo contesta pedidas de contrato.');
+  // El tope de entrada, ANTES de cobrar crédito y antes de llamar a la API: una pregunta más larga
+  // que el tope no cuesta un peso. Se contesta y se cierra, así que tampoco queda eterna.
+  if (!esGate && pregunta.length > LIMITES_ENTRADA.pregunta) return rechazar(DEMASIADO_LARGO(pregunta.length));
   // ----- cobro por crédito -----
   // El dueño (y sus delegados: su Claude conectado) no paga: es quien prueba el asistente.
   // `free_for`: direcciones (y sus delegados) que tampoco pagan; nació para que Nicholas pruebe qa@
@@ -378,9 +433,12 @@ async function responder(est, local, cfg, rec, m) {
       // cinco pedidas juntas en un solo turno y contestó una con los contratos de otras dos.
       const enCola = new Set((await est.store.listMail(local)).map((x) => x.envelope?.id));
       const mensajes = [];
-      for (const h of await est.conversacion(local, { con: de, limit: 13 })) {
+      for (const h of await est.conversacion(local, { con: de, limit: LIMITES_ENTRADA.turnos })) {
         if (h.id === m.envelope.id || (h.dir === 'in' && enCola.has(h.id))) continue;
         let t; try { const o = await agente.open(h.envelope); if (o.content?.media === MEDIA_GATE) continue; t = textoDe(o.content); } catch { continue; }
+        // Una carta del historial también se recorta: las que se rechazaron por largas siguen en el
+        // historial, y sin esto volvían a entrar enteras por la puerta de al lado.
+        if (t.length > LIMITES_ENTRADA.pregunta) t = t.slice(0, LIMITES_ENTRADA.pregunta) + CORTADO;
         const rol = h.dir === 'in' ? 'user' : 'assistant';
         if (mensajes.length && mensajes[mensajes.length - 1].role === rol) mensajes[mensajes.length - 1].content += `\n\n${t}`;
         else mensajes.push({ role: rol, content: t });
@@ -419,8 +477,11 @@ async function responder(est, local, cfg, rec, m) {
       if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(`la API respondió ${r.status}: ${e?.error?.message || 'sin detalle'}`); }
       const j2 = (r.headers.get('content-type') || '').includes('text/event-stream') ? await leerFlujo(r) : await r.json();
       const u = costoDe(cuerpo.model, j2.usage);
-      gasto.usd += u; gasto.llamadas += 1;
-      await est.store.kvPut('asistente-gasto', clave, gasto);
+      // Atómico y con el total de TODOS los relojes: lo que vuelve es el gasto del mes ya sumado,
+      // así que el corte a mitad de turno ve también lo que gastó el otro isolate.
+      gasto.llamadas += 1;
+      gasto.usd = (await est.store.kvIncrement('asistente-gasto', clave, null, Date.now(), Math.round(u * MICRO))) / MICRO;
+      await est.store.kvIncrement('asistente-gasto', `${clave}:n`, null, Date.now(), 1);
       return { j: j2, usd: u };
     };
     // ----- las manos (src/correo/acciones.js) -----
@@ -431,7 +492,16 @@ async function responder(est, local, cfg, rec, m) {
       cuerpo.tools = manos;
       cuerpo.system = [...cuerpo.system, { type: 'text', text: INSTRUCCION_MANOS(propia, destinosDe(cfg, rec)) }];
     }
-    const ctx = { est, agente, cfg, rec, propia, domain: est.domain, nowMs: Date.now(), disponibles: manos.map((x) => x.name), estado: { envios: 0, recordatorios: 0 } };
+    // El cupo del DÍA de envíos, contado en el almacén y cobrado al mandar (atómico). El tope por
+    // turno de `acciones.js` vive en la memoria del turno: dos relojes con dos sobres mandaron 10
+    // mensajes en un minuto con un tope que dice 5 (medido el 26-oct). Este es el que acota.
+    const cupoEnvios = async () => {
+      if (!est.store.kvIncrement) return { ok: true, tope: CUPO_ENVIOS_DIA };
+      const ahora = Date.now();
+      const n = await est.store.kvIncrement('asistente-envios', `${local}:${diaDe(ahora)}`, (Math.floor(ahora / DIA_MS) + 2) * DIA_MS, ahora);
+      return { ok: n <= CUPO_ENVIOS_DIA, tope: CUPO_ENVIOS_DIA, usados: n };
+    };
+    const ctx = { est, agente, cfg, rec, propia, domain: est.domain, nowMs: Date.now(), disponibles: manos.map((x) => x.name), estado: { envios: 0, recordatorios: 0 }, cupo: cupoEnvios };
     let usd = 0, rondas = 0, j;
     for (;;) {
       const paso = await llamar();

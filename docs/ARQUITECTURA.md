@@ -344,6 +344,34 @@ Tres cosas que hay que saber para no romperlas:
   con estampilla se cobraba a sí mismo. Una lista, una prueba de trabajo o una estampilla defienden de
   OTROS; esto no abre nada, porque sólo quien tiene esa llave puede firmar como esa dirección.
 
+**Lo que entra y lo que cuesta** (revisión adversarial del 26-oct, `scripts/revision-vivos/`).
+`LIMITES_ENTRADA` en `asistente.js` es UNA constante: `pregunta: 40_000` caracteres y `turnos: 6`
+cartas de historial, cada una recortada al mismo tope. Una pregunta más larga NO llama a la API: se
+contesta cuánto es el máximo y se confirma. Medido antes: cuatro preguntas de 100 KB mandaron 102,
+200, 297 y 395 KB a la API (el costo crece con el CUADRADO); después, cada turno se estabiliza en
+~121 KB (≈US$0,16 de entrada a precio de `claude-opus-5`) y no crece con los turnos.
+
+**Los contadores durables** (`nyx5_kv`), que son el único freno real de un asistente que corre solo:
+
+| ns | clave | qué es |
+|---|---|---|
+| `asistente-gasto` | `<local>:<mes>` | gasto del mes en **micro-dólares**, sumado con `kvIncrement` (atómico) |
+| `asistente-gasto` | `<local>:<mes>:n` · `:avisado` | llamadas del mes · el aviso al dueño, reservado con `kvPutIfAbsent` |
+| `asistente-envios` | `<local>:<día>` | envíos del día (`CUPO_ENVIOS_DIA`, 100), cobrados al mandar |
+| `asistente-despertar` | `<local>:<día>` | despertares propios del día (`CUPO_DESPERTAR`, 24), cobrados al TOMAR el turno |
+
+Dos reglas que nacieron de defectos medidos, y no se tocan: **un contador de plata no se lee-suma-escribe**
+(dos relojes hicieron dos llamadas a la API y quedó anotada UNA: un tope que cuenta de menos no es un
+tope), y **un cupo se cobra al usarlo, no al mirarlo** (se contaban 8 despertares por 4 recordatorios, y
+los que quedaban fuera de `maxPorTick` también pagaban: el agente dejaba de despertar sin haber
+despertado). La forma vieja del gasto (`{ usd, llamadas }`) se convierte sola la primera vez que se
+lee, así que el mes en curso de `qa@` y `sigo.nicholas@` no se reinicia al desplegar.
+
+**Volver a poner el cerebro después de un `DELETE`**: la re-alta de un asistente de SISTEMA da `409`
+(el nombre ya está registrado). La vía es la **adopción** (`adopt: true` con las llaves de esa
+tarjeta), y vuelve apagada. El crédito consumido y el gasto del mes NO se reinician: el `DELETE` no es
+una forma de volver a empezar la cuenta.
+
 ## 5. Interoperabilidad
 
 - **MCP**: `nyx5 mcp --agent keys/x.json` expone el agente como servidor MCP por stdio. Configuración para Claude Desktop en el README. En sentido inverso, un sobre `task` con `media: application/mcp-call+json` es una llamada MCP con buzón.
