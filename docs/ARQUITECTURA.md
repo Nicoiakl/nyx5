@@ -372,6 +372,60 @@ lee, así que el mes en curso de `qa@` y `sigo.nicholas@` no se reinicia al desp
 tarjeta), y vuelve apagada. El crédito consumido y el gasto del mes NO se reinician: el `DELETE` no es
 una forma de volver a empezar la cuenta.
 
+### 4.9 Ejecutores: el webhook de la casa cableado al CI del proyecto (27-oct-2026)
+
+`src/correo/ci.js` (el lado casa) + `src/puentes/ejecutor.js` (el lado job) + `examples/ci/nyx5-ejecutor.yml`
+(el workflow que se copia al repositorio), `test/ci.test.js`, SPEC §23f. Es la otra mitad de NX-412:
+§4.8 despierta a los agentes que **piensan**; esto despierta a los que **ejecutan**. Medido con la
+fábrica de Rosetta: 7 de sus 8 roles trabajan sobre archivos y no caben en un Worker.
+
+**Alta** (la dirección ya existe; nace APAGADA):
+
+```
+POST /admin/executors            Authorization: Bearer <admin>
+{ "local": "carta.rosetta", "provider": "github", "repo": "OWNER/REPO",
+  "event_type": "nyx5", "owner": "nicholas@nyx5.com", "cupo_dia": 20,
+  "token": "<PAT con Contents: read and write sobre ese repo>" }
+
+PUT  /admin/executors/<local>    { "enabled": true }          enciende, rota el token, cambia el cupo
+GET  /admin/executors            lista; GET /admin/executors/<local> agrega los sobres despachables
+POST /admin/executors/<local>/dispatch   vuelve a intentar lo AGOTADO (no lo que ya corrió)
+DELETE /admin/executors/<local>  quita el ejecutor Y el token
+```
+
+**El token**. Va cifrado en la bóveda (`NYX5_VAULT_KEY`, AAD `ci:<local>`), de sólo escritura: ninguna
+lectura lo devuelve, se muestran los últimos 4. Se ROTA, no se recupera. Un cuerpo de error del
+proveedor que lo repita se redacta antes de guardarse o registrarse.
+
+**En el repositorio** hacen falta dos cosas y nada más: el workflow copiado a
+`.github/workflows/nyx5-ejecutor.yml` y el secret `NYX5_KEY` con el JSON de la llave del rol. La llave
+del rol **no pasa por la casa**: la casa guarda el token de CI, el repositorio guarda la llave de la
+dirección, y cada lado tiene sólo lo suyo.
+
+**Lo que hay que saber para no romperlo**
+
+- **La casa avisa y no cierra el sobre.** Confirmarlo sería prometer que alguien lo tomó. El sobre
+  queda pendiente hasta que el ejecutor conteste; el reloj redespacha hasta `INTENTOS` (3) con espera
+  creciente (1, 5 y 25 minutos) y después le escribe al `owner` nombrando el sobre, el repo, la razón
+  y la ruta para reintentar. Es la lección del `task` que estuvo seis semanas callado: lo que no se
+  sabe hacer se dice, nunca se calla.
+- **Un sobre lo contesta UNO.** Cerebro o ejecutor, nunca los dos: el `409` va en los dos sentidos.
+- **El cupo del día es el freno de plata** y se cobra al DESPACHAR, no al mirar (el cupo de
+  despertares se gastaba sin despertar a nadie, medido el 26-oct). El reintento a mano NO lo levanta.
+- **Un turno por (sobre, intento)** con `kvPutIfAbsent`: dos isolates del edge que vean el mismo
+  pendiente arrancan UN job. La carrera no se ve corriendo el reloj dos veces en Node (el servidor
+  local serializa): se golpea el método, dos despachos concurrentes sobre el mismo almacén.
+- **El aviso se verifica antes de leer el buzón.** Un `repository_dispatch` lo lanza cualquiera con el
+  token del repo y el payload lo escribe quien dispara: `ejecutor recoger` comprueba la firma de la
+  casa contra `/.well-known/nyx5.json` y, si no verifica, no lee nada. Y en el workflow el aviso viaja
+  por **variable de entorno**, nunca interpolado en una línea de shell.
+- **Lo que NO cubre**: el job tiene acceso de escritura al repositorio, así que un encargo de alguien
+  de la lista puede cambiar archivos — el límite es la lista del buzón y lo que haga el paso de
+  trabajo, no el protocolo; una respuesta que el job manda y después muere antes del `ack` hace que la
+  casa redespache y el encargo se conteste dos veces (el `ack` va después del envío a propósito:
+  perder un encargo es peor que repetir una respuesta); y un proveedor nuevo es una decisión, no una
+  configuración (se le da a la casa un host al que puede mandar un token).
+
 ## 5. Interoperabilidad
 
 - **MCP**: `nyx5 mcp --agent keys/x.json` expone el agente como servidor MCP por stdio. Configuración para Claude Desktop en el README. En sentido inverso, un sobre `task` con `media: application/mcp-call+json` es una llamada MCP con buzón.

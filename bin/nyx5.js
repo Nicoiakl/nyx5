@@ -19,6 +19,11 @@
 //   nyx5 ack      --agent ./keys/nicolas.json --id <id>[,<id>]
 //   nyx5 outbox   --agent ./keys/nicolas.json
 //   nyx5 mcp      --agent ./keys/nicolas.json          (servidor MCP por stdio)
+//   --- ejecutor (el lado CI de una dirección que trabaja sobre archivos) ---
+//   nyx5 ejecutor recoger   [--agent ./keys/rol.json] [--out encargo.json]   (verifica el aviso y descifra el encargo)
+//   nyx5 ejecutor responder [--agent ./keys/rol.json] --file respuesta.txt [--no-ack]
+//     El aviso llega en NYX5_AVISO (el client_payload del disparo) y la llave del rol en NYX5_KEY
+//     o en --agent. Sin NYX5_AVISO no hace nada: este comando no inventa un encargo.
 //   --- Libro ---
 //   nyx5 topup    --estafeta http://127.0.0.1:4001 --admin-token secreto --account nicolas@alfa.local --amount 1000
 //   nyx5 balance  --agent ./keys/nicolas.json [--house alfa.local]
@@ -37,6 +42,7 @@ import { Estafeta } from '../src/correo/estafeta.js';
 import { Agent } from '../src/correo/agente.js';
 import { Resolver } from '../src/correo/resolver.js';
 import { runMcpServer } from '../src/puentes/mcp.js';
+import { recoger, responder } from '../src/puentes/ejecutor.js';
 import { join, mandate, bloqueMcp } from '../src/correo/unirse.js';
 import os from 'node:os';
 
@@ -53,6 +59,7 @@ const { values: o } = parseArgs({ args: rest, allowPositionals: true, options: {
   quote: { type: 'string' }, op: { type: 'string' }, name: { type: 'string' }, scope: { type: 'string' },
   runtime: { type: 'string' }, listed: { type: 'boolean' }, source: { type: 'string' }, cap: { type: 'string' }, grantee: { type: 'string' }, yes: { type: 'boolean' },
   args: { type: 'string' }, index: { type: 'string' }, arbiter: { type: 'string' }, receipt: { type: 'string' }, limit: { type: 'string' },
+  file: { type: 'string' }, 'no-ack': { type: 'boolean' },
 } });
 
 const need = (k) => { if (!o[k]) { console.error(`missing --${k}`); process.exit(2); } return o[k]; };
@@ -291,6 +298,35 @@ try {
     case 'ack': print({ acked: await (await loadAgent()).ack(need('id').split(',')) }); break;
     case 'outbox': print(await (await loadAgent()).outbox()); break;
     case 'mcp': await runMcpServer({ agentFile: need('agent'), hosts: loadHosts() }); break;
+
+    // El ejecutor: lo que corre dentro del job de CI que la casa disparó. La llave del rol viene de
+    // un secret (NYX5_KEY), no de un archivo del repositorio, y el aviso de la variable que el
+    // workflow pasa. `recoger` verifica la firma de la casa ANTES de leer el buzón.
+    case 'ejecutor': {
+      const accion = rest.find((x) => !x.startsWith('-'));
+      const aviso = process.env.NYX5_AVISO;
+      if (!aviso) { console.error('missing NYX5_AVISO (the client_payload of the dispatch)'); process.exit(2); }
+      const keys = process.env.NYX5_KEY ? JSON.parse(process.env.NYX5_KEY)
+        : (o.agent ? JSON.parse(fs.readFileSync(o.agent, 'utf8')) : null);
+      if (!keys) { console.error('missing NYX5_KEY (or --agent FILE) with the role key'); process.exit(2); }
+      const comun = { aviso, keys, estafeta: o.estafeta || null, hosts: loadHosts() };
+      if (accion === 'recoger') {
+        const r = await recoger(comun);
+        const salida = { envelope: r.envelope?.id || null, from: r.aviso.from, type: r.aviso.type, project: r.aviso.project || null, reason: r.reason, body: r.encargo?.body ?? null, media: r.encargo?.media ?? null };
+        if (o.out) fs.writeFileSync(o.out, JSON.stringify(salida, null, 2));
+        print(salida);
+        break;
+      }
+      if (accion === 'responder') {
+        const texto = o.file ? fs.readFileSync(o.file, 'utf8') : o.body;
+        if (!texto) { console.error('missing --file ARCHIVO (or --body) with the answer'); process.exit(2); }
+        print(await responder({ ...comun, texto, ack: !o['no-ack'] }));
+        break;
+      }
+      console.error('nyx5 ejecutor recoger | nyx5 ejecutor responder --file ARCHIVO');
+      process.exit(2);
+      break;
+    }
 
     // ----- Libro -----
     case 'topup': {

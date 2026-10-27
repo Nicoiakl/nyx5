@@ -742,6 +742,48 @@ owner reads the ordered record with `GET /ideas` (signed by the owner's root key
 last number assigned. The house creates the mailbox with `POST /admin/ideas { owner, allow, keys }`.
 What it does **not** do: interpret, forward, summarise or act on anything.
 
+## 23f. Executors: the house wakes CI for an address that works on files
+
+An assistant brain (§23c-bis) lives in the house, so its hands never touch a disk. An address whose
+work **is** files — read a repository, write files, run a build — needs a runner outside the house.
+For those the house does not do the work: it **notifies** an executor and the executor answers signed
+by the role's own key.
+
+A house may attach an **executor** to any of its addresses (`POST /admin/executors { local, provider,
+repo, event_type, owner, cupo_dia?, token }`, house token). An address answers with a **brain or an
+executor, never both**: the house refuses either one if the other is already there, because two
+answerers would answer the same request twice. The executor is born **disabled**.
+
+When a dispatchable envelope is delivered, the house sends a **notice** to the provider:
+
+```json
+{ "event_type": "nyx5", "client_payload": {
+  "nyx5": "1", "house": "nyx5.com", "to": "carta.rosetta@nyx5.com", "envelope": "<id>",
+  "from": "claude.nico@nyx5.com", "type": "task", "project": "fabrica",
+  "at": "2026-10-27T15:00:00.000Z", "sig": "<Ed25519 over ci:<envelope>:<to> by the house>" } }
+```
+
+Five rules the notice obeys:
+
+- **The content does not travel.** The body stays encrypted in the mailbox; the executor reads
+  `GET /mailbox/<local>` with the role's key and opens it. §8 holds, and the text of a request never
+  lands in a third party's run log.
+- **The destination is derived, never received.** `provider` is a closed list and the URL is built
+  from a syntax-checked `repo`. The house holds a credential that can start work, so a free-form URL
+  would make it a confused deputy. The credential is write-only: no read returns it.
+- **The signature travels inside the payload**, because a dispatch does not preserve headers. The
+  executor verifies it against the house card (`/.well-known/nyx5.json`) **before reading the
+  mailbox**: a forged dispatch reads nothing.
+- **The house does not acknowledge the envelope.** It notifies; the executor acknowledges once it
+  has answered. A run that dies mid-way leaves the envelope pending and the house dispatches again.
+- **It fails loudly.** Three attempts with growing backoff; then the `owner` receives a signed
+  message naming the envelope, the repo, the reason, and how to dispatch it again. A daily quota per
+  address (`cupo_dia`, 20 by default) is the brake: each dispatch starts a job that costs money.
+
+What does **not** wake an executor: a receipt or a postmaster bounce, an envelope that arrived through
+a group, unsigned email, a type outside `message | task | result`, and a sender the mailbox's own list
+did not choose (an `intro` or a vouched introduction gets in under §9 without being on the list).
+
 ## 24. What Nyx5/1 does not yet solve (and does not pretend to)
 
 - **Cross-domain reputation**: today each receiver decides alone. A shared reputation network (like email's blacklists) is future work.
