@@ -53,13 +53,39 @@ export function verificarAviso(aviso, tarjeta) {
   return tarjeta.keys.some((k) => { try { return verifyBytes(mensaje, aviso.sig, k.sig); } catch { return false; } });
 }
 
-function agenteDe(aviso, llaves, { estafeta = null, hosts = {}, fetchImpl = globalThis.fetch } = {}) {
-  if (!llaves?.sig || !llaves?.sigPriv || !llaves?.enc || !llaves?.encPriv) {
-    throw new Error('the role key must carry sig, sigPriv, enc and encPriv');
+const COMPLETA = (k) => !!(k?.sig && k?.sigPriv && k?.enc && k?.encPriv);
+
+// Qué formas de llave se aceptan, y por qué tres y no una. La canónica es la que escribe
+// `nyx5 keygen`: `{ address, estafeta, keys: { sig, sigPriv, enc, encPriv } }`. La plana es la misma
+// sin el envoltorio, que es lo que tiene a mano quien arma el secret desde otro lado. Y el MAPA
+// `{ "<dirección>": <una de las dos> }` existe porque un repositorio suele ser la casa de VARIOS
+// roles: la fábrica de Rosetta tiene siete que ejecutan, y pedir siete secrets para un workflow que
+// ya sabe a quién va dirigido el aviso es fricción sin nada a cambio. Del mapa se usa SÓLO la
+// entrada del destinatario del aviso.
+export function llaveDe(bulto, destino) {
+  if (!bulto || typeof bulto !== 'object') throw new Error('the role key must be a JSON object');
+  const dir = String(destino).toLowerCase();
+  const una = (k) => {
+    if (COMPLETA(k?.keys)) return { address: String(k.address || dir).toLowerCase(), keys: k.keys };
+    if (COMPLETA(k)) return { address: String(k.address || dir).toLowerCase(), keys: { sig: k.sig, sigPriv: k.sigPriv, enc: k.enc, encPriv: k.encPriv } };
+    return null;
+  };
+  const sola = una(bulto);
+  if (sola) return sola;
+  // Un mapa: se busca por la dirección del aviso y se ignora todo lo demás.
+  if (Object.hasOwn(bulto, dir)) {
+    const del = una(bulto[dir]);
+    if (del) return { address: dir, keys: del.keys };
   }
-  const dir = String(llaves.address || aviso.to).toLowerCase();
-  if (dir !== String(aviso.to).toLowerCase()) throw new Error(`that key is of ${dir}, and the notice is for ${aviso.to}`);
-  return new Agent({ address: dir, keys: llaves, estafeta: estafeta || `https://${aviso.house}`, hosts, fetchImpl });
+  const direcciones = Object.keys(bulto).filter((k) => k.includes('@'));
+  if (direcciones.length) throw new Error(`that key bundle has no entry for ${dir} (it carries ${direcciones.length})`);
+  throw new Error('the role key must carry sig, sigPriv, enc and encPriv (or be a map of address to key)');
+}
+
+function agenteDe(aviso, bulto, { estafeta = null, hosts = {}, fetchImpl = globalThis.fetch } = {}) {
+  const { address, keys } = llaveDe(bulto, aviso.to);
+  if (address !== String(aviso.to).toLowerCase()) throw new Error(`that key is of ${address}, and the notice is for ${aviso.to}`);
+  return new Agent({ address, keys, estafeta: estafeta || `https://${aviso.house}`, hosts, fetchImpl });
 }
 
 // Paso 1 + 2: verificar y recoger. Devuelve el sobre y el encargo ya descifrado.

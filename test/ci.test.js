@@ -31,7 +31,7 @@ import {
   PROVEEDORES, TIPOS_DESPACHADOS, CUPO_DESPACHOS_DIA, INTENTOS, ESPERAS,
   validarConfig, urlDe, avisoDe, despachable, despachar, atenderEjecutores, sinSecretos,
 } from '../src/correo/ci.js';
-import { parsearAviso, verificarAviso, tarjetaDeCasa, recoger, responder } from '../src/puentes/ejecutor.js';
+import { parsearAviso, verificarAviso, tarjetaDeCasa, recoger, responder, llaveDe } from '../src/puentes/ejecutor.js';
 
 // Puerto propio de esta suite (npm test corre los archivos en paralelo). Lo cuida test/puertos.test.js.
 const P = 4841;
@@ -557,6 +557,30 @@ test('recorrido completo: la casa dispara, el job recoge el encargo descifrado, 
   assert.equal(llego.envelope.in_reply_to, env.id);
   assert.equal(llego.envelope.type, 'result');
   assert.equal((await duena.open(llego.envelope)).content.body, 'ruta desplegada; PNG 1200x630 en paper claro');
+});
+
+test('la llave del rol se lee TAL CUAL la escribe `nyx5 keygen`, y un repositorio puede traer varias', async () => {
+  // Defecto real, cazado al mirar un archivo de la fábrica de Rosetta y no el ejemplo de la prueba:
+  // `nyx5 keygen` escribe `{ address, estafeta, keys: { ... } }` y este módulo esperaba la forma
+  // PLANA. Un secret armado con el archivo de verdad habría fallado en el primer job.
+  const canonica = { address: rol.address, estafeta: URL_CASA, keys: { ...rol.keys } };
+  const plana = { address: rol.address, ...rol.keys };
+  const mapa = { [rol.address]: canonica, [extrano.address]: { address: extrano.address, keys: { ...extrano.keys } } };
+  for (const [nombre, bulto] of Object.entries({ canonica, plana, mapa })) {
+    const l = llaveDe(bulto, rol.address);
+    assert.equal(l.address, rol.address, `forma ${nombre}`);
+    assert.equal(l.keys.sig, rol.keys.sig, `forma ${nombre}`);
+    assert.equal(l.keys.sigPriv, rol.keys.sigPriv, `forma ${nombre}`);
+  }
+  // Del mapa se usa SÓLO la entrada del destinatario, y si no está se dice cuántas trae.
+  assert.throws(() => llaveDe({ [extrano.address]: { address: extrano.address, keys: { ...extrano.keys } } }, rol.address), /no entry for .*\(it carries 1\)/);
+  assert.throws(() => llaveDe({ keys: { sig: 'a' } }, rol.address), /must carry sig, sigPriv, enc and encPriv/);
+  assert.throws(() => llaveDe('no soy objeto', rol.address), /must be a JSON object/);
+  // Y el camino completo funciona con la forma canónica, que es la que hay en el disco.
+  const aviso = avisoDe(casa, 'carta.rosetta', { id: 'no-esta-en-el-buzon-1', from: duena.address, type: 'task', created: new Date().toISOString() });
+  const r = await recoger({ aviso, keys: canonica, estafeta: URL_CASA, hosts });
+  assert.equal(r.envelope, null);
+  assert.match(r.reason, /no longer in the mailbox/, 'un sobre ya confirmado no es un error del aviso');
 });
 
 test('una llave que no es la del aviso no recoge nada, y una respuesta vacía no es una respuesta', async () => {

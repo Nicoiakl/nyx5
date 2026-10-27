@@ -398,9 +398,12 @@ lectura lo devuelve, se muestran los últimos 4. Se ROTA, no se recupera. Un cue
 proveedor que lo repita se redacta antes de guardarse o registrarse.
 
 **En el repositorio** hacen falta dos cosas y nada más: el workflow copiado a
-`.github/workflows/nyx5-ejecutor.yml` y el secret `NYX5_KEY` con el JSON de la llave del rol. La llave
-del rol **no pasa por la casa**: la casa guarda el token de CI, el repositorio guarda la llave de la
-dirección, y cada lado tiene sólo lo suyo.
+`.github/workflows/nyx5-ejecutor.yml` y el secret `NYX5_KEY` con el contenido TAL CUAL del archivo que
+da `nyx5 keygen` (`{ address, estafeta, keys: {…} }`), o un MAPA `{ "<dirección>": <ese archivo> }`
+cuando el mismo repositorio es la casa de varios roles. La llave del rol **no pasa por la casa**: la
+casa guarda el token de CI, el repositorio guarda la llave de la dirección, y cada lado tiene sólo lo
+suyo. `llaveDe` acepta las tres formas; que esperara sólo la plana fue un defecto cazado mirando un
+archivo de verdad de la fábrica y no el ejemplo de la prueba.
 
 **Lo que hay que saber para no romperlo**
 
