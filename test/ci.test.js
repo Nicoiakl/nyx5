@@ -32,6 +32,7 @@ import {
   validarConfig, urlDe, avisoDe, despachable, despachar, atenderEjecutores, sinSecretos,
 } from '../src/correo/ci.js';
 import { parsearAviso, verificarAviso, tarjetaDeCasa, recoger, responder, llaveDe } from '../src/puentes/ejecutor.js';
+import { esEncargo, porGrupo } from '../src/correo/asistente.js';
 
 // Puerto propio de esta suite (npm test corre los archivos en paralelo). Lo cuida test/puertos.test.js.
 const P = 4841;
@@ -275,20 +276,57 @@ test('reentregar el mismo sobre no vuelve a arrancar el job (invariante 4), y el
 test('lo que NO despierta a un ejecutor, y cada caso por su razón', async () => {
   const rec = await casa.store.getAgent('carta.rosetta');
   const base = { id: 'x', from: duena.address, to: [rol.address], type: 'task', signature: { sig: 'x' } };
+  // El fixture se comprueba ANTES de usarlo. La versión del 27-oct pasaba los seis casos con la
+  // clave `env` en vez de `envelope`: `despachable` leía `m.envelope`, le llegaba undefined, y
+  // devolvía false por «sin firma». Seis casos en verde sin ejercer ninguno — verde por ausencia.
+  assert.equal(despachable(casa, 'carta.rosetta', rec, { envelope: base, from_verified: true }), true,
+    'el fixture base tiene que DESPERTAR: si no, los casos de abajo pasan por la razón equivocada');
+  assert.equal(despachable(casa, 'carta.rosetta', rec, { env: base, from_verified: true }), false,
+    'y la clave mal escrita tiene que dar false: es lo que hacía vacía a esta prueba');
+
   const casos = {
-    'un recibo del Libro': { env: { ...base, from: `libro@${H}`, type: 'receipt' } },
-    'un rebote del postmaster': { env: { ...base, from: `postmaster@${H}`, type: 'message' } },
-    'correo sin firma (entró por el puente)': { env: { ...base, signature: undefined }, from_verified: false },
-    'un sobre que llegó por un grupo': { env: { ...base, to: [`g.fabrica@${H}`] } },
-    'un tipo que no es un encargo': { env: { ...base, type: 'quote' } },
-    'un remitente que la lista del buzón NO eligió': { env: { ...base, from: extrano.address } },
+    'un recibo del Libro': { ...base, from: `libro@${H}`, type: 'receipt' },
+    'un rebote del postmaster': { ...base, from: `postmaster@${H}`, type: 'message' },
+    'charla suelta en un grupo (sin proyecto ni rol, y no es task)': { ...base, to: [`g.fabrica@${H}`], type: 'message' },
+    'un tipo que no es un encargo': { ...base, type: 'quote' },
+    'un remitente que la lista del buzón NO eligió': { ...base, from: extrano.address },
   };
-  for (const [nombre, m] of Object.entries(casos)) {
-    assert.equal(despachable(casa, 'carta.rosetta', rec, m), false, `despertó al ejecutor: ${nombre}`);
+  for (const [nombre, env] of Object.entries(casos)) {
+    assert.equal(despachable(casa, 'carta.rosetta', rec, { envelope: env, from_verified: true }), false, `despertó al ejecutor: ${nombre}`);
   }
-  // Y lo que SÍ: el encargo de alguien de la lista, y el recordatorio que el rol se deja a sí mismo.
-  assert.equal(despachable(casa, 'carta.rosetta', rec, { envelope: base, from_verified: true }), true);
-  assert.equal(despachable(casa, 'carta.rosetta', rec, { envelope: { ...base, from: rol.address }, from_verified: true }), true);
+  // El correo sin firma va aparte: su señal es `from_verified`, no el sobre.
+  assert.equal(despachable(casa, 'carta.rosetta', rec, { envelope: { ...base, signature: undefined }, from_verified: false }), false);
+
+  // Y lo que SÍ despierta, incluido lo que cambió el 29-oct: un ENCARGO que llega por un grupo.
+  const si = {
+    'un encargo directo': { ...base },
+    'el recordatorio que el rol se deja a sí mismo': { ...base, from: rol.address },
+    'un `task` por grupo': { ...base, to: [`g.fabrica@${H}`] },
+    'un `message` por grupo que declara proyecto Y rol': { ...base, to: [`g.fabrica@${H}`], type: 'message', extensions: { 'urn:nyx5:ext:proyecto': { project: 'santander', role: 'cowork' } } },
+  };
+  for (const [nombre, env] of Object.entries(si)) {
+    assert.equal(despachable(casa, 'carta.rosetta', rec, { envelope: env, from_verified: true }), true, `NO despertó al ejecutor: ${nombre}`);
+  }
+});
+
+test('el criterio de «esto es un encargo» es UNO para el cerebro y para el ejecutor', async () => {
+  // Dos definiciones se separan en cuanto alguien toque una, y entonces el mismo sobre despierta a
+  // un cerebro y no a un ejecutor (o al revés). `ci.js` importa la de `asistente.js`: esto lo cruza.
+  const fuente = fs.readFileSync(path.join(raiz, 'src/correo/ci.js'), 'utf8');
+  assert.match(fuente, /import \{ esEncargo, porGrupo \} from '\.\/asistente\.js';/,
+    'el ejecutor tiene que IMPORTAR el criterio, no reescribirlo');
+  assert.ok(!/startsWith\('g\.'\)/.test(fuente), 'el ejecutor volvió a escribir su propia prueba de grupo');
+  const rec = await casa.store.getAgent('carta.rosetta');
+  const base = { id: 'x', from: duena.address, signature: { sig: 'x' } };
+  for (const [nombre, env] of Object.entries({
+    'task por grupo': { ...base, to: [`g.x@${H}`], type: 'task' },
+    'charla por grupo': { ...base, to: [`g.x@${H}`], type: 'message' },
+    'proyecto y rol por grupo': { ...base, to: [`g.x@${H}`], type: 'message', extensions: { 'urn:nyx5:ext:proyecto': { project: 'p', role: 'r' } } },
+  })) {
+    const cerebro = porGrupo(env) && !esEncargo(env) ? false : true;   // lo que haría atenderAsistentes
+    const ejecutor = despachable(casa, 'carta.rosetta', rec, { envelope: env, from_verified: true });
+    assert.equal(ejecutor, cerebro, `el cerebro y el ejecutor no coinciden en: ${nombre}`);
+  }
 });
 
 // ---------- el freno de plata y la carrera ----------

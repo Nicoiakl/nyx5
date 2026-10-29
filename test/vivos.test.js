@@ -22,7 +22,7 @@ import { randomBytes } from 'node:crypto';
 import { generateKeys } from '../src/nucleo/crypto.js';
 import { Estafeta } from '../src/correo/estafeta.js';
 import { Agent } from '../src/correo/agente.js';
-import { TIPOS_ATENDIDOS, NO_ATIENDE, CUPO_DESPERTAR, LIMITES_ENTRADA, DEMASIADO_LARGO, CORTADO, atenderAsistentes, gastoDe, leerFlujo } from '../src/correo/asistente.js';
+import { TIPOS_ATENDIDOS, NO_ATIENDE, CUPO_DESPERTAR, LIMITES_ENTRADA, DEMASIADO_LARGO, CORTADO, atenderAsistentes, gastoDe, leerFlujo, esEncargo, porGrupo } from '../src/correo/asistente.js';
 import { ACCIONES, CUPO_ENVIOS_DIA, NOMBRES, NO_ESCRIBIR, IDEAS, MAX_ENVIOS, MAX_RECORDATORIOS, MAX_PASOS, SOLO_RAIZ, destinosDe, ejecutar, herramientasDe } from '../src/correo/acciones.js';
 import { LOCAL as IDEAS_LOCAL } from '../src/correo/ideas.js';
 
@@ -903,4 +903,60 @@ test('el cupo de despertares se cobra al TOMAR el turno, no al mirar el buzón (
     casa.timer = setInterval(() => casa.tick().catch(() => {}), casa.workerIntervalMs);
     casa.timer.unref?.();
   }
+});
+
+// ---------- 5. un ENCARGO por grupo despierta (29-oct-2026, decisión de Nicholas) ----------
+// Nació de un caso medido: su Claude web mandó el paquete Santander a `g.rosetta@` —plazo lunes,
+// reunión el martes— y no despertó a nadie, porque hasta ese día un sobre de grupo no despertaba ni
+// a un cerebro ni a un ejecutor. El canal que uno usa para repartirle trabajo a un equipo era el
+// único que no podía despertar. Ahora despierta si es un ENCARGO; la charla del grupo, no.
+
+test('un ENCARGO por grupo despierta a CADA cerebro (grito), la respuesta va a quien encargó y no al grupo, y la charla sigue sin despertar (silencio)', async () => {
+  const a1 = await altaDelegado('encargo1', { budget_usd: 5 });
+  const a2 = await altaDelegado('encargo2', { budget_usd: 5 });
+  const sala = await duena.createGroup('sala-encargo', { members: [a1.address, a2.address] });
+  const n = pedidos.length;
+  const desde = Date.now();
+  const env = await duena.send({ to: sala.address, type: 'task', body: 'ENCARGO: medí el borde y reportá', project: 'santander', role: 'cowork' });
+
+  // GRITO: las DOS direcciones contestan. Antes del 29-oct no contestaba ninguna por la regla del
+  // grupo; y con la regla arreglada habría contestado UNA SOLA, porque el candado del turno se
+  // guardaba con el id del sobre a secas — y el mismo sobre vive en el buzón de cada miembro.
+  const r1 = await duena.waitFor((e) => e.from === a1.address && e.in_reply_to === env.id, { timeoutMs: 9000 });
+  const r2 = await duena.waitFor((e) => e.from === a2.address && e.in_reply_to === env.id, { timeoutMs: 9000 });
+  assert.ok(r1 && r2, 'un encargo por grupo tiene que despertar a cada cerebro del grupo');
+  const deEsteEncargo = (desde_) => pedidos.slice(desde_).filter((p) => JSON.stringify(p.body.messages).includes('medí el borde y reportá'));
+  assert.equal(deEsteEncargo(n).length, 2, `una llamada a la API por cerebro, no más: ${deEsteEncargo(n).length}`);
+
+  // La respuesta va a QUIEN ENCARGÓ, nunca al grupo: un encargo a quince miembros no se convierte
+  // en quince mensajes para los quince (es la regla de silencio de Nicholas, en el protocolo).
+  for (const r of [r1, r2]) {
+    assert.deepEqual(r.envelope.to, [duena.address], 'la respuesta se fue al grupo');
+    assert.ok(!(r.envelope.to || []).some((t) => t.startsWith('g.')), 'la respuesta se fue al grupo');
+  }
+  // Y el sobre del encargo quedó cerrado en los dos buzones: no vuelve en el tick siguiente.
+  for (const d of [a1, a2]) {
+    assert.equal((await casa.store.listMail(d.local)).filter((m) => m.envelope.id === env.id).length, 0, `${d.local} dejó el encargo pendiente`);
+  }
+
+  // SILENCIO: la charla del grupo —sin proyecto, sin rol, y no es `task`— sigue sin costar un peso.
+  const n2 = pedidos.length;
+  await duena.send({ to: sala.address, body: 'charla suelta, sin proyecto ni rol' });
+  await espera(1500);
+  const porLaCharla = pedidos.slice(n2).filter((p) => JSON.stringify(p.body.messages).includes('charla suelta, sin proyecto ni rol'));
+  assert.deepEqual(porLaCharla, [], 'la charla de un grupo despertó a un cerebro y gastó el tope del dueño');
+});
+
+test('el criterio de encargo es una sola función, y distingue la intención DECLARADA de la palabra del texto', () => {
+  const g = (extra) => ({ to: ['g.sala@casa'], ...extra });
+  assert.equal(porGrupo(g({})), true);
+  assert.equal(porGrupo({ to: ['alguien@casa'] }), false);
+  // Lo que ES un encargo: el tipo del protocolo, o proyecto Y rol declarados.
+  assert.equal(esEncargo(g({ type: 'task' })), true);
+  assert.equal(esEncargo(g({ type: 'message', extensions: { 'urn:nyx5:ext:proyecto': { project: 'santander', role: 'cowork' } } })), true);
+  // Lo que NO: la charla, el proyecto sin rol, y un texto que DICE «encargo» sin declarar nada.
+  assert.equal(esEncargo(g({ type: 'message' })), false);
+  assert.equal(esEncargo(g({ type: 'message', extensions: { 'urn:nyx5:ext:proyecto': { project: 'santander' } } })), false);
+  assert.equal(esEncargo(g({ type: 'message', content: { media: 'text/plain', body: 'ENCARGO URGENTE: hacelo ya' } })), false,
+    'la palabra en el texto no es la intención: la declara el sobre, que va firmado');
 });

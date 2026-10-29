@@ -18,6 +18,7 @@
 //     un Claude conectado. Sólo mensajes: no toca el Libro.
 // La llamada va por HTTP directo porque este repo no admite dependencias.
 import { parseAddress } from './resolver.js';
+import { proyectoDe, rolDe } from './politica.js';
 import { sha256hex, signObject, uuid } from '../nucleo/crypto.js';
 import { SHA256_HEX } from '../libro/notaria.js';
 import { CUPO_ENVIOS_DIA, INSTRUCCION_MANOS, MAX_PASOS, destinosDe, ejecutar, herramientasDe } from './acciones.js';
@@ -241,6 +242,22 @@ function textoDe(c) {
 // «te encargo esto», así que el silencio iba a repetirse entre agentes. Lo que no está en esta lista
 // tampoco se ignora: se contesta diciendo qué llegó y qué se atiende, y se confirma.
 export const TIPOS_ATENDIDOS = Object.freeze(['message', 'task', 'result']);
+// ¿Un sobre que llegó por un GRUPO es un ENCARGO o es charla? (29-oct-2026)
+//
+// Hasta hoy un sobre de grupo no despertaba a nadie, ni cerebro ni ejecutor, con esta razón mía del
+// 26-oct: «un grupo es un camino que la lista del buzón no eligió». Es cierto para quince miembros
+// conversando y FALSO para un encargo con plazo. El 29-oct Nicholas le pidió a su Claude web que
+// mandara el paquete Santander a `g.rosetta@` — plazo lunes, reunión el martes — y no despertó a
+// nadie: el único canal que uno usaría para repartirle trabajo a un equipo era el único que no
+// podía despertar. Decisión suya ese día: un encargo por grupo SÍ despierta.
+//
+// La línea es la INTENCIÓN DECLARADA, no la palabra del texto: un sobre de tipo `task` (el término
+// del protocolo para «te encargo esto») o uno que declara proyecto Y rol, que es lo que pone quien
+// reparte trabajo. La charla suelta del grupo no trae ninguna de las dos y sigue sin despertar.
+// La respuesta NO va al grupo: `responder` contesta siempre a `envelope.from`, así que un encargo a
+// quince miembros no se convierte en quince mensajes para los quince.
+export const esEncargo = (env) => env?.type === 'task' || !!(proyectoDe(env) && rolDe(env));
+export const porGrupo = (env) => (env?.to || []).some((t) => { try { return parseAddress(t).local.startsWith('g.'); } catch { return false; } });
 export const NO_ATIENDE = (tipo, tipos) => `I do not handle envelopes of type "${tipo}". I handle: ${tipos.join(', ')}. Nothing was done with this one; send it again as one of those types if you want an answer.`;
 // Veces por día UTC que un asistente puede despertarse por su propio recordatorio. Un turno que
 // agenda el siguiente es un bucle, y el único freno sería el tope en dólares del dueño.
@@ -290,7 +307,7 @@ export async function atenderAsistentes(est, { maxPorTick = 3, maxRebotesPorTick
       // El rebote va bajo el MISMO turno por sobre que la respuesta: dos relojes (dos isolates) que
       // vieran el mismo sobre pendiente mandarían dos rebotes iguales.
       if (rebote && rebotes < maxRebotesPorTick && !(await cobraEstampilla(est, e.from))
-        && await est.store.kvPutIfAbsent('asistente-turno', e.id, { at: new Date().toISOString() }, Date.now() + 15 * 60_000)) {
+        && await est.store.kvPutIfAbsent('asistente-turno', `${local}:${e.id}`, { at: new Date().toISOString() }, Date.now() + 15 * 60_000)) {
         rebotes++;
         const agente = await agenteDe();
         await agente?.send({ to: e.from, body: rebote, thread: e.thread || e.id, inReplyTo: e.id }).catch(() => {});
@@ -309,9 +326,11 @@ export async function atenderAsistentes(est, { maxPorTick = 3, maxRebotesPorTick
       // y no se cierra: que lo vea quien mire el buzón. Es lo único que sigue quedándose pendiente.
       if (!e.signature || m.from_verified === false) continue;
       if (deSistema) { await cerrar(e, `${e.from} es una dirección de sistema`); continue; }
-      // Un asistente contesta correo directo, nunca un grupo: su tope en dólares es de su dueño, y un
-      // grupo es un sobre que llega por un camino que su lista no eligió (revisión del 13-sep-2026).
-      if ((e.to || []).some((t) => { try { return parseAddress(t).local.startsWith('g.'); } catch { return false; } })) { await cerrar(e, 'llegó por un grupo'); continue; }
+      // Un grupo despierta sólo si lo que llegó es un ENCARGO (ver `esEncargo`): la charla del grupo
+      // se cierra sin contestar, como antes. Lo que NO cambia: el tope en dólares es del dueño, así
+      // que un encargo a un grupo con varios cerebros gasta el tope de CADA uno — hoy son dos en la
+      // casa y ninguno está en un grupo, y lo acotan el tope mensual y el cupo del día.
+      if (porGrupo(e) && !esEncargo(e)) { await cerrar(e, 'llegó por un grupo y no es un encargo'); continue; }
       const propio = e.from === propia;
       if (!propio && porLista && !lista.has(String(e.from).toLowerCase()) && !lista.has(de.domain)) { await cerrar(e, 'el remitente no está en la lista del buzón'); continue; }
       if (!TIPOS_ATENDIDOS.includes(e.type)) { await cerrar(e, `tipo ${e.type}`, propio ? null : NO_ATIENDE(e.type, TIPOS_ATENDIDOS)); continue; }
@@ -332,7 +351,11 @@ export async function atenderAsistentes(est, { maxPorTick = 3, maxRebotesPorTick
     for (const m of pendientes) {
       // Un turno por mensaje: dos relojes que se pisan no contestan dos veces. Si la respuesta falla,
       // el turno vence a los 15 minutos y se reintenta; a la tercera falla se avisa y se cierra.
-      if (!(await est.store.kvPutIfAbsent('asistente-turno', m.envelope.id, { at: new Date().toISOString() }, Date.now() + 15 * 60_000))) continue;
+      // El candado lleva la DIRECCIÓN además del sobre. Sin ella, un sobre con varios
+      // destinatarios —y todo sobre de grupo lo es— lo contestaba UNO solo: el primer reloj tomaba
+      // el turno y los demás buzones lo veían ocupado para siempre. Era un defecto de antes que
+      // sólo se vio al dejar entrar los encargos por grupo.
+      if (!(await est.store.kvPutIfAbsent('asistente-turno', `${local}:${m.envelope.id}`, { at: new Date().toISOString() }, Date.now() + 15 * 60_000))) continue;
       // Con el turno ganado, un despertar propio se COBRA (atómico): un solo reloj lo cuenta una vez.
       if (m.envelope.from === propia && est.store.kvIncrement) {
         const n = await est.store.kvIncrement('asistente-despertar', `${local}:${diaDe(nowMs)}`, (Math.floor(nowMs / DIA_MS) + 2) * DIA_MS, nowMs);
@@ -341,13 +364,13 @@ export async function atenderAsistentes(est, { maxPorTick = 3, maxRebotesPorTick
       try {
         const r = await responder(est, local, cfg, rec, m);
         // Otro reloj está cobrándole a este mismo cliente: se suelta el turno y se reintenta al siguiente.
-        if (r?.ocupado) { await est.store.kvDelete?.('asistente-turno', m.envelope.id); continue; }
+        if (r?.ocupado) { await est.store.kvDelete?.('asistente-turno', `${local}:${m.envelope.id}`); continue; }
         atendidos++;
       }
       catch (e) {
         est.log(`asistente ${local}: ${e.message}`);
-        const fallas = ((await est.store.kvGet('asistente-fallas', m.envelope.id)) || 0) + 1;
-        await est.store.kvPut('asistente-fallas', m.envelope.id, fallas, Date.now() + 24 * 3600_000);
+        const fallas = ((await est.store.kvGet('asistente-fallas', `${local}:${m.envelope.id}`)) || 0) + 1;
+        await est.store.kvPut('asistente-fallas', `${local}:${m.envelope.id}`, fallas, Date.now() + 24 * 3600_000);
         if (fallas >= 3) {
           const agente = await est.agenteDeBoveda(local);
           await agente?.send({ to: m.envelope.from, body: 'No pude contestar este mensaje después de tres intentos. Quedó guardado; si es urgente, escríbelo de nuevo más tarde.', thread: m.envelope.thread || m.envelope.id, inReplyTo: m.envelope.id }).catch(() => {});

@@ -780,9 +780,18 @@ Five rules the notice obeys:
   message naming the envelope, the repo, the reason, and how to dispatch it again. A daily quota per
   address (`cupo_dia`, 20 by default) is the brake: each dispatch starts a job that costs money.
 
-What does **not** wake an executor: a receipt or a postmaster bounce, an envelope that arrived through
-a group, unsigned email, a type outside `message | task | result`, and a sender the mailbox's own list
-did not choose (an `intro` or a vouched introduction gets in under §9 without being on the list).
+What does **not** wake an executor: a receipt or a postmaster bounce, unsigned email, a type outside
+`message | task | result`, a sender the mailbox's own list did not choose (an `intro` or a vouched
+introduction gets in under §9 without being on the list), and **group chatter** — an envelope that
+arrived through a group wakes nobody *unless it is a work order*.
+
+A group envelope is a **work order** when it declares the intention in the envelope, which is signed:
+its type is `task`, or it carries both a project and a role (§11). Chatter carries neither and is
+closed without an answer, as before. The word "order" in the text means nothing — the envelope
+declares it, not the prose. This is one function shared by brains and executors, so the same envelope
+can never wake one and not the other. The answer goes to the **sender**, never back to the group: one
+order to fifteen members must not become fifteen messages for the fifteen. The owner's monthly cap
+still applies per brain, so one order to a group of several brains spends each of their caps.
 
 ## 24. What Nyx5/1 does not yet solve (and does not pretend to)
 
