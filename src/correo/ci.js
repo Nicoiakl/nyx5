@@ -26,6 +26,7 @@
 //    el buzón de qa@ nació justo de un camino que fallaba sin decirlo.
 
 import { parseAddress } from './resolver.js';
+import { esEncargo, porGrupo } from './asistente.js';
 import { signBytes } from '../nucleo/crypto.js';
 import { proyectoDe } from './politica.js';
 
@@ -136,8 +137,11 @@ export function despachable(est, local, rec, m) {
   if (!env.signature || m.from_verified === false) return false;
   let de; try { de = parseAddress(env.from); } catch { return false; }
   if (de.domain === est.domain && SISTEMA.has(de.local)) return false;
-  // Un grupo es un camino que la lista del buzón no eligió (el mismo criterio que para un cerebro).
-  if ((env.to || []).some((t) => { try { return parseAddress(t).local.startsWith('g.'); } catch { return false; } })) return false;
+  // Un grupo despierta sólo si lo que llegó es un ENCARGO, y el criterio es UNA función compartida
+  // con el cerebro (`esEncargo` en asistente.js): dos definiciones de «esto es un encargo» se
+  // separan en cuanto alguien toque una, y entonces el mismo sobre despierta a un cerebro y no a un
+  // ejecutor. Lo cruza una prueba.
+  if (porGrupo(env) && !esEncargo(env)) return false;
   if (!TIPOS_DESPACHADOS.includes(env.type)) return false;
   if (env.from === `${local}@${est.domain}`) return true; // un recordatorio propio: despertarse a sí mismo
   // Un `intro` de 4 KB o un avalado entran a un buzón por lista SIN estar en la lista (§9).

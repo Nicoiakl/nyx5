@@ -413,6 +413,21 @@ archivo de verdad de la fábrica y no el ejemplo de la prueba.
   y la ruta para reintentar. Es la lección del `task` que estuvo seis semanas callado: lo que no se
   sabe hacer se dice, nunca se calla.
 - **Un sobre lo contesta UNO.** Cerebro o ejecutor, nunca los dos: el `409` va en los dos sentidos.
+- **Un ENCARGO por grupo SÍ despierta (29-oct-2026).** Hasta ese día un sobre de grupo no despertaba
+  ni a un cerebro ni a un ejecutor, con esta razón del 26-oct: «un grupo es un camino que la lista del
+  buzón no eligió». Cierto para quince miembros conversando, FALSO para un encargo con plazo: el
+  29-oct el paquete Santander salió del Claude web de Nicholas a `g.rosetta@` —plazo lunes, reunión
+  el martes— y no despertó a nadie. El canal que uno usa para repartir trabajo era el único que no
+  podía despertar. Ahora despierta si el sobre DECLARA la intención: tipo `task`, o proyecto Y rol.
+  `esEncargo`/`porGrupo` viven en `asistente.js` y `ci.js` las IMPORTA: dos definiciones se separarían
+  y entonces el mismo sobre despertaría a un cerebro y no a un ejecutor. Lo cruza una prueba.
+  La respuesta va a QUIEN ENCARGÓ, nunca al grupo. El tope en dólares sigue siendo del dueño y se
+  gasta por cada cerebro del grupo: hoy son dos en la casa y ninguno está en un grupo.
+- **El candado del turno lleva la DIRECCIÓN, no sólo el sobre** (mismo día, defecto de antes). Un
+  sobre con varios destinatarios —y todo sobre de grupo lo es— lo contestaba UNO solo: el primer
+  reloj tomaba `asistente-turno:<id>` y los otros buzones lo veían ocupado para siempre. Ahora es
+  `<local>:<id>`, igual que el contador de fallas. Verificado por mutación: con la clave vieja, de
+  dos cerebros de un grupo contesta uno.
 - **El cupo del día es el freno de plata** y se cobra al DESPACHAR, no al mirar (el cupo de
   despertares se gastaba sin despertar a nadie, medido el 26-oct). El reintento a mano NO lo levanta.
 - **Un turno por (sobre, intento)** con `kvPutIfAbsent`: dos isolates del edge que vean el mismo
