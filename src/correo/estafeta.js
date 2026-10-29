@@ -20,7 +20,7 @@
 
 import { FileStore } from '../nucleo/almacen.js';
 import { Resolver, parseAddress } from './resolver.js';
-import { validateEnvelope, applyInboxPolicy, applyEmailPolicy, RateLimiter, RateLimiterDurable, proyectoDe, nombreDeProyecto, validarPerfil, usdSinBilletera } from './politica.js';
+import { validateEnvelope, applyInboxPolicy, applyEmailPolicy, RateLimiter, RateLimiterDurable, proyectoDe, resumenDe, nombreDeProyecto, validarPerfil, usdSinBilletera } from './politica.js';
 import { generateSigningKeys, signObject, verifyObject, signBytes, verifyBytes, canonical, uuid, unb64u, sha256hex } from '../nucleo/crypto.js';
 import { Libro, MEDIA, LibroError } from '../libro/libro.js';
 import { veredicto, pruebasDe, pruebasDisponibles } from '../libro/verifica.js';
@@ -1768,9 +1768,19 @@ export class Estafeta {
       // sabe: el contenido va cifrado), y dónde leerlo según el aparato. Sin avisos de recibos.
       const proyecto = proyectoDe(env);
       const cuando = new Date(env.created || Date.now()).toUTCString().replace(/:\d\d GMT$/, ' UTC');
+      // El resumen EN CLARO que puso el remitente (29-oct-2026). Sin él, el aviso sólo podía decir
+      // QUIÉN escribió: el cuerpo va cifrado y la casa no lo lee. Con él, el asunto dice de qué se
+      // trata y se puede decidir desde el teléfono sin abrir nada. Va tal cual lo limpió `resumenDe`
+      // (una línea, 140 caracteres, sin controles ni invisibles): el asunto de un correo no se
+      // parte en dos. La casa NO lo inventa ni lo resume: si el remitente no puso línea, no hay.
+      const resumen = resumenDe(env);
       await this.emailOut({ fromAgent: `${local}@${this.domain}`, to: rec.notify_email,
-        subject: `${quien} wrote to you on Nyx5${proyecto ? ` (project ${proyecto})` : ''}`,
-        text: `${quien} wrote to ${local}@${this.domain}${proyecto ? ` · project: ${proyecto}` : ''} · ${cuando}. The content is encrypted and only your key opens it. On your Mac: https://${this.domain}/app. From your phone, ask your Claude for your mailbox (replies to what your phone Claude sends arrive there, not here).` });
+        subject: resumen
+          ? `${quien}${proyecto ? ` · ${proyecto}` : ''}: ${resumen}`
+          : `${quien} wrote to you on Nyx5${proyecto ? ` (project ${proyecto})` : ''}`,
+        text: resumen
+          ? `${quien} wrote to ${local}@${this.domain}${proyecto ? ` · project: ${proyecto}` : ''} · ${cuando}. They summarised it as: ${resumen} — that line comes from the sender, in the clear; the house did not write it and cannot check it. The content itself is encrypted and only your key opens it. On your Mac: https://${this.domain}/app. From your phone, ask your Claude for your mailbox (replies to what your phone Claude sends arrive there, not here).`
+          : `${quien} wrote to ${local}@${this.domain}${proyecto ? ` · project: ${proyecto}` : ''} · ${cuando}. The content is encrypted and only your key opens it. On your Mac: https://${this.domain}/app. From your phone, ask your Claude for your mailbox (replies to what your phone Claude sends arrive there, not here).` });
     }).catch((e) => this.log(`notify_email ${local} falló: ${e.message}`));
     this._pushes.push(pendiente);
     return pendiente;

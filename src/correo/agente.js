@@ -3,7 +3,7 @@
 // Las operaciones del Libro son sobres firmados a libro@<casa>; las respuestas vuelven como recibos al buzón.
 
 import { Resolver, parseAddress } from './resolver.js';
-import { EXT_PROYECTO, proyectoDe, rolDe, nombreDeProyecto } from './politica.js';
+import { EXT_PROYECTO, EXT_RESUMEN, RESUMEN_MAX, proyectoDe, rolDe, resumenDe, nombreDeProyecto, limpio } from './politica.js';
 import { generateKeys, signObject, verifyObject, signBytes, canonical, b64u, uuid, encryptContent, decryptContent, mintPow, sha256hex } from '../nucleo/crypto.js';
 import { Libro, MEDIA } from '../libro/libro.js';
 import { pruebaDeAceptacion } from '../libro/verifica.js';
@@ -83,7 +83,7 @@ export class Agent {
   }
 
   // ---------- envío ----------
-  async send({ to, type = 'message', body, media, encrypt = true, thread, inReplyTo, expires, deliverAfter, attachments, extensions, receipt, project, role }) {
+  async send({ to, type = 'message', body, media, encrypt = true, thread, inReplyTo, expires, deliverAfter, attachments, extensions, receipt, project, role, summary }) {
     const recipients = Array.isArray(to) ? to : [to];
     const id = uuid();
     // Proyecto y rol viajan como extensión firmada: el buzón del otro lado filtra por proyecto.
@@ -92,6 +92,15 @@ export class Agent {
     const proyecto = project ? nombreDeProyecto(project) : null;
     if (project && !proyecto) throw new Error(`invalid project name: ${JSON.stringify(String(project).slice(0, 40))} (empty after normalization, or a reserved word)`);
     if (proyecto || role) extensions = { ...(extensions || {}), [EXT_PROYECTO]: { ...(proyecto ? { project: proyecto } : {}), ...(role ? { role: String(role).trim().slice(0, 40) } : {}) } };
+    // El resumen EN CLARO: una línea que la casa puede leer y poner en el asunto del aviso por
+    // correo, porque el cuerpo va cifrado y nadie más que el destinatario lo abre. Lo decide quien
+    // escribe, no la casa. Se rechaza aquí, con nombre, si no queda nada después de limpiarlo: que
+    // viaje vacío sería creer que etiquetaste y no haberlo hecho (el mismo defecto que `project`).
+    if (summary != null) {
+      const r = limpio(String(summary), RESUMEN_MAX);
+      if (!r) throw new Error('invalid summary: empty after cleaning (it must be one readable line)');
+      extensions = { ...(extensions || {}), [EXT_RESUMEN]: { text: r } };
+    }
     // Un sobre que responde a otro hereda su hilo. Defecto real (12-sep-2026): las respuestas iban con
     // in_reply_to y thread null, y la conversación quedaba como mensajes sueltos; el historial firmado
     // es el producto, y sin hilo no es historial. La casa no puede rellenarlo: el sobre va firmado.
@@ -472,7 +481,7 @@ export class Agent {
     const aGrupo = envelope.to.some((t) => { try { return parseAddress(t).local.startsWith('g.'); } catch { return false; } });
     if (!envelope.encrypted && !aGrupo && !envelope.to.includes(this.address) && envelope.from !== this.address) throw new Error(`envelope ${envelope.id} is not addressed to ${this.address}`);
     const content = envelope.encrypted ? await decryptContent(envelope.encrypted, this.address, this.keys, aad(envelope)) : envelope.content;
-    return { id: envelope.id, from: envelope.from, to: envelope.to, type: envelope.type, thread: envelope.thread, in_reply_to: envelope.in_reply_to, created: envelope.created, encrypted: !!envelope.encrypted, project: proyectoDe(envelope), role: rolDe(envelope), sender: card, content };
+    return { id: envelope.id, from: envelope.from, to: envelope.to, type: envelope.type, thread: envelope.thread, in_reply_to: envelope.in_reply_to, created: envelope.created, encrypted: !!envelope.encrypted, project: proyectoDe(envelope), role: rolDe(envelope), summary: resumenDe(envelope), sender: card, content };
   }
 
   // Espera hasta que llegue un sobre que cumpla el filtro (útil para pruebas y flujos síncronos).

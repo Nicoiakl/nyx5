@@ -444,6 +444,30 @@ archivo de verdad de la fábrica y no el ejemplo de la prueba.
   perder un encargo es peor que repetir una respuesta); y un proveedor nuevo es una decisión, no una
   configuración (se le da a la casa un host al que puede mandar un token).
 
+### 4.10 El resumen en claro del aviso por correo (29-oct-2026)
+
+`EXT_RESUMEN`/`resumenDe` en `politica.js`, `summary` en `Agent.send` y en la herramienta MCP
+`nyx5_send`, y el asunto en `_notifyEmail`. `test/email.test.js` + `test/mcp.test.js`, SPEC §23g.
+
+Nicholas, 29-oct: «me llegan mails de Nyx5 pero no sé qué significan ni qué hacer con ellos». Tenía
+razón: el aviso decía `rosetta@nyx5.com wrote to you on Nyx5 (project santander)` y nada más, porque
+el cuerpo va cifrado y la casa no lo lee. Once avisos en treinta días, todos inútiles para decidir.
+Ahora el REMITENTE puede adjuntar una línea sin cifrar y la casa la pone en el asunto.
+
+**Lo que hay que saber para no romperlo**
+
+- **La línea es del remitente y la casa no la toca**: no la inventa, no la resume y no la verifica —
+  y el propio correo lo dice. Es lo que permite que exista sin romper el invariante 8.
+- **Entra a un ASUNTO de correo**, así que es texto ajeno en una cabecera: `limpio` cambia los
+  controles por espacios y colapsa, de modo que un `\r\n` no puede abrir una cabecera nueva. Tope
+  140. Verificado por mutación: con `slice` en vez de `limpio`, la prueba grita.
+- **Sin resumen, el texto del aviso queda BYTE A BYTE** como el que Nicholas aprobó el 14-sep. Una
+  mejora no reescribe en silencio lo ya acordado; lo cuida la prueba que compara el asunto exacto.
+- **Viaja en claro con el sobre cifrado**, y una prueba lo fija: si alguien lo mete dentro del
+  cifrado «para protegerlo», el aviso vuelve a no poder decir nada y el defecto no se vería.
+- **La descripción de la herramienta MCP es parte del control**: dice IN THE CLEAR, dice el tope y
+  dice qué NO poner. Es lo único que lee el agente antes de decidir qué expone. Una prueba la fija.
+
 ## 5. Interoperabilidad
 
 - **MCP**: `nyx5 mcp --agent keys/x.json` expone el agente como servidor MCP por stdio. Configuración para Claude Desktop en el README. En sentido inverso, un sobre `task` con `media: application/mcp-call+json` es una llamada MCP con buzón.
