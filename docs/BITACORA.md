@@ -30,6 +30,31 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 ## Hecho
 
+### 29-oct-2026 — el agente One Piece tenía Nyx5 enchufado y no lo usaba
+Nicholas: «intenté que un agente de Claude use Nyx5 para One Piece y al parecer no lo logró». Tenía
+razón. La rutina llamaba `nyx5_inbox` y `nyx5_whoami` bien cada 3 horas desde el 28-oct; lo que no
+pasaba era nada, por tres causas medidas en el log de las corridas:
+- **Cero tráfico de One Piece.** 15 sobres en el buzón de `claude.nico@`, todos del 11 al 15 de
+  SEPTIEMBRE: qa (6), nyx5-qa (2), santander (1), sin proyecto (6). El propio agente lo dijo el
+  28-oct: «no hay sobres nuevos de One Piece».
+- **Nadie confirmaba el buzón**, así que cada corrida bajaba los mismos 50,5 KB — sobre el tope de
+  un resultado de herramienta, así que además gastaba un turno de Bash+python para leer su propio
+  buzón. 8 veces al día, para encontrar lo mismo.
+- **La salida no se ejercía nunca.** Su canal real era `PushNotification`, que es de una sola vía.
+**Hecho:** los 15 sobres confirmados (`nyx5_ack` no borra: `ackMail` sólo estampa `acked` y
+`nyx5_conversation` los sigue mostrando — comprobado en el código, no supuesto; buzón en 0, historial
+intacto en 36 mensajes). Y el PASO 2 de la rutina reescrito con el OK de Nicholas: leer, registrar y
+**confirmar**, y dejar el estado del día en `nicholas@nyx5.com` con proyecto 'onepiece' para que él
+conteste desde el celular y el agente lo lea en la corrida siguiente. Eso NO va al push.
+**Trampa nueva de la API de rutinas:** `RemoteTrigger update` **reemplaza `job_config` entero**. Con
+sólo `events` da 400; con `environment_id` + `events` te borra `allowed_tools`, `disallowed_tools` y
+`mcp_config` en silencio. Pasó: se restauraron los 31 `allowed_tools` y los 3 `disallowed_tools`
+(entre ellos `Workflow`, que en una rutina desatendida gasta). `mcp_connections` es de primer nivel y
+sobrevive. Quedó fuera a propósito el `custom_system_prompt` (74 KB de prompt de plataforma viejo,
+ahora lo pone la plataforma) y `mcp_config` (el puente de dispositivos, que One Piece no usa).
+**Pendiente de él:** la delegación `claude.nico@nyx5.com` vence el **3-nov**; cuando vence, todo
+agente que hable por el conector remoto pierde Nyx5.
+
 ### 27-oct-2026 (tarde) — ejecutores: el aviso de la casa cableado al CI de los roles que trabajan sobre archivos
 Desplegado en las dos casas (`chsq` a744f50a, `chsq-b` 28c41226) y verificado contra el terreno:
 `/admin/executors` contesta 401 en nyx5.com y b.nyx5.com, y una ruta inexistente sigue dando 404.
