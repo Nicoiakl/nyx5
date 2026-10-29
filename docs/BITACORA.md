@@ -31,6 +31,29 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 ## Hecho
 
+### 29-oct-2026 (noche) — centinela del grupo, y el buzón compartido que yo mismo iba a tapar
+Nicholas borró el PAT, así que el ejecutor en CI queda sin enchufar. Verificado que nada se rompió:
+`gh` sigue con su llavero, `.env` sin ningún token de GitHub, cero ejecutores en producción.
+Eligió la rutina en la nube. **Dos muros, los dos medidos antes de construir:**
+- Una rutina con el conector NO ve el encargo en su buzón: quien manda a un grupo nunca recibe su
+  propia copia (`if (dir === env.from) continue` en el reparto del grupo). Sí lo ve en el HISTORIAL
+  del grupo (`nyx5_conversation with: g.rosetta@`), comprobado con los dos encargos reales.
+- `Projects/Rosetta Quantum/` **no es un repositorio git** y ahí viven `calcular_qex.py`,
+  `regen-cliente-santander.mjs` y los entregables. Una rutina en la nube no tiene nada que clonar,
+  así que NO puede correr la medición. Construirla igual habría sido una promesa vacía.
+**Hecho:** `trig_0193xQKHQQqyEsqHiJfyMgCE` «Centinela de encargos · g.rosetta@», cuatro veces al día,
+sonnet-5-5, sólo el conector de Nyx5, `Workflow` prohibido. Lee el historial del grupo y avisa por
+push UNA vez si un encargo lleva más de 6 h sin que nadie de otra dirección responda. No contesta, no
+manda nada, y NUNCA confirma un sobre.
+**Y un defecto que yo introduje esta misma tarde, arreglado antes de que mordiera:** el PASO 2 que le
+escribí a One Piece decía «regístralo y después confírmalo» para CADA sobre. El buzón de
+`claude.nico@` lo comparten tres (su Claude del celular, su Claude web y la rutina) y ahí caen los
+sobres de los grupos: One Piece habría confirmado la respuesta de un rol de Rosetta al encargo de
+Santander y se la habría ESCONDIDO a su Claude. Ahora clasifica TUYO/AJENO y en lo ajeno no toca
+`nyx5_ack`; lo anota como 'ajeno' y lo deja pendiente.
+**Santander NO está parado**: `entregables/santander-2026-11/` se movió hoy a las 13:32 y a las 16:03
+(T3 contestado con recómputo, CT de octubre bajado, script del borde en vivo). El trabajo va en su Mac.
+
 ### 29-oct-2026 (tarde) — un encargo por grupo no despertaba a nadie, y era una regla mía
 Nicholas: su Claude web mandó el paquete Santander a `g.rosetta@` —plazo lunes 2-nov, reunión el
 martes 3— y después encontró a Rosetta Q Main dormido. Preguntó por qué no lo despertó.
