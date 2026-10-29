@@ -31,6 +31,39 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 ## Hecho
 
+### 29-oct-2026 (tarde) — un encargo por grupo no despertaba a nadie, y era una regla mía
+Nicholas: su Claude web mandó el paquete Santander a `g.rosetta@` —plazo lunes 2-nov, reunión el
+martes 3— y después encontró a Rosetta Q Main dormido. Preguntó por qué no lo despertó.
+**El envío fue real**: sobre `22423aa8`, 15:36 UTC, de `claude.nico@` a `g.rosetta@`, proyecto
+santander, rol cowork, entregado al primer intento (202). Su Claude no le mintió.
+**Por qué no despertó, dos razones, y la segunda es mía:**
+1. `rosetta@` es un BUZÓN. Rosetta Q Main es un chat en su Mac; la casa entrega y nunca arranca una
+   sesión. Hoy despiertan tres cosas: cerebro en la casa (reloj), rutina en la nube (cron) y
+   ejecutor cableado a CI (webhook, 27-oct, todavía sin enchufar). `rosetta@` no es ninguna.
+2. **Y aunque lo fuera, un sobre de GRUPO no despertaba a nadie** — regla que escribí el 26-oct en
+   los dos caminos: «un grupo es un camino que la lista del buzón no eligió». Cierta para quince
+   miembros conversando, falsa para un encargo con plazo. El único canal que uno usa para repartir
+   trabajo era el único que no podía despertar.
+**Hecho, con su OK, desplegado (chsq 50524ba3, chsq-b fa9e04d6):** un encargo por grupo despierta si
+el SOBRE declara la intención (tipo `task`, o proyecto Y rol) — no la palabra del texto. La charla
+sigue sin despertar. `esEncargo`/`porGrupo` en `asistente.js`, y `ci.js` las IMPORTA: una prueba
+cruza los dos caminos y otra prohíbe que el ejecutor reescriba la suya. La respuesta va a QUIEN
+ENCARGÓ, nunca al grupo.
+**Dos defectos de antes que sólo se vieron al abrir esa puerta:**
+- El candado del turno era `asistente-turno:<id>`, sin la dirección. Un sobre con VARIOS
+  destinatarios lo contestaba UNO: el primer reloj lo tomaba y los demás buzones lo veían ocupado
+  para siempre. No era exclusivo de los grupos (pasaba con un directo a dos asistentes). Ahora
+  `<local>:<id>`. Verificado por mutación: con la clave vieja, de dos cerebros contesta uno.
+- **Una prueba mía que pasaba por una razón falsa**: en `test/ci.test.js`, los seis casos de «lo que
+  NO despierta a un ejecutor» usaban la clave `env` y `despachable` lee `envelope`; le llegaba
+  undefined y salía por «sin firma». Seis en verde sin ejercer ninguno. Reescrita, y ahora el
+  fixture se comprueba ANTES de usarlo.
+npm test 473 -> 476. SPEC §23f, ARQUITECTURA §4.9.
+**Lo que esto NO resuelve, y hay que decirlo:** `g.rosetta@` no tiene ningún miembro que pueda
+despertar. El protocolo ya deja pasar el encargo; falta que alguna dirección del grupo tenga cerebro
+(no sirve para archivos) o **ejecutor en CI**, que es lo que espera el PAT de Nicholas. Santander, de
+aquí al martes, se mueve con la sesión de Rosetta Q Main, no sola.
+
 ### 29-oct-2026 — el agente One Piece tenía Nyx5 enchufado y no lo usaba
 Nicholas: «intenté que un agente de Claude use Nyx5 para One Piece y al parecer no lo logró». Tenía
 razón. La rutina llamaba `nyx5_inbox` y `nyx5_whoami` bien cada 3 horas desde el 28-oct; lo que no
