@@ -793,6 +793,34 @@ can never wake one and not the other. The answer goes to the **sender**, never b
 order to fifteen members must not become fifteen messages for the fifteen. The owner's monthly cap
 still applies per brain, so one order to a group of several brains spends each of their caps.
 
+## 23g. The summary in the clear: a doorbell that says who is at the door
+
+An agent may register an email address for notices (`notify_email`). The house then emails them when
+someone writes — but it can only say **who** wrote, never **what**: the body is encrypted and the
+house does not read it (§8). A doorbell that does not say who is at the door is noise, and the owner
+has to open the app to find out whether anything is theirs to do.
+
+So the **sender** may attach one line that travels **unencrypted**, in the extension
+`urn:nyx5:ext:resumen` as `{ text }`. The house puts it in the subject of the notice:
+
+```
+rosetta@nyx5.com · santander: T3 answered and October CT fetched; the Monday rehearsal is missing
+```
+
+Five rules, and each one is the reason it is safe:
+
+- **The sender decides what is exposed, not the house.** The line is optional, the house never
+  writes or summarises one, and the notice says plainly that the line is the sender's and unchecked.
+  What goes there is what it is *about*, never what the envelope protects.
+- **It is cleaned to one line**: control characters become spaces, invisible and bidi characters are
+  dropped, whitespace collapses, and it is cut at **140** characters. A newline cannot split the
+  subject of an email in two.
+- **It travels in the clear beside an encrypted body** — that is the point and the risk. Moving it
+  inside the encryption makes the notice mute again.
+- **Empty is refused, not sent empty**: a summary that cleans down to nothing is rejected when
+  sending, like an unusable project name. Labelling and not travelling is worse than not labelling.
+- **Without a summary the notice is unchanged**, byte for byte.
+
 ## 24. What Nyx5/1 does not yet solve (and does not pretend to)
 
 - **Cross-domain reputation**: today each receiver decides alone. A shared reputation network (like email's blacklists) is future work.

@@ -246,3 +246,69 @@ test('el remitente es el agente, no la dirección reservada, así responder lleg
   assert.equal(enviado.from, 'no-reply@nyx5.com', 'solo el dominio verificado puede firmar el From');
   assert.equal(enviado.reply_to, 'ajeno@otracasa.test', 'pero la respuesta sigue apuntando a quien escribió');
 });
+
+// ---------------------------------------------------------------------------------------------
+// EL RESUMEN EN CLARO (29-oct-2026, decisión de Nicholas). El aviso sólo podía decir QUIÉN le
+// escribió, nunca QUÉ: el cuerpo va cifrado y la casa no lo lee. Un timbre que no dice quién está
+// en la puerta es ruido. Ahora el REMITENTE adjunta una línea sin cifrar y la casa la pone en el
+// asunto. Lo que no cambia: sin resumen, el aviso es el mismo byte a byte que él aprobó el 14-sep.
+test('D3 · el resumen del remitente llega al asunto, viaja EN CLARO, y no se puede partir el asunto en dos', async () => {
+  let captured = null;
+  const provider = async (p) => { captured = p; return { id: 'r1' }; };
+  const { e, url, dom } = await casa({ provider });
+  try {
+    const a = Agent.create(`avisada@${dom}`, url, { hosts: { [dom]: { url } } });
+    const b = Agent.create(`remitente@${dom}`, url, { hosts: { [dom]: { url } } });
+    await a.register({ adminToken: 't', notify_email: 'nicholas@gmail.test' });
+    e.email.senders.add(a.address);
+    await b.register({ adminToken: 't' });
+    // El sobre va CIFRADO y el resumen NO: eso es justo el punto, y justo el riesgo.
+    const env = await b.send({ to: a.address, body: 'el cuerpo secreto que nadie más abre', project: 'santander', summary: 'T3 contestado; falta el ensayo del lunes' });
+    const until = Date.now() + 6000;
+    while (!captured && Date.now() < until) await new Promise((r) => setTimeout(r, 150));
+    assert.ok(captured, 'se disparó el aviso');
+    assert.equal(captured.subject, `${b.address} · santander: T3 contestado; falta el ensayo del lunes`);
+    assert.match(captured.text, /They summarised it as: T3 contestado; falta el ensayo del lunes — that line comes from the sender, in the clear/);
+    assert.ok(!captured.text.includes('el cuerpo secreto'), 'el aviso no lleva el contenido');
+    // El resumen va en la extensión, EN CLARO, con el sobre cifrado. Si alguien lo "arregla"
+    // metiéndolo dentro del cifrado, el aviso vuelve a no poder decir nada: por eso se fija aquí.
+    const bandeja = await e.store.listMail('avisada');
+    const guardado = bandeja.find((m) => m.envelope?.id === env.id)?.envelope || {};
+    assert.ok(guardado.id, `el sobre no está en el buzón: ${bandeja.map((m) => m.envelope?.id).join(', ')}`);
+    assert.ok(guardado.encrypted, 'el sobre tiene que ir cifrado');
+    assert.equal(guardado.extensions['urn:nyx5:ext:resumen'].text, 'T3 contestado; falta el ensayo del lunes');
+    assert.equal(env.envelope.extensions['urn:nyx5:ext:resumen'].text, 'T3 contestado; falta el ensayo del lunes');
+  } finally { await e.stop(); }
+});
+
+test('D3 · un resumen hostil no parte el asunto, no esconde texto y no crece sin tope', async () => {
+  const { resumenDe, RESUMEN_MAX } = await import('../src/correo/politica.js');
+  const cp = (n) => String.fromCodePoint(n);   // los invisibles se construyen, nunca se escriben
+  const ext = (text) => ({ extensions: { 'urn:nyx5:ext:resumen': { text } } });
+  // Un salto de línea en el asunto de un correo es una cabecera nueva. `limpio` cambia los
+  // controles por espacios ANTES de que el texto llegue al proveedor.
+  assert.equal(resumenDe(ext('linea uno\r\nSubject: asunto falso')), 'linea uno Subject: asunto falso');
+  assert.ok(!resumenDe(ext('a\nb')).includes('\n'));
+  // Invisibles y bidi: un resumen no puede esconder texto ni dar vuelta lo que se lee.
+  assert.equal(resumenDe(ext(`pa${cp(0x200b)}go ${cp(0x202e)}oditebed`)), 'pago oditebed');
+  // Tope duro, y lo que no deja nada legible no viaja como vacío: no viaja.
+  assert.equal(resumenDe(ext('x'.repeat(500))).length, RESUMEN_MAX);
+  for (const basura of [42, null, {}, [], '   ', cp(0x200b) + cp(0x200b)]) assert.equal(resumenDe(ext(basura)), null, JSON.stringify(basura));
+  assert.equal(resumenDe({}), null);
+  assert.equal(resumenDe({ extensions: {} }), null);
+});
+
+test('D3 · `send` rechaza un resumen que no deja nada legible, en vez de mandarlo vacío', async () => {
+  const { e, url, dom } = await casa({});
+  try {
+    const b = Agent.create(`remitente2@${dom}`, url, { hosts: { [dom]: { url } } });
+    const c = Agent.create(`destino2@${dom}`, url, { hosts: { [dom]: { url } } });
+    await b.register({ adminToken: 't' });
+    await c.register({ adminToken: 't' });
+    // Mismo criterio que `project`: etiquetar y que no viaje es peor que no etiquetar.
+    await assert.rejects(() => b.send({ to: c.address, body: 'x', summary: `${String.fromCodePoint(0x200b)} ${String.fromCodePoint(0x200b)}` }), /invalid summary/);
+    // Y sin resumen no se agrega ninguna extensión: lo que no se pide, no viaja.
+    const env = await b.send({ to: c.address, body: 'x' });
+    assert.ok(!env.extensions || !env.extensions['urn:nyx5:ext:resumen']);
+  } finally { await e.stop(); }
+});

@@ -29,6 +29,25 @@ export const proyectoDe = (env) => { const p = env?.extensions?.[EXT_PROYECTO]?.
 export const nombreDeProyecto = (p) => { const n = limpio(String(p).normalize('NFKC'), 40).toLowerCase(); return n && !Object.hasOwn(Object.prototype, n) ? n : null; };
 export const rolDe = (env) => { const r = env?.extensions?.[EXT_PROYECTO]?.role; return typeof r === 'string' ? (limpio(r, 40) || null) : null; };
 
+// El RESUMEN EN CLARO (29-oct-2026, decisión de Nicholas). El aviso por correo sólo podía decir
+// QUIÉN le escribió, nunca QUÉ: el contenido va cifrado y la casa no lo lee (invariante 8). Un
+// timbre que no dice quién está en la puerta es ruido, y él tiene que abrir la app para saber si
+// algo le toca. Ahora el REMITENTE puede adjuntar una línea que viaja SIN CIFRAR, y la casa la
+// pone en el asunto del aviso.
+//
+// Quién decide qué se expone: el que escribe, no la casa. Por eso la línea es opcional y por eso
+// la descripción de la herramienta dice, con todas sus letras, que la leen la casa y el correo.
+// Nunca va ahí lo que el sobre protege: va de qué se trata, no lo que dice.
+//
+// Se limpia como el proyecto y se acota a UNA línea: `limpio` cambia los controles por espacios y
+// colapsa, así que un salto de línea no puede partir el asunto de un correo en dos.
+export const EXT_RESUMEN = 'urn:nyx5:ext:resumen';
+export const RESUMEN_MAX = 140;
+export const resumenDe = (env) => {
+  const r = env?.extensions?.[EXT_RESUMEN]?.text;
+  return typeof r === 'string' ? (limpio(r, RESUMEN_MAX) || null) : null;
+};
+
 // Ficha pública del agente (13-sep-2026): qué hace, en qué idiomas, de quién es, con qué etiquetas.
 // Va DENTRO de la tarjeta certificada, la firma el dueño al declararla y la casa al certificarla.
 // Vocabulario CERRADO, como el alcance de un mandato: una clave desconocida se rechaza nombrándola,

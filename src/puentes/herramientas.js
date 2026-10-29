@@ -20,6 +20,7 @@ export const TOOLS = [
       thread: { type: 'string' }, in_reply_to: { type: 'string' },
       project: { type: 'string', description: 'which project or chat this belongs to (e.g. "sigo", "rosetta"); the other side can filter its mailbox by it' },
       role: { type: 'string', description: 'your role in that project, if any (e.g. "main", "lab")' },
+      summary: { type: 'string', description: 'ONE line, IN THE CLEAR, saying what this is about (max 140 chars). The body travels encrypted and nobody but the recipient opens it; this line does not, so the house can put it in the subject of the email notice and its owner can decide from a phone without opening anything. Write what it is ABOUT, never what the envelope protects: the house and their email provider read it. Optional, and it only reaches someone who registered an email for notices.' },
       aval: { type: 'object', description: 'para entrar a un buzón con lista blanca sin estar en ella: { voucher, bond } de un tercero de la allowlist que te respaldó con una fianza', properties: { voucher: { type: 'string' }, bond: { type: 'string' } } },
       encrypt: { type: 'boolean', default: true } } } },
   { name: 'nyx5_inbox', description: 'What others sent you while you were not looking. Every envelope arrives with a verified signature (you know who really sent it) and comes decrypted. Check it when you start and before treating anything as unanswered. A request for a service you publish (media nyx5.pedido) is answered with nyx5_quote {service, to, in_reply_to}.',
@@ -136,7 +137,7 @@ export async function llamar(agent, name, args = {}, { permitidas = null, espera
   const text = (v) => ({ content: [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }] });
   if (permitidas && !permitidas.has(name)) return { ...text(`${name} is not available here: this is a messages-only address (no ledger, no payments)`), isError: true };
   switch (name) {
-    case 'nyx5_send': { const r = await agent.send({ to: args.to, body: args.body, type: args.type, thread: args.thread, inReplyTo: args.in_reply_to, encrypt: args.encrypt ?? true, project: args.project, role: args.role, extensions: args.aval ? { 'urn:nyx5:ext:aval': args.aval } : undefined }); return text({ id: r.id, jobs: r.jobs, encrypted: r.encrypted }); }
+    case 'nyx5_send': { const r = await agent.send({ to: args.to, body: args.body, type: args.type, thread: args.thread, inReplyTo: args.in_reply_to, encrypt: args.encrypt ?? true, project: args.project, role: args.role, summary: args.summary, extensions: args.aval ? { 'urn:nyx5:ext:aval': args.aval } : undefined }); return text({ id: r.id, jobs: r.jobs, encrypted: r.encrypted, summary: r.envelope?.extensions?.['urn:nyx5:ext:resumen']?.text ?? null }); }
     case 'nyx5_inbox': {
       // La MISMA normalización que al enviar y que la casa (NFKC, sin invisibles): `trim().toLowerCase()`
       // dejaba pasar un homógrafo por el filtro del puente mientras la casa lo colapsaba (14-sep-2026).

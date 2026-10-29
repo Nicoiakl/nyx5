@@ -118,3 +118,17 @@ test('ningún archivo fuente tiene un apóstrofo dentro de comillas simples', as
   }
   assert.deepEqual(malos, [], `apóstrofo dentro de comillas simples:\n  ${malos.join('\n  ')}`);
 });
+
+// El resumen EN CLARO llega hasta el puente MCP (29-oct-2026): sin esto, sólo quien usa `Agent.send`
+// desde código podría ponerlo, y los que escriben de verdad —el Claude del celular de Nicholas, las
+// rutinas— van por aquí. La descripción dice CON TODAS SUS LETRAS que esa línea no va cifrada:
+// es lo único que impide que un agente ponga ahí lo que el sobre protege.
+test('nyx5_send acepta un resumen en claro, lo dice en su descripción y lo devuelve', async () => {
+  const { TOOLS } = await import('../src/puentes/herramientas.js');
+  const send = TOOLS.find((h) => h.name === 'nyx5_send');
+  const prop = send.inputSchema.properties.summary;
+  assert.ok(prop, 'nyx5_send tiene que ofrecer summary');
+  assert.match(prop.description, /IN THE CLEAR/, 'la descripción tiene que advertir que no va cifrado');
+  assert.match(prop.description, /140/, 'y decir el tope');
+  assert.match(prop.description, /never what the envelope protects/, 'y decir qué NO poner ahí');
+});
