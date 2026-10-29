@@ -31,6 +31,21 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 
 ## Hecho
 
+### 29-oct-2026 (noche) — el aviso por correo ya dice de qué se trata
+Nicholas: «me llegan mails de Nyx5 pero no sé qué significan ni qué hacer con ellos». Medido en su
+Gmail: **once avisos en treinta días**, todos con la misma forma `X wrote to you on Nyx5 (project
+Y)`. La casa no podía decir más — el cuerpo va cifrado y no lo lee (invariante 8).
+**Desplegado** (`chsq` 1e8c0171, `chsq-b` 5aed2e80) con su texto aprobado: el REMITENTE adjunta una
+línea SIN cifrar (`urn:nyx5:ext:resumen`) y la casa la pone en el asunto. Llega hasta la herramienta
+MCP `nyx5_send { summary }`, que es por donde escriben su Claude del celular y las rutinas.
+**VERIFICADO CONTRA EL TERRENO, no contra el deploy**: sobre real `7cd4e69a` mandado a producción con
+la llave de `nicholas@`, cuerpo cifrado y resumen en claro, y en su Gmail llegó el asunto
+`nicholas@nyx5.com · prueba: Prueba del resumen en claro: si lees esta linea en el asunto, el aviso ya
+dice de que se trata`. Sobre de prueba confirmado después, para no dejar basura.
+Guardias: una línea con `\r\n` no abre una cabecera nueva (`limpio` colapsa los controles), tope 140,
+invisibles y bidi fuera, vacío se rechaza al enviar, y **sin resumen el aviso queda byte a byte** como
+el del 14-sep. Dos mutantes, dos gritos. npm test 476 -> 480. SPEC §23g, ARQUITECTURA §4.10.
+
 ### 29-oct-2026 (noche) — centinela del grupo, y el buzón compartido que yo mismo iba a tapar
 Nicholas borró el PAT, así que el ejecutor en CI queda sin enchufar. Verificado que nada se rompió:
 `gh` sigue con su llavero, `.env` sin ningún token de GitHub, cero ejecutores en producción.
