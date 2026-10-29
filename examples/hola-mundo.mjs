@@ -10,13 +10,13 @@ const url = 'http://127.0.0.1:4321', hosts = { 'casa.local': { url } };
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nyx5-hola-'));
 const casa = await new Estafeta({ domain: 'casa.local', port: 4321, dataDir: dir, adminToken: 's', hosts, log: () => {} }).start();
 
-const ana = Agent.create('ana@casa.local', url, { hosts });
+const alicia = Agent.create('alicia@casa.local', url, { hosts });
 const bruno = Agent.create('bruno@casa.local', url, { hosts });
-await ana.register({ adminToken: 's' });
+await alicia.register({ adminToken: 's' });
 await bruno.register({ adminToken: 's' });
 
-await ana.send({ to: bruno.address, body: '¡Hola, Bruno! Este sobre viaja firmado y cifrado.' });
-const m = await bruno.waitFor((e) => e.from === ana.address);   // Bruno espera su carta
+await alicia.send({ to: bruno.address, body: '¡Hola, Bruno! Este sobre viaja firmado y cifrado.' });
+const m = await bruno.waitFor((e) => e.from === alicia.address);   // Bruno espera su carta
 const abierto = await bruno.open(m.envelope);                    // solo Bruno puede descifrarla
 
 console.log('De:', abierto.from);

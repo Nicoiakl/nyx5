@@ -55,3 +55,39 @@ test('la fuente no lleva caracteres invisibles ni NUL literales (se escriben con
   for (const f of lista) { const h = hallazgos(fs.readFileSync(f, 'utf8')); if (h.length) sucios.push(`${path.relative(raiz, f)} ${h.join(' | ')}`); }
   assert.deepEqual(sucios, [], `archivos con invisibles o NUL literales (${sucios.length} de ${lista.length} revisados):\n${sucios.join('\n')}`);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Y los EJEMPLOS tienen que poder correr. Defecto medido el 29-oct-2026: `examples/hola-mundo.mjs`
+// registraba `ana@casa.local`, y los nombres de 1 a 3 caracteres quedaron reservados el 9-sep
+// (`min_name_length: 4`). El hola mundo del repositorio público —lo primero que corre quien llega—
+// llevaba CINCUENTA DÍAS fallando, y el CI rojo todo ese tiempo sin que nadie lo mirara.
+//
+// Por qué un barrido de la fuente y no «correr los demos»: el CI ya los corre y eso no bastó,
+// porque `npm test` daba verde en local y nadie abría el CI. Esto falla donde se mira.
+// Es PRECISO, no amplio: sólo mira el largo y la forma del nombre, que es lo que la casa rechaza
+// siempre y para todos. Las direcciones de SISTEMA se saltan: `libro@`, `verifica@`, `tareas@` y
+// `postmaster@` son destinos legítimos en un ejemplo, y nadie las registra.
+test('ningún ejemplo ni demo usa una dirección que la casa no deja registrar', async () => {
+  const { Estafeta } = await import('../src/correo/estafeta.js');
+  const SISTEMA = new Set(['libro', 'verifica', 'tareas', 'postmaster', 'casa', 'historial', 'indice']);
+  const MIN = 4;   // el `min_name_length` por omisión de la casa
+  const malas = [];
+  for (const dir of ['examples', 'demo']) {
+    const d = path.join(raiz, dir);
+    if (!fs.existsSync(d)) continue;
+    for (const p of archivos(d)) {
+      const src = fs.readFileSync(p, 'utf8');
+      // Direcciones literales dentro de comillas: 'nombre@host'
+      for (const m of src.matchAll(/['"`]([a-zA-Z0-9][a-zA-Z0-9._-]*)@([a-zA-Z0-9.-]+)['"`]/g)) {
+        const local = m[1].toLowerCase();
+        const raizNombre = local.split('.')[0];
+        if (SISTEMA.has(raizNombre) || local.startsWith('g.')) continue;
+        const rel = `${path.relative(raiz, p)}: ${m[1]}@${m[2]}`;
+        if (local.length < MIN) malas.push(`${rel} (${local.length} caracteres, el mínimo es ${MIN})`);
+        else if (!Estafeta.validLocal(local)) malas.push(`${rel} (forma inválida)`);
+        else if (Estafeta.RESERVED.has(raizNombre)) malas.push(`${rel} (nombre reservado)`);
+      }
+    }
+  }
+  assert.deepEqual(malas, [], `direcciones que la casa rechazaría:\n  ${malas.join('\n  ')}`);
+});
