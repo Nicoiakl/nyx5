@@ -45,6 +45,16 @@ Eligió la rutina en la nube. **Dos muros, los dos medidos antes de construir:**
 sonnet-5-5, sólo el conector de Nyx5, `Workflow` prohibido. Lee el historial del grupo y avisa por
 push UNA vez si un encargo lleva más de 6 h sin que nadie de otra dirección responda. No contesta, no
 manda nada, y NUNCA confirma un sobre.
+**Probado en producción a pedido de Nicholas** (corrida manual, 19:11 UTC, 16 s, 5 turnos, sonnet):
+leyó su memoria (vacía, nada avisado), pidió el historial del grupo por el conector —el punto de
+diseño que no estaba seguro— y le llegaron los dos encargos reales, pidió la hora UTC con `date` en
+vez de suponerla, y **se calló**: el encargo de Santander llevaba 3 h 35 min y el umbral es 6 h.
+O sea quedó probada la mitad del SILENCIO, que es la que más cuesta. La mitad del AVISO no: cruza las
+6 h a las 21:36 UTC, así que la corrida de las 00:47 UTC (21:47 Chile) es la que avisa.
+**Y una cosa que hay que saber antes de recibir ese push:** el trabajo de Santander SÍ avanza en el
+Mac, pero nadie ha reportado nada al grupo, y el propio encargo pedía «entregables por este grupo».
+El centinela va a decir «sin tomar» con razón sobre el grupo y engañando sobre la realidad: el aviso
+es correcto y lo que empuja es que alguien reporte ahí.
 **Y un defecto que yo introduje esta misma tarde, arreglado antes de que mordiera:** el PASO 2 que le
 escribí a One Piece decía «regístralo y después confírmalo» para CADA sobre. El buzón de
 `claude.nico@` lo comparten tres (su Claude del celular, su Claude web y la rutina) y ahí caen los
