@@ -20,7 +20,7 @@ import { Estafeta } from '../src/correo/estafeta.js';
 import { Agent } from '../src/correo/agente.js';
 import { LIMITES, RETENCION, RETENCION_BAJADO, NS, NS_CUPO, claveObjeto, aadDe, limpiarAdjuntos } from '../src/correo/adjuntos.js';
 import { decryptBlob, generateBlobKey, encryptBlob, sha256hex, uuid } from '../src/nucleo/crypto.js';
-import { TOOLS, MENSAJERIA } from '../src/puentes/herramientas.js';
+import { TOOLS, MENSAJERIA, llamar } from '../src/puentes/herramientas.js';
 
 // Puertos propios de esta suite (npm test corre los archivos en paralelo). Lo cuida test/puertos.test.js.
 const P1 = 4861, P2 = 4862;
@@ -365,6 +365,41 @@ test('la tarjeta del dominio publica los cupos SÓLO si la casa aloja adjuntos d
   const sin = new Estafeta({ domain: 'sin-tarjeta.adjuntos.test', port: P1 + 101, dataDir: path.join(tmp, 'sin-tarjeta'), adminToken: 't', hosts, sinObjetos: true, log: () => {} });
   await sin.init();
   assert.equal((await sin.domainCard()).attachments, undefined, 'una casa sin almacén anuncia cupos que no puede cumplir');
+});
+
+// Una herramienta que existe y falla al usarla es EXACTAMENTE el defecto que este ítem vino a
+// cerrar: un campo declarado sin nada detrás. Así que no basta con mirar su descripción; se
+// ejercita el camino completo, de un agente a otro, por las herramientas.
+test('las dos herramientas MCP funcionan de verdad: el archivo cruza de una casa a otra y cae al disco', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nyx5-mcp-adj-'));
+  const claro = Buffer.from(`informe de la herramienta ${TESTIGO}`);
+  const origen = path.join(dir, 'informe-origen.pdf');
+  fs.writeFileSync(origen, claro);
+
+  const subida = JSON.parse((await llamar(ana, 'nyx5_attach', { path: origen, name: 'informe-mcp.pdf', media: 'application/pdf', to: [beto.address] })).content[0].text);
+  assert.ok(subida.attachment?.blob, `nyx5_attach no devolvió un adjunto: ${JSON.stringify(subida)}`);
+  assert.equal(subida.attachment.sha256, sha256hex(claro));
+  // La herramienta avisa que sin cifrar la casa puede abrirlo: es lo único que lee el agente.
+  assert.match(subida.note, /encrypted|encrypt/i);
+
+  const enviado = JSON.parse((await llamar(ana, 'nyx5_send', { to: [beto.address], body: 'ahí va el informe' })).content[0].text);
+  assert.ok(enviado.id);
+  // El envío con adjunto va por send con el descriptor que devolvió la herramienta.
+  const r = await ana.send({ to: beto.address, body: 'con adjunto por herramienta', attachments: [subida.attachment] });
+  await beto.waitFor((x) => x.id === r.id, { timeoutMs: 8000 });
+
+  const bajada = JSON.parse((await llamar(beto, 'nyx5_attachment', { id: r.id, out_dir: dir })).content[0].text);
+  assert.equal(bajada.length, 1, `nyx5_attachment no bajó nada: ${JSON.stringify(bajada)}`);
+  assert.equal(bajada[0].error, undefined, `nyx5_attachment falló: ${bajada[0].error}`);
+  assert.equal(bajada[0].sha256_ok, true);
+  assert.deepEqual(fs.readFileSync(bajada[0].path), claro, 'el archivo que cayó al disco no es el que se mandó');
+  // Y el nombre lo escribe el REMITENTE: nunca se usa como ruta.
+  const malicioso = await ana.subirAdjunto(Buffer.from('ruta'), { name: '../../fuera.txt', media: 'text/plain', to: [beto.address] });
+  const r2 = await ana.send({ to: beto.address, body: 'nombre con ruta', attachments: [malicioso] });
+  await beto.waitFor((x) => x.id === r2.id, { timeoutMs: 8000 });
+  const b2 = JSON.parse((await llamar(beto, 'nyx5_attachment', { id: r2.id, out_dir: dir })).content[0].text);
+  assert.equal(path.dirname(path.resolve(b2[0].path)), path.resolve(dir), `el nombre del remitente escapó del directorio: ${b2[0].path}`);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('una casa sin almacén de objetos lo dice, en vez de aceptar y perder el archivo', async () => {
