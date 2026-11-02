@@ -28,9 +28,45 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 | ☐ | Los ~20 hallazgos medios/bajos de la revisión adversarial | 5-sep |
 | ☐ | Ancla DNS TXT `_nyx5.<dominio>` en producción | 5-sep |
 | ☐ | Reclamar el listado de glama.ai con OAuth de GitHub | 8-sep |
-| ☐ | Crear los buckets R2 `nyx5-blobs` / `nyx5-blobs-b` y poner el binding `BLOBS` en los dos wrangler.toml: hasta entonces las casas NO alojan adjuntos y `/blob` contesta 503 (ARQUITECTURA §4.9) | 2-nov |
 
 ## Hecho
+
+### 2-nov-2026 (tarde) — NX-413 DESPLEGADO en las dos casas, y verificado contra el terreno
+
+Nicholas aprobó el despliegue completo, incluido el texto público nuevo de `/spec` (§5b). Buckets
+`nyx5-blobs` y `nyx5-blobs-b` creados, binding `BLOBS` en los dos toml, `chsq` en la versión
+`a6217c4e-fe45-42f3-a840-7d86dc4796bf` y `chsq-b` en `3271ddde-c879-42eb-acf8-1ec6e26deb4b`.
+
+**Lo que se comprobó, y cómo** — nada de esto sale de la salida de wrangler:
+
+- Las dos tarjetas del dominio anuncian los cupos: `max_bytes` 10 MB, 10 por sobre, 25 MB por
+  sobre, 30 días, `A256GCM`. Antes no anunciaban nada, porque no había dónde guardar.
+- `GET /blob/<inventado>` sin firma contesta **401**, no 503: el almacén existe y la autenticación
+  se evalúa antes que la existencia.
+- La sección §5b está servida en `https://nyx5.com/spec`.
+- **El síntoma de Nicholas, en producción**: un archivo de 144 bytes con una cadena testigo mandado
+  por `nyx5 attach --send` a través de nyx5.com, bajado con `nyx5 attachment`, `diff` limpio.
+- **El invariante 8, contra el D1 real** (tabla `nyx5_mailbox`, no la `chasqui_mailbox` vieja): el
+  sobre guardado NO tiene la llave, NO tiene el nombre del archivo, NO tiene el contenido. Lleva
+  afuera exactamente `{"blob": …, "bytes": …}` y el cuerpo cifrado.
+- **El objeto en el bucket real**: 172 bytes para 144 de claro (12 de IV + 16 de tag), ruido, sin
+  la cadena testigo. Leído con `wrangler r2 object get`.
+- **La prueba verificada por mutación** (no sólo corrida): con `encryptBlob` devolviendo el claro,
+  la prueba del invariante 8 GRITA. Pasa por la razón correcta.
+- `npm test`: 506 pruebas, 505 pasan. El único rojo sigue siendo `visibilidad.test.js`, que falla
+  por el DNS de esta máquina con dominios `.test` (25 s y ETIMEOUT) y ya fallaba antes de la rama.
+
+**Un susto propio que vale anotar.** La salida de `nyx5 inbox` mostraba el array de adjuntos con el
+nombre, el tipo y **la llave**, y pareció una fuga grave. No lo era: el CLI descifra el sobre con la
+llave del dueño y muestra el sobre ABIERTO. Lo que la casa guarda se le pregunta a la casa, no al
+cliente que ya descifró — y al preguntarle primero miré la tabla equivocada (`chasqui_mailbox`, de
+septiembre, con 2 sobres) y por un momento pareció que el buzón de producción se había vaciado. Dos
+veces en diez minutos, la misma lección: **el terreno de esta pregunta es el D1 de la casa, y hay
+dos generaciones de tablas en la misma base.**
+
+**Y una medida de paso, que es el argumento de NX-414**: el buzón de `nicholas@` devolvió **50
+sobres con el cuerpo completo** en una sola lectura. Leer la bandeja para encontrar UN sobre costó
+arrastrar los otros 49.
 
 ### 2-nov-2026 — adjuntos cifrados: el sobre lleva archivos de verdad (NX-413, rama `adjuntos`)
 Nace de un sintoma de Nicholas: «me ha pasado varias veces que un agente de cowork le manda un
