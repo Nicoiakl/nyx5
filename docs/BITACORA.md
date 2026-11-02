@@ -28,8 +28,55 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 | ☐ | Los ~20 hallazgos medios/bajos de la revisión adversarial | 5-sep |
 | ☐ | Ancla DNS TXT `_nyx5.<dominio>` en producción | 5-sep |
 | ☐ | Reclamar el listado de glama.ai con OAuth de GitHub | 8-sep |
+| ☐ | Crear los buckets R2 `nyx5-blobs` / `nyx5-blobs-b` y poner el binding `BLOBS` en los dos wrangler.toml: hasta entonces las casas NO alojan adjuntos y `/blob` contesta 503 (ARQUITECTURA §4.9) | 2-nov |
 
 ## Hecho
+
+### 2-nov-2026 — adjuntos cifrados: el sobre lleva archivos de verdad (NX-413, rama `adjuntos`)
+Nace de un sintoma de Nicholas: «me ha pasado varias veces que un agente de cowork le manda un
+mensaje a un agente de code y el agente de code me acusa que recibio el mensaje, solo que no
+recibio los archivos». La causa medida: `attachments` estaba publicado en la spec desde la fase 0,
+`politica.js` lo validaba, `agente.js` lo metia en el sobre, y **ninguna casa alojaba un byte** —
+cero usos en las herramientas MCP, cero en la CLI, cero en todo `test/`, y ningun binding R2. Un
+agente que decia «te adjunto los archivos» mandaba rutas de SU maquina. No era una funcion nueva:
+era cerrar una promesa que llevaba meses publicada.
+
+- **El archivo va cifrado y la casa no lo puede leer.** AES-256-GCM, una llave aleatoria por
+  adjunto, objeto autocontenido `iv(12) || ct || tag(16)`, AAD `nyx5:blob:<blobId>:<from>`. La
+  llave viaja en `attachments[].key` DENTRO del bloque cifrado del sobre.
+- **La prueba del invariante 8 se escribio ANTES del codigo** (commit `c1ee42d`, que falla con
+  `ERR_MODULE_NOT_FOUND` a proposito): una cadena testigo va dentro del archivo y no aparece en el
+  objeto crudo del almacen, ni en sus metadatos, ni en el sobre del buzon, ni en ningun archivo de
+  ninguna de las dos casas. Pasa, y el nombre del archivo tampoco aparece en ninguno de esos sitios.
+- **El array de afuera lleva solo `blob` y `bytes`** en un sobre cifrado, con vocabulario CERRADO:
+  una clave de mas se rechaza por nombre. `balance-despido-javier.pdf` dice casi todo sin abrirlo,
+  asi que el nombre es contenido. Se aparta del invariante 7 a proposito, como `ALCANCE_MANDATO`.
+- **La url no viaja: se deriva** de la casa del remitente. Una url firmada en el sobre seria una
+  url que alguien puede cambiar por otra.
+- Cupos: 10 MB por adjunto, 10 adjuntos y 25 MB por sobre, 100 MB por remitente y dia UTC, 1 GB por
+  casa. Retencion de 30 dias, o 7 desde que todos los destinatarios lo bajaron, con limpieza por
+  reloj y aplicada tambien al LEER (si el reloj se cae, un vencido no se baja igual).
+- `nyx5_attach` / `nyx5_attachment` y `nyx5 attach` / `nyx5 attachment`. Fuera del conector remoto,
+  por el mismo motivo que el pedido de pago: alli la llave vive en la boveda y el archivo pasaria
+  por la casa en claro.
+- **Verificacion por mutacion: doce mutantes, doce gritos.** Tres no gritaban en el primer barrido y
+  ninguno estaba mal — lo debil era la prueba: el vocabulario cerrado no se probaba porque el
+  cliente de la casa nunca manda un campo prohibido afuera (ahora el test re-firma un sobre real y
+  lo entrega por `/outbound`); el tope de 10 MB de la casa no se probaba porque el cliente rechaza
+  antes (ahora se golpea la ruta); y la retencion al leer no se probaba porque el test borraba el
+  objeto antes de pedirlo.
+- **Tres defectos encontrados de paso**, dos de ellos ajenos a este item:
+  1. `FileStore` implementa el almacen en SINCRONO y `D1Store` en async real, asi que un `.catch()`
+     pegado al resultado de una llamada al almacen revienta en local y andaria en produccion. Es el
+     espejo de la trampa de siempre, y la cabecera de `almacen.js` ya avisaba: se espera con await.
+  2. `hasEnc` vale `undefined` (no `false`) para un sobre en claro, y un `undefined` ACTIVA el valor
+     por defecto del parametro: los adjuntos de un sobre en claro se validaban con las reglas del
+     cifrado y se rechazaban todos.
+  3. El guion de mutacion restauraba los archivos con `git checkout --` y se comio un arreglo que
+     todavia no estaba commiteado; el barrido quedo midiendo contra una base rota y lo delato el
+     numero de fallos (2 donde debia haber 1). Se mide desde una base COMMITEADA.
+- **No desplegado**: el bucket R2 y el binding los pone Nicholas (arriba, en lo abierto).
+
 
 ### 29-oct-2026 (noche) — el aviso por correo ya dice de qué se trata
 Nicholas: «me llegan mails de Nyx5 pero no sé qué significan ni qué hacer con ellos». Medido en su

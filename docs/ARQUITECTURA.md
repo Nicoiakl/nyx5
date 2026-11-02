@@ -468,6 +468,78 @@ Ahora el REMITENTE puede adjuntar una línea sin cifrar y la casa la pone en el 
 - **La descripción de la herramienta MCP es parte del control**: dice IN THE CLEAR, dice el tope y
   dice qué NO poner. Es lo único que lee el agente antes de decidir qué expone. Una prueba la fija.
 
+### 4.9 Adjuntos cifrados: el almacén de objetos (NX-413, 2-nov-2026)
+
+`src/nucleo/objetos.js` + `src/correo/adjuntos.js` + la ruta `/blob/<blobId>` en la estafeta,
+`test/adjuntos.test.js` y `test/politica.test.js`, SPEC §5b. Nace de un síntoma de Nicholas: un
+agente de cowork le manda archivos a un agente de code, el de code acusa recibo del mensaje y los
+archivos no están. El campo `attachments` llevaba meses publicado en la spec y **ninguna casa
+alojaba un byte**: lo único que podía viajar eran rutas de la máquina del remitente.
+
+**Qué hace falta para encenderlo en producción** (lo hace Nicholas; la sesión NO lo hizo):
+
+```
+npx wrangler r2 bucket create nyx5-blobs
+npx wrangler r2 bucket create nyx5-blobs-b
+```
+
+y el binding en `wrangler.toml` y en `wrangler.beta.toml`:
+
+```toml
+[[r2_buckets]]
+binding = "BLOBS"
+bucket_name = "nyx5-blobs"      # en la beta: nyx5-blobs-b
+```
+
+**No hay migración de D1**: los metadatos viven en `nyx5_kv` (espacios `adjuntos` y
+`adjuntos-cupo`), que la 0006 ya creó. Mientras no exista el binding, la casa **no aloja adjuntos**
+y `/blob` contesta 503 diciéndolo; la tarjeta del dominio tampoco anuncia cupos. Eso es a propósito:
+anunciar un límite es prometer que hay dónde guardar, y esa promesa sin nada detrás es justamente el
+defecto que este ítem vino a cerrar.
+
+**Lo que hay que saber para no romperlo**
+
+- **El objeto se guarda cifrado y la casa no tiene la llave.** AES-256-GCM, una llave aleatoria por
+  adjunto, y la llave viaja en `attachments[].key` DENTRO del bloque cifrado del sobre. La primera
+  prueba de `test/adjuntos.test.js` mete una cadena testigo dentro del archivo y comprueba que no
+  aparece en el objeto crudo, ni en los metadatos, ni en el sobre del buzón, ni en el disco de
+  ninguna de las dos casas. Se escribió ANTES del código.
+- **La clave del objeto es `blobs/<uuid>`, nunca el nombre del archivo.** Un nombre trae `../` y
+  además le cuenta a la casa qué hay dentro. `ObjetosDisco` vuelve a comprobar la forma de la clave:
+  un almacén que escribe donde le digan es un traversal esperando a que alguien se confunda.
+- **El array de AFUERA es un vocabulario CERRADO** (`blob`, `bytes`) en un sobre cifrado, y una
+  clave de más se rechaza POR NOMBRE. Se aparta del invariante 7 a propósito, como `ALCANCE_MANDATO`:
+  ignorar un campo de más no es neutro cuando ese campo es `name: "balance-despido-javier.pdf"`.
+- **AAD = `nyx5:blob:<blobId>:<from>`**: un adjunto no se reusa desde otra dirección ni se hace
+  pasar por otro objeto, aunque alguien tenga la llave.
+- **La autenticación va ANTES de mirar si el objeto existe.** Si fuera al revés, `/blob` sería un
+  oráculo de existencia para cualquiera sin firma. La prueba compara cuerpo y cabeceras de un blob
+  que existe contra uno que no, sin firma, y exige que sean idénticos.
+- **Dos cupos de naturaleza distinta.** El del remitente por día UTC es de FLUJO: se incrementa antes
+  de comparar (como `puertaIdeas`) y un intento rechazado por cupo SÍ lo gasta, que es lo que corta
+  una inundación. El de la casa es de lo GUARDADO: sube al guardar y BAJA al borrar, y un intento que
+  no llega a guardar se devuelve — si no, el 1 GB se erosionaría con cada rechazo hasta bloquear a
+  todo el mundo. El tope por adjunto se comprueba antes de tocar cualquier contador: es aritmética,
+  no una carrera, y no tiene por qué gastarle el día a nadie.
+- **La retención se aplica al LEER, no sólo cuando el reloj pasa.** 30 días, o 7 desde que el último
+  destinatario lo bajó. Si el reloj se cae, un adjunto vencido sigue sin poder bajarse; el reloj
+  recupera el espacio, la puerta cumple la promesa.
+- **«Que todos confirmaron» aquí significa que todos lo BAJARON**, porque es lo único que la puerta
+  de descarga puede observar. La spec lo dice con esas palabras en vez de prometer otra cosa.
+- **No va por el conector remoto.** Allí la llave del subagente vive en la bóveda, así que la casa
+  cifraría en su nombre y el archivo pasaría por ella en claro: el mismo motivo por el que el pedido
+  de pago (NX-502) tampoco está en el remoto.
+- **Los adaptadores pasan bytes crudos** (`rx.raw`) sólo para `PUT /blob/<id>`. El tope del
+  transporte (16 MB) es mayor que el de la ruta (10 MB) a propósito: así el motivo del rechazo lo da
+  la ruta nombrando el límite real, y no el transporte con un «body too large».
+- **Lo que NO cubre, declarado**: un llamador con firma válida distingue un `blob` que existe de uno
+  que no (403 contra 404), o sea un oráculo de existencia para un uuid que ya tuvo que ver; la casa
+  sabe el tamaño, el remitente y los destinatarios de cada adjunto, porque tiene que servirlos y
+  medirlos; el `bytes` del sobre es lo que DECLARA el remitente, y la garantía real es el hash del
+  claro que comprueba el receptor; no hay deduplicación entre sobres ni vista previa; y el cupo del
+  día se cobra al aceptar, así que dos relojes a la vez pueden pasarse por uno, nunca por mucho.
+
+
 ## 5. Interoperabilidad
 
 - **MCP**: `nyx5 mcp --agent keys/x.json` expone el agente como servidor MCP por stdio. Configuración para Claude Desktop en el README. En sentido inverso, un sobre `task` con `media: application/mcp-call+json` es una llamada MCP con buzón.

@@ -28,7 +28,7 @@ src/libro/contratos.js   máquinas de estado sobre el kernel: ops {accept, deliv
 src/libro/estado.js      NX-501: boleta del asiento (fee y comisión leídos de las líneas) y estado de cuenta por rango, JSON o CSV
 src/libro/errores.js     LibroError(code, message)
 src/libro/notaria.js     notaría (NX-601): sella un hash con fecha y firma de la casa, gratis, sin asiento; verificación pública en /notaria/*
-src/puentes/herramientas.js las 27 herramientas MCP, UN módulo para los dos puentes (MENSAJERIA = las 15 del remoto)
+src/puentes/herramientas.js las 31 herramientas MCP, UN módulo para los dos puentes (MENSAJERIA = las 15 del remoto)
 src/puentes/mcp.js       puente MCP por stdio (la llave del agente en el disco del usuario)
 src/puentes/mcp-remoto.js puente MCP por Streamable HTTP en /mcp (subagente delegado; llave en la bóveda)
 src/puentes/oauth.js     servidor OAuth 2.1 del conector: RFC 9728/8414/7591, PKCE S256, rotación de refresco
@@ -37,6 +37,8 @@ src/plataformas/terms-html.js  /terms: los términos de la casa (docs/TERMS.md �
 src/version.js           la versión que declara el servidor (el edge no lee package.json)
 src/nucleo/almacen-d1.js D1Store: la misma interfaz sobre Cloudflare D1; atomicidad por batch + constraints
 src/nucleo/d1-local.js   emulador de la API D1 sobre node:sqlite (tests y desarrollo local)
+src/nucleo/objetos.js    almacen de OBJETOS (adjuntos cifrados, NX-413): ObjetosR2 (edge) | ObjetosDisco (casa local) | ObjetosMemoria. Guarda bytes bajo `blobs/<uuid>` y nada mas
+src/correo/adjuntos.js   adjuntos cifrados, lado casa (2-nov-2026): cupos, subir/bajar/borrar con firma, retencion y limpieza por reloj. La casa aloja bytes que NO puede abrir
 src/plataformas/node.js  adaptador node:http (start() lo usa)
 src/plataformas/worker.js adaptador Cloudflare Workers (fetch + scheduled); config por env
 migrations/000{2..9}*.sql   esquema D1, candado, pins, eventos, 0006: nyx5_kv (OAuth + bóveda) e índice de historial, 0007: índice con reputación y precio (recrea nyx5_indice_agentes), 0008: nyx5_notaria, 0009: índice por estado de contrato
@@ -59,7 +61,7 @@ src/nucleo/keccak.js     Keccak-256 (el de Ethereum, NO sha3-256) en JS puro; sr
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos · ci -> `npm test` (480)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos · ci · adjuntos · politica -> `npm test` (505)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 scripts/revision-adversarial.{md,mjs}  el guion adversarial por versión (NX-903) y su parte automatizable
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
@@ -68,7 +70,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 480 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 505 pruebas, todas deben pasar antes de cualquier commit
 npm run revision         # revisión adversarial automatizable contra una casa local (scripts/revision-adversarial.md)
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
@@ -698,3 +700,49 @@ uno con prueba de grito verificada por mutación (seis mutantes, seis gritos) en
   el registro. El relay DENTRO de la lista es deliberado — es «avísale a amiga del plazo» — y el único
   camino que cruza conversaciones es el recordatorio que el agente se deja a sí mismo: acotado a su
   propia lista. Y el cupo de envíos no cuenta los recordatorios (los acota el cupo de despertares).
+
+### 2-nov-2026 — adjuntos cifrados (NX-413, rama `adjuntos`): el sobre lleva archivos de verdad
+`src/nucleo/objetos.js` + `src/correo/adjuntos.js` + `validarAdjuntos` en `politica.js` + la ruta
+`/blob/<blobId>` en la estafeta. `test/adjuntos.test.js` y `test/politica.test.js` (25 pruebas,
+doce mutantes verificados uno a uno), SPEC §5b, ARQUITECTURA §4.9. Nace de un sintoma de Nicholas:
+un agente de cowork le manda archivos a uno de code, el de code acusa recibo del mensaje y los
+archivos no estan. `attachments` llevaba MESES publicado en la spec, validado en `politica.js` y
+viajando en el sobre, con **cero** usos en las herramientas, en la CLI y en todo `test/`, y sin
+binding R2: nadie alojaba un byte. No era una funcion nueva, era cerrar una promesa publicada.
+Siete cosas que hay que saber para no romperlas:
+
+- **El archivo va CIFRADO y la casa no tiene la llave.** AES-256-GCM, una llave aleatoria POR
+  adjunto, objeto autocontenido `iv(12)||ct||tag(16)`, AAD `nyx5:blob:<blobId>:<from>`. La llave
+  viaja en `attachments[].key` DENTRO del bloque cifrado del sobre. La prueba del invariante 8 se
+  escribio ANTES del codigo (commit `c1ee42d`, que falla con `ERR_MODULE_NOT_FOUND` a proposito):
+  una cadena testigo dentro del archivo no aparece en el objeto crudo, ni en los metadatos, ni en
+  el sobre del buzon, ni en el disco de ninguna de las dos casas. Si esa prueba falla, los adjuntos
+  son el agujero por donde la casa lee lo que el invariante 8 promete no leer.
+- **El nombre del archivo es CONTENIDO.** `balance-despido-javier.pdf` dice casi todo sin abrirlo,
+  asi que en un sobre cifrado el array de AFUERA lleva solo `blob` y `bytes`, con vocabulario
+  CERRADO: una clave de mas se rechaza POR NOMBRE. Se aparta del invariante 7 a proposito, igual
+  que `ALCANCE_MANDATO`: ignorar un campo de mas no es neutro cuando ese campo es el nombre. Y la
+  clave del objeto es `blobs/<uuid>`, NUNCA el nombre (trae `../` y revela contenido).
+- **La `url` no viaja: se deriva** de la casa del remitente. En el sobre seria una url que alguien
+  puede cambiar por otra. El descriptor que devuelve `subirAdjunto` SI la trae, para quien sube;
+  `send()` la deja fuera, y `url` no esta en el vocabulario de ninguno de los dos arrays.
+- **La autenticacion va ANTES de mirar si el objeto existe.** Al revés, `/blob` seria un oraculo de
+  existencia para cualquiera sin firma. Lo declarado que NO cubre: con firma valida se distingue un
+  blob que existe de uno que no (403 contra 404), o sea un oraculo para un uuid que ya tuvo que ver.
+- **Dos cupos de naturaleza distinta, y confundirlos rompe uno de los dos.** El del remitente por
+  dia UTC es de FLUJO: se incrementa antes de comparar (como `puertaIdeas`) y un rechazo por cupo SI
+  lo gasta, que es lo que corta una inundacion. El de la casa es de lo GUARDADO: sube al guardar,
+  BAJA al borrar, y un intento que no llega a guardar se devuelve — si no, el 1 GB se erosiona con
+  cada rechazo hasta bloquear a todos. El tope por adjunto se comprueba antes de tocar contadores.
+- **La retencion se aplica al LEER, no solo cuando el reloj pasa**: si el reloj se cae, un vencido
+  sigue sin poder bajarse. Y «que todos confirmaron» aqui significa que todos lo BAJARON, porque es
+  lo unico que esa puerta puede observar; la spec lo dice con esas palabras.
+- **Trampa nueva, espejo de la de siempre**: `FileStore` implementa el almacen en SINCRONO y
+  `D1Store` en async real, asi que un `.catch()` pegado al resultado de una llamada al almacen
+  revienta EN LOCAL y andaria en produccion. Se espera con `await`, siempre. Y un `undefined` activa
+  el valor por defecto de un parametro: `hasEnc` vale `undefined` (no `false`) para un sobre en
+  claro, y por eso sus adjuntos se validaban con las reglas del cifrado (arreglado con `!!hasEnc`).
+- **No va por el conector remoto** (la llave del subagente vive en la boveda: la casa cifraria en su
+  nombre y el archivo pasaria por ella en claro), y **no esta desplegado**: los buckets R2 y el
+  binding `BLOBS` los pone Nicholas. Sin binding la casa NO aloja adjuntos, `/blob` contesta 503 y
+  la tarjeta del dominio no anuncia cupos — anunciar un limite es prometer que hay donde guardar.
