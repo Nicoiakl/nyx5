@@ -207,8 +207,13 @@ What this does **not** solve, stated: a caller with a valid signature can tell a
 from a missing one (403 against 404), which is an existence oracle for a uuid it must already have
 seen; the house knows the size, the sender and the recipients of every attachment, because it has
 to serve and meter them; the `bytes` in the envelope is what the sender declares, and the real
-guarantee is the hash of the plaintext, checked by the recipient after downloading; and a house
-without an object store does not host attachments at all and says so (503).
+guarantee is the hash of the plaintext, checked by the recipient after downloading; a house
+without an object store does not host attachments at all and says so (503); the list of authorized
+recipients travels as a query parameter on the upload, which the auth token does **not** cover (the
+token is bound to method, path and host), so whoever could replay an upload token before its nonce
+is spent could widen that list — it does not reach the key, which never leaves the encrypted block;
+and two recipients downloading at the same instant can each overwrite the other in the record of
+who already has it, which can only make retention longer, never shorter.
 
 ## 6. Transport between estafetas
 
