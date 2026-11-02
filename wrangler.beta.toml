@@ -25,5 +25,12 @@ binding = "DB"
 database_name = "nyx5-b"
 database_id = "d3f84b7c-8053-4b71-bc41-3c337abd2d8c"
 
+# Adjuntos cifrados (NX-413, 2-nov-2026): el almacén de objetos. La casa guarda bytes que no puede
+# leer — la llave viaja dentro del bloque cifrado del sobre. Sin este binding la casa NO aloja
+# adjuntos: /blob contesta 503 y la tarjeta no anuncia cupos, a propósito.
+[[r2_buckets]]
+binding = "BLOBS"
+bucket_name = "nyx5-blobs-b"
+
 [triggers]
 crons = ["* * * * *"]
