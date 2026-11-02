@@ -101,6 +101,22 @@ export const TOOLS = [
       in_reply_to: { type: 'string', description: 'id of the payment request envelope (media nyx5.cobro) in your mailbox' },
       from: { type: 'string', description: 'who sent it, if you already acknowledged it (to find it in the conversation)' },
       bank_reference: { type: 'string', description: 'the transfer reference your bank gave you (up to 80 characters)' } } } },
+  // ----- NX-413: adjuntos cifrados. La descripción dice el límite y qué NO sale del cifrado: es
+  // lo único que un agente lee antes de decidir qué expone. -----
+  { name: 'nyx5_attach', description: 'Encrypt a file so a message carries it for real: the recipient downloads it with their signature and checks the hash. Use it when you say "here are the files" and the other agent is on another machine. Up to 10 MB; the key never leaves the encrypted block, so the house holds bytes it cannot read.',
+    inputSchema: { type: 'object', required: ['name', 'to'], properties: {
+      name: { type: 'string', description: 'file name the recipient will see (max 120 chars); it travels INSIDE the encrypted block' },
+      to: { type: 'array', items: { type: 'string' }, description: 'addresses allowed to download it: the same recipients you will send the envelope to' },
+      path: { type: 'string', description: 'local file to read (this bridge runs beside you); use it or content' },
+      content: { type: 'string', description: 'the file content when you have it in hand, not on disk' },
+      base64: { type: 'boolean', description: 'true if content is base64 (a binary file)' },
+      media: { type: 'string', description: 'media type like application/pdf (default application/octet-stream)' } } } },
+  { name: 'nyx5_attachment', description: 'Download an attachment that arrived in an envelope and get the real bytes: it is decrypted with the key that came inside the encrypted block and rejected if the sha256 of the plaintext does not match what the sender signed. Use it when a message says it carries files, before acting on them.',
+    inputSchema: { type: 'object', required: ['id'], properties: {
+      id: { type: 'string', description: 'id of the envelope that carries it (nyx5_inbox or nyx5_conversation)' },
+      from: { type: 'string', description: 'who sent it, if you already acknowledged the envelope' },
+      blob: { type: 'string', description: 'which attachment, when the envelope carries several (default: all of them)' },
+      out_dir: { type: 'string', description: 'directory to write the files into (default: the current one)' } } } },
   { name: 'nyx5_whoami', description: 'Your own address and what it may do: who delegated it, until when, whether the house holds its keys, and who may write to it. Check it before promising anything on behalf of your owner; the card is certified by the domain.',
     inputSchema: { type: 'object', properties: {} } },
 ];
@@ -110,8 +126,10 @@ export const TOOLS = [
 // sigue haciendo cumplir cada límite por su cuenta. Nació de un reporte de Nicholas: conectar desde
 // el teléfono le pidió tres permisos (inbox, send, wait) antes del primer mensaje.
 const SOLO_LECTURA = new Set(['nyx5_inbox', 'nyx5_resolve', 'nyx5_outbox', 'nyx5_directory', 'nyx5_search', 'nyx5_balance', 'nyx5_contract', 'nyx5_historial', 'nyx5_tareas', 'nyx5_wait', 'nyx5_conversation', 'nyx5_notarized', 'nyx5_whoami']);
+// `nyx5_attach` ESCRIBE en la casa (sube un objeto y gasta cupo) y `nyx5_attachment` escribe en el
+// disco de quien corre el puente: ninguna de las dos es de sólo lectura, aunque no mueva dinero.
 const MUEVE_DINERO = new Set(['nyx5_accept', 'nyx5_libro', 'nyx5_tomar', 'nyx5_hire']);
-const TITULOS = { nyx5_send: 'Send a message', nyx5_inbox: 'Read my mailbox', nyx5_ack: 'Mark messages as handled', nyx5_resolve: 'Check who an address is', nyx5_outbox: 'Delivery status of what I sent', nyx5_directory: 'Agents in a house', nyx5_search: 'Find an agent', nyx5_quote: 'Offer a service', nyx5_accept: 'Accept an offer and pay', nyx5_hire: 'Hire a published service', nyx5_libro: 'Ledger operation', nyx5_balance: 'My balance', nyx5_remind: 'Remind myself later', nyx5_contract: 'A deal and its history', nyx5_historial: 'Reputation of an agent', nyx5_tareas: 'Paid tasks available', nyx5_tomar: 'Take a paid task', nyx5_email: 'Email a person', nyx5_wait: 'Wait for a reply', nyx5_conversation: 'Conversation history', nyx5_group: 'Group of agents', nyx5_profile: 'Public profile', nyx5_notarize: 'Seal a document hash', nyx5_notarized: 'Verify a document seal', nyx5_whoami: 'Who am I', nyx5_qa_spec: 'Ask qa@ for an acceptance contract', nyx5_qa_gate: 'Ask qa@ to judge a delivery', nyx5_payment_request: 'Request a payment', nyx5_payment_confirm: 'Confirm a payment' };
+const TITULOS = { nyx5_attach: 'Attach a file', nyx5_attachment: 'Download an attachment', nyx5_send: 'Send a message', nyx5_inbox: 'Read my mailbox', nyx5_ack: 'Mark messages as handled', nyx5_resolve: 'Check who an address is', nyx5_outbox: 'Delivery status of what I sent', nyx5_directory: 'Agents in a house', nyx5_search: 'Find an agent', nyx5_quote: 'Offer a service', nyx5_accept: 'Accept an offer and pay', nyx5_hire: 'Hire a published service', nyx5_libro: 'Ledger operation', nyx5_balance: 'My balance', nyx5_remind: 'Remind myself later', nyx5_contract: 'A deal and its history', nyx5_historial: 'Reputation of an agent', nyx5_tareas: 'Paid tasks available', nyx5_tomar: 'Take a paid task', nyx5_email: 'Email a person', nyx5_wait: 'Wait for a reply', nyx5_conversation: 'Conversation history', nyx5_group: 'Group of agents', nyx5_profile: 'Public profile', nyx5_notarize: 'Seal a document hash', nyx5_notarized: 'Verify a document seal', nyx5_whoami: 'Who am I', nyx5_qa_spec: 'Ask qa@ for an acceptance contract', nyx5_qa_gate: 'Ask qa@ to judge a delivery', nyx5_payment_request: 'Request a payment', nyx5_payment_confirm: 'Confirm a payment' };
 for (const t of TOOLS) {
   t.title = TITULOS[t.name] || t.name;
   t.annotations = { title: t.title, readOnlyHint: SOLO_LECTURA.has(t.name), destructiveHint: MUEVE_DINERO.has(t.name), idempotentHint: SOLO_LECTURA.has(t.name) || t.name === 'nyx5_ack' || t.name === 'nyx5_notarize', openWorldHint: true };
@@ -251,6 +269,38 @@ export async function llamar(agent, name, args = {}, { permitidas = null, espera
       if (!pedido) return { ...text(`no payment request with id ${args.in_reply_to} in your mailbox (pass from if you already acknowledged it)`), isError: true };
       const r = await agent.paymentConfirm(pedido, { bank_reference: args.bank_reference });
       return text({ id: r.id, request_id: r.request_id, to: r.to, in_reply_to: r.in_reply_to, encrypted: r.encrypted, note: 'sent encrypted; Nyx5 does not move money, it only carries your confirmation' });
+    }
+    // NX-413. Sólo por el puente LOCAL: leer y escribir archivos exige un disco al lado del modelo,
+    // y en el remoto la llave del subagente vive en la bóveda, o sea que la casa cifraría en su
+    // nombre y el archivo pasaría por ella en claro. MENSAJERIA no las incluye.
+    case 'nyx5_attach': {
+      const fs = await import('node:fs');
+      if (!args.path && args.content == null) return { ...text('nyx5_attach needs path (a local file) or content'), isError: true };
+      const datos = args.path ? fs.readFileSync(args.path) : Buffer.from(String(args.content), args.base64 ? 'base64' : 'utf8');
+      const nombre = args.name || (args.path ? String(args.path).split('/').pop() : null);
+      const att = await agent.subirAdjunto(datos, { name: nombre, media: args.media, to: args.to || [] });
+      // La llave se devuelve porque es lo que hay que pasarle a nyx5_send; va al mismo turno del
+      // modelo que ya tiene el archivo, y de ahí entra al bloque cifrado del sobre, no al sobre.
+      return text({ attachment: att, note: `pass it in nyx5_send attachments; the key travels inside the encrypted block, so send it encrypted (encrypt: true, the default) or the house can open the file` });
+    }
+    case 'nyx5_attachment': {
+      const fs = await import('node:fs');
+      const sobre = await agent.conAdjuntos(args.id, args.from || null);
+      if (!sobre) return { ...text(`no envelope with id ${args.id} in your mailbox (pass from if you already acknowledged it)`), isError: true };
+      const dir = args.out_dir || '.';
+      const out = [];
+      for (const att of sobre.attachments) {
+        if (args.blob && String(att.blob).toLowerCase() !== String(args.blob).toLowerCase()) continue;
+        try {
+          const datos = await agent.bajarAdjunto(att, { from: sobre.from });
+          // El nombre lo escribe el REMITENTE: se usa sólo su parte final, nunca como ruta.
+          const destino = `${dir.replace(/\/$/, '')}/${String(att.name).split('/').pop()}`;
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(destino, datos);
+          out.push({ name: att.name, media: att.media, bytes: datos.length, sha256_ok: true, path: destino });
+        } catch (e) { out.push({ name: att.name, blob: att.blob, error: e.message }); }
+      }
+      return text(out.length ? out : { error: `envelope ${args.id} carries no attachment with blob ${args.blob}` });
     }
     case 'nyx5_whoami': return text(await agent.whoami());
     default: return { ...text(`unknown tool: ${name}`), isError: true };

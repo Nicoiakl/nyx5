@@ -161,6 +161,59 @@ export function usdSinBilletera(perfil, wallets) {
   return `service "${con[0].id}" declares a usd price but the card has no wallet; declare wallets first`;
 }
 
+// ---------- adjuntos (NX-413) ----------
+// El archivo NO viaja en el sobre: viaja cifrado al almacén de objetos de la casa del remitente y
+// el sobre lleva la referencia. Esta validación es la que decide qué puede verse desde afuera.
+//
+// En un sobre CIFRADO el array de afuera lleva SÓLO `blob` y `bytes`, y el vocabulario es CERRADO:
+// una clave de más se RECHAZA con nombre, no se ignora. Contradice el invariante 7 a propósito, por
+// la misma razón que `ALCANCE_MANDATO` (9-sep-2026): ese invariante es para extender mensajes sin
+// romper nada, y aquí ignorar un campo de más NO es neutro — `name: "balance-despido-javier.pdf"`
+// afuera del cifrado le cuenta a la casa y a cualquier estafeta del camino casi todo el contenido.
+// Si alguien "arregla" esta inconsistencia para que sea permisiva, reabre la fuga.
+//
+// En un sobre EN CLARO el array lleva la ficha completa, `key` incluida: el adjunto sigue cifrado
+// en el almacén, pero la llave viaja a la vista y la casa SÍ puede abrirlo. Se permite (hay usos
+// legítimos: un adjunto público) y la herramienta lo advierte antes de que un agente lo elija.
+export const ADJUNTO_CIFRADO = ['blob', 'bytes'];
+export const ADJUNTO_CLARO = ['blob', 'bytes', 'name', 'media', 'sha256', 'key'];
+export const ADJUNTOS = { max: 10, bytesPorSobre: 25 * 1024 * 1024, bytesPorAdjunto: 10 * 1024 * 1024, nombreMax: 120, mediaMax: 100 };
+const UUID_BLOB = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MEDIA_TIPO = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
+const ENTERO = (v, max) => Number.isSafeInteger(v) && v > 0 && v <= max;
+
+// Devuelve el motivo del rechazo (string) o null si los adjuntos están bien.
+export function validarAdjuntos(attachments, { cifrado = true } = {}) {
+  if (!Array.isArray(attachments)) return 'attachments must be a list';
+  if (attachments.length > ADJUNTOS.max) return `an envelope carries at most ${ADJUNTOS.max} attachments, not ${attachments.length}`;
+  const permitidas = cifrado ? ADJUNTO_CIFRADO : ADJUNTO_CLARO;
+  const vistos = new Set();
+  let total = 0;
+  for (const [i, a] of attachments.entries()) {
+    const donde = `attachments[${i}]`;
+    if (!a || typeof a !== 'object' || Array.isArray(a)) return `${donde} must be an object`;
+    for (const k of Object.keys(a)) {
+      if (!permitidas.includes(k)) {
+        return cifrado
+          ? `${donde}.${k} must not travel outside the encrypted block (an attachment of an encrypted envelope carries only ${ADJUNTO_CIFRADO.join(' and ')}; name, media, sha256 and key go inside)`
+          : `${donde}.${k} is not an attachment field (${ADJUNTO_CLARO.join(', ')})`;
+      }
+    }
+    if (!UUID_BLOB.test(String(a.blob || ''))) return `${donde}.blob must be the uuid of an uploaded object`;
+    if (vistos.has(String(a.blob).toLowerCase())) return `${donde}.blob repeats an attachment of this same envelope`;
+    vistos.add(String(a.blob).toLowerCase());
+    if (!ENTERO(a.bytes, ADJUNTOS.bytesPorAdjunto)) return `${donde}.bytes must be an integer between 1 and ${ADJUNTOS.bytesPorAdjunto} (${Math.round(ADJUNTOS.bytesPorAdjunto / 1024 / 1024)} MB per attachment)`;
+    total += a.bytes;
+    if (cifrado) continue;
+    if (typeof a.name !== 'string' || !limpio(a.name, ADJUNTOS.nombreMax)) return `${donde}.name must be a non-empty string of at most ${ADJUNTOS.nombreMax} characters`;
+    if (typeof a.media !== 'string' || a.media.length > ADJUNTOS.mediaMax || !MEDIA_TIPO.test(a.media)) return `${donde}.media must be a media type like application/pdf`;
+    if (typeof a.sha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(a.sha256)) return `${donde}.sha256 must be the hex sha256 of the plaintext (64 characters)`;
+    if (a.key != null && (typeof a.key !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(a.key))) return `${donde}.key must be the base64url of a 32-byte key`;
+  }
+  if (total > ADJUNTOS.bytesPorSobre) return `the attachments of one envelope add up to ${total} bytes and the maximum is ${ADJUNTOS.bytesPorSobre} (${Math.round(ADJUNTOS.bytesPorSobre / 1024 / 1024)} MB)`;
+  return null;
+}
+
 export function validateEnvelope(env, { maxBytes = 1_048_576 } = {}) {
   const fail = (reason) => ({ ok: false, code: 400, reason });
   if (!env || typeof env !== 'object') return fail('sobre no es un objeto');
@@ -184,8 +237,8 @@ export function validateEnvelope(env, { maxBytes = 1_048_576 } = {}) {
   if (!hasPlain && !hasEnc) return fail('el sobre necesita content o encrypted');
   if (hasPlain && hasEnc) return fail('content y encrypted son excluyentes');
   if (env.attachments != null) {
-    if (!Array.isArray(env.attachments)) return fail('attachments debe ser lista');
-    for (const a of env.attachments) if (!a?.name || !a?.media || !a?.sha256 || !a?.url) return fail('adjunto incompleto (name, media, sha256, url)');
+    const e = validarAdjuntos(env.attachments, { cifrado: hasEnc });
+    if (e) return fail(e);
   }
   if (!env.signature || env.signature.alg !== 'Ed25519' || !env.signature.kid || !env.signature.value) return fail('sobre sin firma');
   const bytes = Buffer.byteLength(JSON.stringify(env));

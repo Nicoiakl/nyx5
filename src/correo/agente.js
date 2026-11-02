@@ -3,8 +3,9 @@
 // Las operaciones del Libro son sobres firmados a libro@<casa>; las respuestas vuelven como recibos al buzón.
 
 import { Resolver, parseAddress } from './resolver.js';
-import { EXT_PROYECTO, EXT_RESUMEN, RESUMEN_MAX, proyectoDe, rolDe, resumenDe, nombreDeProyecto, limpio } from './politica.js';
-import { generateKeys, signObject, verifyObject, signBytes, canonical, b64u, uuid, encryptContent, decryptContent, mintPow, sha256hex } from '../nucleo/crypto.js';
+import { EXT_PROYECTO, EXT_RESUMEN, RESUMEN_MAX, ADJUNTOS, proyectoDe, rolDe, resumenDe, nombreDeProyecto, limpio, validarAdjuntos } from './politica.js';
+import { generateKeys, signObject, verifyObject, signBytes, canonical, b64u, uuid, encryptContent, decryptContent, encryptBlob, decryptBlob, generateBlobKey, mintPow, sha256hex } from '../nucleo/crypto.js';
+import { aadDe as aadBlob } from './adjuntos.js';
 import { Libro, MEDIA } from '../libro/libro.js';
 import { pruebaDeAceptacion } from '../libro/verifica.js';
 import { MEDIA_COBRO, MEDIA_COBRO_CONFIRMACION, cobroValido, confirmacionValida, extensionDeCobro, razonParaNoCobrar } from './cobro.js';
@@ -105,10 +106,17 @@ export class Agent {
     // in_reply_to y thread null, y la conversación quedaba como mensajes sueltos; el historial firmado
     // es el producto, y sin hilo no es historial. La casa no puede rellenarlo: el sobre va firmado.
     if (inReplyTo && thread == null) thread = await this._hiloDe(inReplyTo, recipients[0]);
+    // Adjuntos (NX-413): lo que llega aquí son los descriptores que devolvió `subirAdjunto`, o sea
+    // archivos YA cifrados y YA guardados en el almacén de esta casa. `url` no se firma: se deriva
+    // de la casa del remitente al bajar, así que una url en el sobre sería una url que alguien
+    // puede cambiar por otra.
+    const adj = attachments == null ? null : (Array.isArray(attachments) ? attachments : [attachments]).map((a) => ({
+      blob: String(a?.blob || '').toLowerCase(), bytes: a?.bytes, name: a?.name, media: a?.media, sha256: a?.sha256, key: a?.key,
+    }));
     const base = {
       nyx5: '1', id, from: this.address, to: recipients, created: iso(),
       expires: expires ?? null, deliver_after: deliverAfter ?? undefined, thread: thread ?? null, in_reply_to: inReplyTo ?? null, type,
-      attachments, extensions, receipt,
+      extensions, receipt,
     };
     const content = { media: media || (typeof body === 'string' ? 'text/plain' : 'application/json'), body };
 
@@ -138,10 +146,19 @@ export class Agent {
       // `to` no cambia y la AAD tampoco. Sin esto, lo que uno mismo mandó cifrado es ilegible para
       // uno mismo, y el historial de una conversación queda con la mitad de los mensajes en blanco.
       if (this.keys.enc && !lectores.some((l) => l.address === this.address)) lectores.push({ address: this.address, enc: this.keys.enc });
-      env = { ...base, encrypted: await encryptContent(content, lectores, aad(base)) };
+      // La ficha COMPLETA de cada adjunto —nombre, tipo, hash del claro y la llave— va DENTRO del
+      // bloque cifrado. Afuera sólo queda `blob` y `bytes`: lo que la casa necesita para servir el
+      // objeto y cobrar su cupo, y nada de lo que diga qué hay dentro.
+      env = { ...base, attachments: adj ? adj.map((a) => ({ blob: a.blob, bytes: a.bytes })) : undefined, encrypted: await encryptContent(adj ? { ...content, attachments: adj } : content, lectores, aad(base)) };
     } else {
       if (encrypt === 'required') throw new Error('a recipient does not publish an encryption key');
-      env = { ...base, content };
+      // Sin cifrar, la ficha viaja a la vista y la LLAVE también: el objeto sigue cifrado en el
+      // almacén, pero la casa puede abrirlo. Se permite y se dice; `nyx5_attach` lo advierte.
+      env = { ...base, attachments: adj || undefined, content };
+    }
+    if (adj) {
+      const malo = validarAdjuntos(env.attachments, { cifrado: !!env.encrypted });
+      if (malo) throw new Error(malo);
     }
     const powBits = Math.max(0, ...cards.map((c) => (c.inbox?.policy === 'pow' ? c.inbox.pow_bits ?? 16 : 0)));
     if (powBits) env.pow = mintPow(id, powBits);
@@ -169,6 +186,77 @@ export class Agent {
     try { return await this._call('POST', '/email/out', { to, subject, body }); }
     catch (e) { if (e.status === 503 && e.body?.pending) return e.body; throw e; }
   }
+  // ---------- adjuntos (NX-413): archivos de verdad en el sobre ----------
+  // Sube un archivo CIFRADO al almacén de objetos de su propia casa y devuelve el descriptor que
+  // `send({ attachments: [...] })` mete dentro del bloque cifrado. La llave se genera aquí, es
+  // distinta para cada adjunto, y nunca sale de este descriptor: la casa aloja bytes que no puede
+  // abrir (invariante 8). El sha256 es del CLARO, para que el receptor compruebe que descifró lo
+  // correcto; el del cifrado lo guarda la casa para su propia integridad.
+  async subirAdjunto(datos, { name, media = 'application/octet-stream', to = [] } = {}) {
+    const buf = Buffer.from(datos);
+    if (!buf.length) throw new Error('an attachment needs bytes');
+    const nombre = limpio(String(name ?? ''), ADJUNTOS.nombreMax);
+    if (!nombre) throw new Error('an attachment needs a name (it travels inside the encrypted block)');
+    // El tope se comprueba ANTES de cifrar y de subir: no se gastan 11 MB de red para que la casa
+    // diga no, y el motivo es el mismo que daría ella.
+    if (buf.length > ADJUNTOS.bytesPorAdjunto) throw Object.assign(new Error(`attachment of ${buf.length} bytes exceeds the maximum ${ADJUNTOS.bytesPorAdjunto} (${Math.round(ADJUNTOS.bytesPorAdjunto / 1024 / 1024)} MB) per attachment`), { status: 413 });
+    const destinos = (Array.isArray(to) ? to : [to]).filter(Boolean).map((t) => { const { local, domain } = parseAddress(t); return `${local}@${domain}`; });
+    const blob = uuid();
+    const key = generateBlobKey();
+    const objeto = encryptBlob(buf, key, aadBlob(blob, this.address));
+    const ruta = `/blob/${blob}`;
+    const q = destinos.length ? `?to=${encodeURIComponent(destinos.join(','))}` : '';
+    const res = await this.fetch(`${this.estafeta}${ruta}${q}`, {
+      method: 'PUT', body: objeto, signal: AbortSignal.timeout(120_000),
+      headers: { 'content-type': 'application/octet-stream', authorization: this._auth('PUT', ruta) },
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw Object.assign(new Error(j.reason || `HTTP ${res.status}`), { status: res.status, body: j });
+    return { blob, bytes: buf.length, name: nombre, media, sha256: sha256hex(buf), key, url: j.url };
+  }
+  // Baja un adjunto de la casa del REMITENTE (la url se deriva, no se lee del sobre), lo descifra y
+  // comprueba el hash del claro. Si el hash no cuadra, el error dice CUÁL adjunto: con varios en un
+  // sobre, «el hash no cuadra» sin nombre no se puede accionar.
+  async bajarAdjunto(att, { from = this.address } = {}) {
+    const quien = att?.name || att?.blob || '(unnamed)';
+    if (!att?.blob) throw new Error('an attachment reference needs blob');
+    if (!att?.key) throw new Error(`attachment ${quien}: no key. In an encrypted envelope the key travels INSIDE the encrypted block: open the envelope first and pass the attachment it gives you`);
+    const { domain } = parseAddress(from);
+    const base = domain === this.domain ? this.estafeta : (await this.resolver.domainCard(domain))._estafeta;
+    const ruta = `/blob/${String(att.blob).toLowerCase()}`;
+    const res = await this.fetch(`${base}${ruta}`, { headers: { authorization: this._auth('GET', ruta, this.keys, base) }, signal: AbortSignal.timeout(120_000) });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw Object.assign(new Error(j.reason || `HTTP ${res.status}`), { status: res.status, body: j });
+    }
+    const objeto = Buffer.from(await res.arrayBuffer());
+    let claro;
+    try { claro = decryptBlob(objeto, att.key, aadBlob(att.blob, from)); }
+    catch { throw new Error(`attachment ${quien}: could not be decrypted (wrong key, or it was not sent by ${from}: the AAD ties the object to its sender)`); }
+    if (att.sha256 && sha256hex(claro) !== String(att.sha256).toLowerCase()) {
+      throw new Error(`attachment ${quien}: the sha256 of the plaintext does not match what the envelope declares (expected ${String(att.sha256).toLowerCase()}, got ${sha256hex(claro)})`);
+    }
+    return claro;
+  }
+  // El sobre con adjuntos que está en el buzón (o en la conversación, si ya se confirmó), abierto.
+  async conAdjuntos(id, from = null) {
+    let m = (await this.inbox({ limit: 200 })).find((x) => x.envelope?.id === id);
+    if (!m && from) m = (await this.conversation(from, { limit: 200 })).find((x) => x.envelope?.id === id);
+    if (!m) return null;
+    const o = await this.open(m.envelope);
+    if (!o.attachments?.length) throw new Error(`envelope ${id} carries no attachments`);
+    return o;
+  }
+  // Lo borra antes de que se cumpla la retención. Sólo quien lo subió: la copia es del remitente.
+  async borrarAdjunto(blob, { house = this.domain } = {}) {
+    const base = house === this.domain ? this.estafeta : (await this.resolver.domainCard(house))._estafeta;
+    const ruta = `/blob/${String(blob).toLowerCase()}`;
+    const res = await this.fetch(`${base}${ruta}`, { method: 'DELETE', headers: { authorization: this._auth('DELETE', ruta, this.keys, base) }, signal: AbortSignal.timeout(30_000) });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw Object.assign(new Error(j.reason || `HTTP ${res.status}`), { status: res.status, body: j });
+    return j;
+  }
+
   // El hilo del sobre al que se responde: el suyo si lo tenía, si no su propio id. Se busca en la
   // conversación con el destinatario (lo recibido y lo enviado); si la casa no lo conoce, el id.
   async _hiloDe(inReplyTo, con) {
@@ -481,7 +569,11 @@ export class Agent {
     const aGrupo = envelope.to.some((t) => { try { return parseAddress(t).local.startsWith('g.'); } catch { return false; } });
     if (!envelope.encrypted && !aGrupo && !envelope.to.includes(this.address) && envelope.from !== this.address) throw new Error(`envelope ${envelope.id} is not addressed to ${this.address}`);
     const content = envelope.encrypted ? await decryptContent(envelope.encrypted, this.address, this.keys, aad(envelope)) : envelope.content;
-    return { id: envelope.id, from: envelope.from, to: envelope.to, type: envelope.type, thread: envelope.thread, in_reply_to: envelope.in_reply_to, created: envelope.created, encrypted: !!envelope.encrypted, project: proyectoDe(envelope), role: rolDe(envelope), summary: resumenDe(envelope), sender: card, content };
+    // Los adjuntos de un sobre cifrado están DENTRO del contenido (con nombre, tipo y llave); los
+    // de un sobre en claro, afuera. Se devuelven en el mismo sitio en los dos casos para que quien
+    // lee no tenga que saber cuál era: lo que recibe es lo que `bajarAdjunto` necesita.
+    const adj = (envelope.encrypted ? content?.attachments : envelope.attachments) || null;
+    return { id: envelope.id, from: envelope.from, to: envelope.to, type: envelope.type, thread: envelope.thread, in_reply_to: envelope.in_reply_to, created: envelope.created, encrypted: !!envelope.encrypted, project: proyectoDe(envelope), role: rolDe(envelope), summary: resumenDe(envelope), attachments: adj, sender: card, content };
   }
 
   // Espera hasta que llegue un sobre que cumpla el filtro (útil para pruebas y flujos síncronos).

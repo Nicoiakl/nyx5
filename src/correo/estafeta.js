@@ -19,6 +19,7 @@
 // body, ip } -> { status, body }. El almacenamiento es async (FileStore local, D1Store en el edge).
 
 import { FileStore } from '../nucleo/almacen.js';
+import { ObjetosDisco } from '../nucleo/objetos.js';
 import { Resolver, parseAddress } from './resolver.js';
 import { validateEnvelope, applyInboxPolicy, applyEmailPolicy, RateLimiter, RateLimiterDurable, proyectoDe, resumenDe, nombreDeProyecto, validarPerfil, usdSinBilletera } from './politica.js';
 import { generateSigningKeys, signObject, verifyObject, signBytes, verifyBytes, canonical, uuid, unb64u, sha256hex } from '../nucleo/crypto.js';
@@ -43,6 +44,7 @@ import { Agent } from './agente.js';
 import { eventoDeCobro } from './cobro.js';
 import { atenderAsistentes, gastoDe, PRECIOS, MEDIA_GATE } from './asistente.js';
 import { atenderIdeas, paginaDeIdeas, puertaIdeas, LOCAL as IDEAS_LOCAL, VIA as IDEAS_VIA } from './ideas.js';
+import { subirAdjunto, bajarAdjunto, borrarAdjunto, limpiarAdjuntos, capacidadAdjuntos } from './adjuntos.js';
 import { atenderEjecutores, despachar as despacharCi, despachable, validarConfig as validarCi, urlDe as urlCi, PROVEEDORES as CI_PROVEEDORES, INTENTOS as CI_INTENTOS, CUPO_DESPACHOS_DIA } from './ci.js';
 import { validarFiltros, puntajeDe, precioMinimo, FILTROS } from './indice.js';
 
@@ -74,7 +76,7 @@ export class Estafeta {
     domain, dataDir, store, adminToken,
     port = 4000, host = '127.0.0.1', publicUrl,
     hosts = {}, fetchImpl = globalThis.fetch,
-    policy = {}, retry = {}, workerIntervalMs = 1000, libro = {},
+    policy = {}, retry = {}, workerIntervalMs = 1000, libro = {}, objetos, sinObjetos = false,
     index = {}, email = {}, verifica = {}, eventos = true, tareas = {}, terms = null, remoto = {}, asistente = {}, ideas = {},
     extensions = null,
     log = (...a) => console.log(`[estafeta ${domain}]`, ...a),
@@ -128,6 +130,11 @@ export class Estafeta {
     this.hostsOverride = hosts;
 
     this.store = store || new FileStore(dataDir);
+    // Almacén de OBJETOS: dónde vive un adjunto cifrado (NX-413). Una casa de archivos lo tiene
+    // solo; una casa del edge lo tiene si su Worker le pasó el binding R2. Sin almacén, la ruta
+    // /blob contesta 503 y lo DICE: aceptar un archivo que no se va a guardar es peor que no
+    // tenerlo, porque el remitente cree que viajó. `sinObjetos` es para probar justamente eso.
+    this.objetos = objetos || (dataDir && !sinObjetos ? new ObjetosDisco(`${dataDir}/blobs`) : null);
     // Límites de tasa durables (NX-901): cuentan en el almacén, así que valen para toda la casa y
     // no por isolate. Un almacén sin contador (uno ajeno, mínimo) cae al de memoria.
     const limitador = (perMinute, ns) => (this.store.kvIncrement ? new RateLimiterDurable({ store: this.store, perMinute, ns, log: (m) => this.log(m) }) : new RateLimiter({ perMinute }));
@@ -310,6 +317,10 @@ export class Estafeta {
       nyx5: '1', domain: this.domain, estafeta: this.publicUrl,
       keys: rec.keys.map((k) => ({ sig: k.sig, created: k.created })),
       policy: { inbound: this.policy.inbound, max_bytes: this.policy.max_bytes, registration: this.policy.registration, ...(this.policy.outbound ? { outbound: this.policy.outbound } : {}) },
+      // Los cupos de los adjuntos, SÓLO si esta casa los aloja de verdad (NX-413). Una casa sin
+      // almacén de objetos no los anuncia: anunciar un límite es prometer que hay dónde guardar, y
+      // esa promesa sin nada detrás es justamente el defecto que este ítem vino a cerrar.
+      ...(this.objetos ? { attachments: capacidadAdjuntos() } : {}),
       extensions: this.extensions,
     };
     const guardada = rec.card;
@@ -1310,6 +1321,9 @@ export class Estafeta {
     if (programado) { try { await atenderAsistentes(this); } catch (e) { this.log(`asistentes: ${e.message}`); } }
     if (programado && this.ideas.enabled) { try { await atenderIdeas(this); } catch (e) { this.log(`ideas: ${e.message}`); } }
     if (programado) { try { await atenderEjecutores(this); } catch (e) { this.log(`ejecutores: ${e.message}`); } }
+    // Retención de los adjuntos (NX-413): 30 días, o 7 desde que el último destinatario lo bajó.
+    // Es limpieza, como la purga del kv: si falla no puede tumbar la entrega del correo de todos.
+    if (programado && this.objetos) { try { await limpiarAdjuntos(this, { nowMs: now() }); } catch (e) { this.log(`adjuntos: ${e.message}`); } }
     await this.flushPushes();
   }
   async _deliver(job) {
@@ -2315,6 +2329,21 @@ export class Estafeta {
         // Sale de la casa, que da fe de la hora en que ese buzón confirmó; sólo la primera vez.
         if (acked.length && who.record.capabilities?.read_receipts === true) await this._acusesDeLectura(who, acked);
         return send(200, { acked });
+      }
+      // ----- Adjuntos (NX-413): el almacén de objetos de la casa -----
+      // Subir pide la firma del dueño de la casa; bajar y borrar la aceptan de cualquier casa,
+      // porque el destinatario de un sobre casi siempre vive en otra. El ORDEN importa: primero la
+      // autenticación y después mirar si el objeto existe, para que un extraño reciba exactamente
+      // el mismo 401 exista o no (si fuera al revés, /blob sería un oráculo de existencia).
+      if ((m = /^\/blob\/([^/]+)$/.exec(path))) {
+        if (!['PUT', 'GET', 'DELETE'].includes(rx.method)) return send(405, { reason: 'use PUT to upload, GET to download, DELETE to remove an attachment' });
+        if (!this.objetos) return send(503, { reason: 'this house does not host attachments: it has no object store' });
+        const quien = await this._authenticate(rx, path, { allowForeign: rx.method !== 'PUT' });
+        if (!await this.rate.allow(`blob:${quien.address}`)) return tarde({ reason: 'too many requests' });
+        const blob = dec(m[1]);
+        if (rx.method === 'PUT') return subirAdjunto(this, quien, blob, rx.raw, { to: rx.query.get('to') || '', nowMs: now() });
+        if (rx.method === 'DELETE') return borrarAdjunto(this, quien, blob, { nowMs: now() });
+        return bajarAdjunto(this, quien, blob, { nowMs: now() });
       }
       // ----- Tiempo real, historial, conectores y tarjetas ajenas -----
       if (rx.method === 'GET' && (m = /^\/mailbox\/([^/]+)\/wait$/.exec(path))) {

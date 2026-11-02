@@ -18,18 +18,35 @@ export function readJson(req, limit = 2 * 1024 * 1024) {
   });
 }
 
+// Bytes crudos, sin parsear. Sólo la subida de un adjunto los usa (PUT /blob/<id>): un archivo no
+// es JSON, y pasarlo en base64 dentro de un JSON lo infla un tercio para nada.
+export function readRaw(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0; const chunks = [];
+    req.on('data', (c) => { size += c.length; if (size > limit) { reject(Object.assign(new Error(`body too large (maximum ${limit} bytes)`), { status: 413 })); req.destroy(); } else chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+// El transporte deja pasar bastante más que el tope por adjunto para que el motivo del rechazo lo
+// dé la RUTA, nombrando el límite real, y no el transporte con un «cuerpo demasiado grande».
+export const RAW_MAX = 16 * 1024 * 1024;
+const esSubidaDeAdjunto = (method, path) => method === 'PUT' && /^\/blob\/[^/]+$/.test(path);
+
 export async function startNodeServer(estafeta, { port, host }) {
   const server = http.createServer(async (req, res) => {
     const send = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
     try {
       const url = new URL(req.url, 'http://x');
-      const body = (req.method === 'POST' || req.method === 'PUT') ? await readJson(req) : null;
+      const crudo = esSubidaDeAdjunto(req.method, url.pathname);
+      const body = (!crudo && (req.method === 'POST' || req.method === 'PUT')) ? await readJson(req) : null;
       const rx = {
         method: req.method,
         path: url.pathname,
         query: url.searchParams,
         headers: req.headers,
         body,
+        raw: crudo ? await readRaw(req, RAW_MAX) : null,
         ip: req.socket?.remoteAddress || null,
       };
       const out = await estafeta.handleRequest(rx);

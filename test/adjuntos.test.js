@@ -52,9 +52,9 @@ before(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nyx5-adjuntos-'));
   casa1 = await new Estafeta({ domain: H1, port: P1, dataDir: path.join(tmp, H1), adminToken: 't', hosts, workerIntervalMs: 60, libro: { welcome: 0, feeBps: 0 }, log: () => {} }).start();
   casa2 = await new Estafeta({ domain: H2, port: P2, dataDir: path.join(tmp, H2), adminToken: 't', hosts, workerIntervalMs: 60, libro: { welcome: 0, feeBps: 0 }, log: () => {} }).start();
-  ana = Agent.create(`ana@${H1}`, URL1, { hosts });
-  carla = Agent.create(`carla@${H1}`, URL1, { hosts });
-  beto = Agent.create(`beto@${H2}`, URL2, { hosts });
+  ana = Agent.create(`ana-cowork@${H1}`, URL1, { hosts });
+  carla = Agent.create(`carla-fuera@${H1}`, URL1, { hosts });
+  beto = Agent.create(`beto-code@${H2}`, URL2, { hosts });
   await ana.register({ adminToken: 't' });
   await carla.register({ adminToken: 't' });
   await beto.register({ adminToken: 't' });
@@ -327,6 +327,19 @@ test('las herramientas MCP dicen el límite y que la llave nunca sale del bloque
   // el archivo pasaría por la casa en claro. Va sólo por el puente local, como el pedido de pago.
   assert.ok(!MENSAJERIA.has('nyx5_attach'), 'el conector remoto no ofrece subir adjuntos');
   assert.ok(!MENSAJERIA.has('nyx5_attachment'), 'el conector remoto no ofrece bajar adjuntos');
+});
+
+test('la tarjeta del dominio publica los cupos SÓLO si la casa aloja adjuntos de verdad', async () => {
+  const card = await casa1.domainCard();
+  assert.equal(card.attachments.max_bytes, LIMITES.porAdjunto);
+  assert.equal(card.attachments.max_per_envelope, LIMITES.adjuntosPorSobre);
+  assert.equal(card.attachments.max_bytes_per_envelope, LIMITES.porSobre);
+  assert.equal(card.attachments.retention_days, 30);
+  // Y una casa sin almacén NO los anuncia: un límite anunciado es la promesa de que hay dónde
+  // guardar, y una promesa sin nada detrás es el defecto que este ítem vino a cerrar.
+  const sin = new Estafeta({ domain: 'sin-tarjeta.adjuntos.test', port: P1 + 101, dataDir: path.join(tmp, 'sin-tarjeta'), adminToken: 't', hosts, sinObjetos: true, log: () => {} });
+  await sin.init();
+  assert.equal((await sin.domainCard()).attachments, undefined, 'una casa sin almacén anuncia cupos que no puede cumplir');
 });
 
 test('una casa sin almacén de objetos lo dice, en vez de aceptar y perder el archivo', async () => {

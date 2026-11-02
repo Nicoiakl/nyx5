@@ -19,6 +19,7 @@
 import { Estafeta } from '../correo/estafeta.js';
 import { TERMS_HTML } from './terms-html.js';
 import { D1Store } from '../nucleo/almacen-d1.js';
+import { ObjetosR2 } from '../nucleo/objetos.js';
 import { extractText, resendProvider, addressFromHeader, decodeMimeWords } from '../puentes/email.js';
 
 // El catálogo sembrado de esta casa. Tres tareas deterministas y baratas: su función NO es
@@ -61,6 +62,10 @@ function estafetaDesde(env) {
     publicUrl: cfg('PUBLIC_URL') || `https://${domain}`,
     adminToken: cfg('ADMIN_TOKEN'),
     store: new D1Store(env.DB),
+    // Adjuntos cifrados (NX-413): el almacén de objetos es el bucket R2 del binding BLOBS. Sin
+    // binding la casa NO aloja adjuntos y /blob lo dice con un 503, en vez de aceptar un archivo
+    // que se perdería. El bucket y el binding los pone Nicholas al desplegar (ARQUITECTURA §4.9).
+    objetos: env.BLOBS ? new ObjetosR2(env.BLOBS) : null,
     policy: { registration: cfg('REGISTRATION') || 'invite' },
     // /terms existe sólo si la casa lo enciende: son declaraciones vinculantes del dueño (aprobadas 14-sep-2026).
     terms: cfg('TERMS') === 'on' ? TERMS_HTML : null,
@@ -132,7 +137,15 @@ export default {
     const estafeta = estafetaDesde(env);
     const url = new URL(request.url);
     let body = null;
-    if (request.method === 'POST' || request.method === 'PUT') {
+    let raw = null;
+    // La subida de un adjunto (PUT /blob/<id>) llega como BYTES, no como JSON: un archivo no es
+    // JSON y pasarlo en base64 lo infla un tercio para nada. El tope de aquí es mayor que el de la
+    // ruta a propósito, para que el motivo del rechazo lo dé la ruta nombrando el límite real.
+    if (request.method === 'PUT' && /^\/blob\/[^/]+$/.test(url.pathname)) {
+      if (Number(request.headers.get('content-length') || 0) > 16 * 1024 * 1024) return Response.json({ reason: 'cuerpo demasiado grande' }, { status: 413 });
+      raw = new Uint8Array(await request.arrayBuffer());
+      if (raw.length > 16 * 1024 * 1024) return Response.json({ reason: 'cuerpo demasiado grande' }, { status: 413 });
+    } else if (request.method === 'POST' || request.method === 'PUT') {
       const len = Number(request.headers.get('content-length') || 0);
       if (len > 2 * 1024 * 1024) return Response.json({ reason: 'cuerpo demasiado grande' }, { status: 413 });
       // /oauth/token recibe form-urlencoded (RFC 6749 §4.1.3): Claude manda el canje y el refresco
@@ -159,6 +172,7 @@ export default {
       query: url.searchParams,
       headers: Object.fromEntries([...request.headers].map(([k, v]) => [k.toLowerCase(), v])),
       body,
+      raw,
       ip: request.headers.get('cf-connecting-ip') || null,
     };
     const out = await estafeta.handleRequest(rx);

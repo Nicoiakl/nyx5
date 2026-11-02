@@ -224,7 +224,7 @@ test('un cobro a una dirección cuya llave guarda la casa (custody.keys = house)
 
 // ---------- herramientas MCP ----------
 test('herramientas: nyx5_payment_request y nyx5_payment_confirm existen (29 en total), NO están en el remoto, y el remoto las niega', async () => {
-  assert.equal(TOOLS.length, 29);
+  assert.equal(TOOLS.length, 31);
   const req = TOOLS.find((t) => t.name === 'nyx5_payment_request'), conf = TOOLS.find((t) => t.name === 'nyx5_payment_confirm');
   assert.ok(req && conf);
   assert.equal(req.title, 'Request a payment');

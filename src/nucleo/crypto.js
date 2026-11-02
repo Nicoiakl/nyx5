@@ -124,6 +124,42 @@ export async function decryptContent(encrypted, address, keys, aad) {
   return JSON.parse(plain.toString());
 }
 
+// ---------- Adjuntos: un archivo cifrado que la casa guarda sin poder leer ----------
+// Un adjunto NO viaja en el sobre: viaja al almacén de objetos de la casa, cifrado, y el sobre
+// lleva su referencia. La llave es ALEATORIA Y POR ADJUNTO y viaja en `attachments[].key` DENTRO
+// del bloque cifrado del sobre: la casa aloja el objeto y no tiene con qué abrirlo (invariante 8).
+//
+// El objeto es autocontenido: iv(12) || ciphertext || tag(16). No hay cabecera, ni nombre, ni
+// tipo: todo eso es contenido y vive dentro del bloque cifrado del sobre.
+//
+// El AAD lo pone quien llama y es `nyx5:blob:<blobId>:<from>` (ver src/correo/adjuntos.js): ata
+// el cifrado a ESTE objeto y a ESTE remitente, así que un adjunto no se reusa desde otra
+// dirección ni se hace pasar por otro objeto.
+export const IV_BLOB = 12;
+export const TAG_BLOB = 16;
+export const generateBlobKey = () => b64u(randomBytes(32));
+
+export function encryptBlob(datos, key, aad) {
+  const k = unb64u(key);
+  if (k.length !== 32) throw new Error('an attachment key is 32 bytes in base64url');
+  const iv = randomBytes(IV_BLOB);
+  const c = createCipheriv('aes-256-gcm', k, iv);
+  c.setAAD(Buffer.from(aad));
+  const ct = Buffer.concat([c.update(Buffer.from(datos)), c.final()]);
+  return Buffer.concat([iv, ct, c.getAuthTag()]);
+}
+
+export function decryptBlob(objeto, key, aad) {
+  const buf = Buffer.from(objeto);
+  if (buf.length < IV_BLOB + TAG_BLOB) throw new Error('object too short to be an encrypted attachment');
+  const k = unb64u(key);
+  if (k.length !== 32) throw new Error('an attachment key is 32 bytes in base64url');
+  const d = createDecipheriv('aes-256-gcm', k, buf.subarray(0, IV_BLOB));
+  d.setAAD(Buffer.from(aad));
+  d.setAuthTag(buf.subarray(buf.length - TAG_BLOB));
+  return Buffer.concat([d.update(buf.subarray(IV_BLOB, buf.length - TAG_BLOB)), d.final()]);
+}
+
 // ---------- Proof-of-work (hashcash) ----------
 function leadingZeroBits(hex) {
   let bits = 0;

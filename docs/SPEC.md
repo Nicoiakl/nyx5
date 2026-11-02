@@ -134,7 +134,7 @@ Rules:
   "content":   { "media": "application/json", "body": { "...": "..." } },
   "encrypted": { "alg": "X25519+HKDF-SHA256+A256GCM", "epk": "...", "iv": "...", "ct": "...", "tag": "...", "keys": { "asistente@beta.example": { "iv": "...", "ct": "...", "tag": "..." } } },
 
-  "attachments": [ { "name": "informe.pdf", "media": "application/pdf", "sha256": "...", "url": "https://...", "bytes": 12345 } ],
+  "attachments": [ { "blob": "uuid", "bytes": 12345 } ],
   "pow": { "bits": 16, "nonce": "12345" },
   "receipt": "delivered",
   "extensions": { "urn:nyx5:ext:a2a": { "task_id": "..." } },
@@ -147,7 +147,7 @@ Rules:
 - The **signature** covers the whole canonical envelope except `signature`. It is signed after encrypting: any estafeta verifies authenticity without being able to read the content.
 - The **encryption** is JWE-like: a random content key encrypts `content` with AES-256-GCM; that key is wrapped for each recipient with ephemeral X25519 + HKDF. The AAD is the canonical form of `{id, from, to}`: an envelope cannot be re-addressed or re-signed by another without breaking decryption.
 - **Normative KDF detail** (every implementation must copy it byte for byte or nothing interoperates): each recipient's KEK is `HKDF-SHA256(ikm = X25519(epk_priv, enc_dest), salt = the UTF-8 bytes of the base64url STRING of epk — not the decoded key —, info = "nyx5/1 cek-wrap", 32)`. And the canonical form orders keys, omits `undefined` values in objects, and serializes as compact JSON.
-- **Attachments** travel by reference (URL + hash), not embedded. The estafeta does not store binaries. The hash makes the download verifiable.
+- **Attachments** travel by reference, not embedded, and the file itself is **encrypted**: the house stores bytes it cannot read. In an encrypted envelope the outer array carries only `blob` and `bytes` — the name, the media type, the hash of the plaintext and the key travel INSIDE the encrypted block, because a file name is content. See section 5b.
 - `type` is a semantic hint. `task`/`result` for delegated work; `receipt` for acknowledgements; `intro` to introduce yourself to allowlisted mailboxes (maximum 4 KB); `message` for everything else.
 - `thread` and `in_reply_to` give threads without server state.
 - `expires`: past that instant, no estafeta delivers it or retries.
@@ -155,6 +155,60 @@ Rules:
 - Unknown fields are preserved and signed, but ignored. This is how capabilities are added without breaking old implementations.
 
 Default maximum size: 1 MB. Each domain declares it in its card.
+
+## 5b. Attachments: a file the house holds and cannot read
+
+A file does not fit in an envelope and must not: the default maximum envelope is 1 MB and an
+estafeta that stored binaries inline would be paying for them in every relay and every retry. So
+the sender **encrypts the file, uploads it to the object store of its own house, and the envelope
+carries the reference**. The house hosts bytes it has no key for (invariant: the estafeta does not
+read encrypted content).
+
+Inside the encrypted block of the envelope, `content.attachments` carries the full record:
+
+```json
+"attachments": [ { "blob": "uuid", "bytes": 12345, "name": "report.pdf",
+                   "media": "application/pdf", "sha256": "<hex of the PLAINTEXT>",
+                   "key": "<base64url of 32 bytes>" } ]
+```
+
+Rules:
+- **The object key is `blobs/<blob>`, and `blob` is a uuid the sender generates.** Never the file
+  name: a name can carry `../`, and it also tells the house what is inside.
+- **One random key per attachment**, AES-256-GCM. The stored object is `iv(12) || ciphertext ||
+  tag(16)` and nothing else: no header, no name, no type. The key travels only in
+  `attachments[].key`, **inside** the encrypted block.
+- **AAD = `nyx5:blob:<blob>:<from>`.** The encryption is tied to this object and this sender, so an
+  attachment cannot be re-used from another address or passed off as another object.
+- **`sha256` is of the PLAINTEXT**, so the recipient can check it decrypted the right thing. The
+  house separately keeps the sha256 of the ciphertext, for its own integrity.
+- **The `url` does not travel.** It is derived: `https://<house of from>/blob/<blob>`. A URL in the
+  envelope is a URL somebody can swap for another.
+- **In an encrypted envelope the outer array is a closed vocabulary**: `blob` and `bytes`, nothing
+  else. Any other key is rejected **by name**. This deliberately departs from the rule that unknown
+  fields are preserved and ignored (section 11): here ignoring an extra field is not neutral, because
+  `name: "severance-balance-javier.pdf"` outside the encrypted block tells the house, and every
+  estafeta on the way, almost everything.
+- **In a cleartext envelope** the full record travels in the open, `key` included. The object is
+  still encrypted at rest, but the house can open it. It is allowed, and the tool says so.
+- **Limits**: 10 MB per attachment, 10 attachments and 25 MB per envelope, 100 MB per sender per UTC
+  day, and a storage quota per house. A house publishes them in its card (`attachments`).
+- **Retention**: 30 days, or 7 days once **every recipient has downloaded it** (that is what the
+  download door can observe, and what it means here). A house clock deletes the object and its
+  metadata together. Past retention the download answers 404 even before the clock has run.
+- **Who downloads**: `GET /blob/<blob>` with an Ed25519 signature, like a mailbox. The house keeps
+  the list of authorized addresses beside the object (the `from` and the `to` of the envelope —
+  that is envelope, not content). No signature, 401; a third party with a valid signature, 403.
+  Authentication is evaluated **before** existence, so an unsigned request cannot tell an object
+  that exists from one that does not.
+- The sender deletes it with `DELETE /blob/<blob>`; a recipient cannot (the copy is the sender's).
+
+What this does **not** solve, stated: a caller with a valid signature can tell an existing `blob`
+from a missing one (403 against 404), which is an existence oracle for a uuid it must already have
+seen; the house knows the size, the sender and the recipients of every attachment, because it has
+to serve and meter them; the `bytes` in the envelope is what the sender declares, and the real
+guarantee is the hash of the plaintext, checked by the recipient after downloading; and a house
+without an object store does not host attachments at all and says so (503).
 
 ## 6. Transport between estafetas
 
@@ -212,6 +266,9 @@ Authentication: `Authorization: Nyx5 <token>.<signature>` where `token` = base64
 | GET | `/mailbox/:local` | agent | read pending |
 | POST | `/mailbox/:local/ack` | agent | confirm processed |
 | GET | `/outbox/:local` | agent | status of sends |
+| PUT | `/blob/:blob` | agent of the house | upload an encrypted attachment (`?to=<addresses>`; raw bytes) |
+| GET | `/blob/:blob` | sender or recipient, any house | download it |
+| DELETE | `/blob/:blob` | the sender | delete it before retention runs out |
 | GET | `/conversations/:local` | agent | conversations (`?project=<name>`), or one thread (`?with=<address>&limit`) |
 | GET | `/health` | public | health |
 

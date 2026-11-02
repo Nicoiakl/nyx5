@@ -16,6 +16,10 @@
 //   nyx5 card     --address asistente@beta.local
 //   nyx5 send     --agent ./keys/nicolas.json --to asistente@beta.local --body "hola" [--json] [--type task] [--plain]
 //   nyx5 inbox    --agent ./keys/nicolas.json [--ack]
+//   nyx5 attach   --agent ./keys/nicolas.json --file ./informe.pdf --to asistente@beta.local [--name informe.pdf] [--media application/pdf] [--send --body "ahí va"]
+//     Sube el archivo CIFRADO al almacén de su casa (10 MB máximo). Sin --send imprime el
+//     descriptor, LLAVE INCLUIDA: redirígelo a un archivo, no lo pegues en un chat.
+//   nyx5 attachment --agent ./keys/nicolas.json --id <sobre> [--from quien@casa] [--out ./descargas]
 //   nyx5 ack      --agent ./keys/nicolas.json --id <id>[,<id>]
 //   nyx5 outbox   --agent ./keys/nicolas.json
 //   nyx5 mcp      --agent ./keys/nicolas.json          (servidor MCP por stdio)
@@ -60,6 +64,7 @@ const { values: o } = parseArgs({ args: rest, allowPositionals: true, options: {
   runtime: { type: 'string' }, listed: { type: 'boolean' }, source: { type: 'string' }, cap: { type: 'string' }, grantee: { type: 'string' }, yes: { type: 'boolean' },
   args: { type: 'string' }, index: { type: 'string' }, arbiter: { type: 'string' }, receipt: { type: 'string' }, limit: { type: 'string' },
   file: { type: 'string' }, 'no-ack': { type: 'boolean' },
+  media: { type: 'string' }, from: { type: 'string' }, send: { type: 'boolean' },
 } });
 
 const need = (k) => { if (!o[k]) { console.error(`missing --${k}`); process.exit(2); } return o[k]; };
@@ -293,6 +298,37 @@ try {
       }
       // --ack confirma SOLO lo abierto con éxito: un sobre que no descifra se queda en el buzón.
       if (o.ack && abiertos.length) console.log('ack:', await a.ack(abiertos));
+      break;
+    }
+    // ----- NX-413: adjuntos cifrados. Sube el archivo CIFRADO al almacén de la casa y devuelve el
+    // descriptor; la llave va en el descriptor y de ahí al bloque cifrado del sobre, nunca al sobre.
+    case 'attach': {
+      const a = await loadAgent();
+      const datos = fs.readFileSync(need('file'));
+      const att = await a.subirAdjunto(datos, { name: o.name || path.basename(need('file')), media: o.media, to: need('to').split(',').map((s) => s.trim()) });
+      if (o.send || o.body != null) {
+        const r = await a.send({ to: need('to').split(',').map((s) => s.trim()), body: o.body ?? `attached: ${att.name}`, type: o.type || 'message', attachments: [att], encrypt: !o.plain });
+        print({ id: r.id, encrypted: !!r.envelope.encrypted, attachment: { blob: att.blob, name: att.name, bytes: att.bytes, sha256: att.sha256 } });
+        break;
+      }
+      // Sin --send se imprime el descriptor para pasarlo a `send`: incluye la llave, así que esto
+      // va a un archivo o a la tubería, no a un chat.
+      print(att);
+      break;
+    }
+    // Baja los adjuntos de un sobre del buzón, los descifra y comprueba el hash del claro.
+    case 'attachment': {
+      const a = await loadAgent();
+      const sobre = await a.conAdjuntos(need('id'), o.from || null);
+      if (!sobre) { console.error(`no envelope with id ${o.id} in your mailbox (pass --from if you already acknowledged it)`); process.exit(1); }
+      const dir = o.out || '.';
+      fs.mkdirSync(dir, { recursive: true });
+      for (const att of sobre.attachments) {
+        const datos = await a.bajarAdjunto(att, { from: sobre.from });
+        const destino = path.join(dir, path.basename(String(att.name)));
+        fs.writeFileSync(destino, datos);
+        print({ name: att.name, bytes: datos.length, sha256: att.sha256, path: destino });
+      }
       break;
     }
     case 'ack': print({ acked: await (await loadAgent()).ack(need('id').split(',')) }); break;
