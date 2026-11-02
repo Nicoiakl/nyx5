@@ -169,6 +169,23 @@ test('grito · un adjunto de 11 MB no se sube (413, nombrando el límite) y no g
   assert.equal(despues, antes, 'un adjunto rechazado por tamaño gastó cupo del día');
 });
 
+// La verificación por mutación dijo que el tope de la CASA no gritaba: el cliente rechaza antes,
+// así que ninguna prueba llegaba a la puerta. Un cliente viejo, o uno que no sea el nuestro, sí
+// llega. El guardia que importa es el de la casa, y se prueba golpeando la ruta.
+test('grito · el tope de 10 MB lo aplica la CASA, no sólo el cliente: 11 MB directo a la ruta da 413', async () => {
+  const dia = new Date().toISOString().slice(0, 10);
+  const antes = Number(await casa1.store.kvGet(NS_CUPO, `${ana.address}:${dia}:bytes`)) || 0;
+  const blob = uuid();
+  const r = await fetch(`${URL1}/blob/${blob}?to=${encodeURIComponent(beto.address)}`, {
+    method: 'PUT', headers: { authorization: ana._auth('PUT', `/blob/${blob}`) },
+    body: Buffer.alloc(LIMITES.porAdjunto + 1024 * 1024),
+  });
+  assert.equal(r.status, 413, `la casa aceptó 11 MB: ${r.status}`);
+  assert.match((await r.json()).reason, /10485760|10 MB/);
+  assert.equal(await casa1.objetos.get(claveObjeto(blob)), null, 'la casa guardó el objeto que rechazó');
+  assert.equal(await casa1.store.kvGet(NS_CUPO, `${ana.address}:${dia}:bytes`), antes || null, 'un rechazo por tamaño gastó cupo del día');
+});
+
 test('grito · un sobre con 11 adjuntos se rechaza, y 26 MB declarados también', async () => {
   const uno = await ana.subirAdjunto(Buffer.from('x'), { name: 'uno.txt', media: 'text/plain', to: [beto.address] });
   const once = Array.from({ length: LIMITES.adjuntosPorSobre + 1 }, () => ({ ...uno, blob: uuid() }));
@@ -299,6 +316,14 @@ test('retención: 30 días, 7 cuando todos los destinatarios ya lo bajaron, y el
   assert.deepEqual(m1.got, [beto.address], 'la casa no anotó quién lo bajó');
   assert.ok(Date.parse(m1.until) < Date.parse(m0.until), 'la retención no se acortó al bajarlo el último destinatario');
   assert.ok(Math.abs(Date.parse(m1.until) - (Date.now() + RETENCION_BAJADO)) < 60_000, 'la retención acortada no es de 7 días');
+  // La retención se aplica al LEER, antes de que el reloj pase: si el reloj se cae, un adjunto
+  // vencido no se baja igual. La mutación dijo que esto no gritaba, porque la prueba de abajo
+  // borra el objeto antes de pedirlo y el 404 venía de que no estaba, no de la retención.
+  const otro = await ana.subirAdjunto(Buffer.from('vencido pero presente'), { name: 'viejo.txt', media: 'text/plain', to: [beto.address] });
+  const mv = await casa1.store.kvGet(NS, otro.blob);
+  await casa1.store.kvPut(NS, otro.blob, { ...mv, until: new Date(Date.now() - 1000).toISOString() });
+  assert.ok(await casa1.objetos.get(claveObjeto(otro.blob)), 'el objeto tiene que seguir ahí para que la prueba signifique algo');
+  await assert.rejects(() => beto.bajarAdjunto(otro, { from: ana.address }), (e) => (assert.equal(e.status, 404), true), 'un adjunto vencido se bajó porque el reloj no había pasado');
   // El reloj limpia lo vencido: objeto y metadatos se van juntos, y el cupo de la casa baja.
   await casa1.store.kvPut(NS, att.blob, { ...m1, until: new Date(Date.now() - 1000).toISOString() });
   const n = await limpiarAdjuntos(casa1, { nowMs: Date.now() });

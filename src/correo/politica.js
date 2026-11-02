@@ -237,7 +237,12 @@ export function validateEnvelope(env, { maxBytes = 1_048_576 } = {}) {
   if (!hasPlain && !hasEnc) return fail('el sobre necesita content o encrypted');
   if (hasPlain && hasEnc) return fail('content y encrypted son excluyentes');
   if (env.attachments != null) {
-    const e = validarAdjuntos(env.attachments, { cifrado: hasEnc });
+    // `!!hasEnc` y no `hasEnc`: para un sobre en claro `hasEnc` vale undefined, no false, y un
+    // undefined ACTIVA el valor por defecto del parámetro (`cifrado = true`), así que los adjuntos
+    // de un sobre EN CLARO se validaban con las reglas del cifrado y se rechazaban todos. Se vio
+    // al probar el caso en claro con un adjunto real. El defecto caía del lado estricto, que es el
+    // que corresponde si hay que equivocarse, pero era el branch equivocado igual.
+    const e = validarAdjuntos(env.attachments, { cifrado: !!hasEnc });
     if (e) return fail(e);
   }
   if (!env.signature || env.signature.alg !== 'Ed25519' || !env.signature.kid || !env.signature.value) return fail('sobre sin firma');
