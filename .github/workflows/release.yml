@@ -20,6 +20,9 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Para reintentar sin mover la etiqueta: un intento fallido en el último paso no debería costar
+  # un empujón más. Publica la versión que diga package.json en la rama elegida.
+  workflow_dispatch:
 
 jobs:
   publicar:
@@ -29,24 +32,33 @@ jobs:
       id-token: write      # con esto npm sabe que es este repo: autentica la publicación y firma la procedencia
     steps:
       - uses: actions/checkout@v4
+      # SIN `registry-url`, y es el punto entero. Con él, setup-node escribe un .npmrc con un token
+      # de RELLENO (`XXXXX-XXXXX-XXXXX-XXXXX`) y npm lo manda como credencial en vez de preguntarle
+      # a GitHub quién es: el registro contesta 404 y la publicación muere. Pasó el 3-nov, en el
+      # último paso, por segunda vez en el día. npm apunta al registro público por defecto.
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
       # OIDC necesita npm 11.5.1+. El runner trae uno nuevo, pero que una publicación muera en el
       # último paso ya pasó una vez: se comprueba antes y se dice en una línea qué falta.
-      - name: npm sabe autenticarse por OIDC
+      - name: npm sabe autenticarse por OIDC, y no hay credencial que lo tape
         run: |
           v="$(npm -v)"
           echo "npm $v"
           [ "$(printf '11.5.1\n%s\n' "$v" | sort -V | head -1)" = "11.5.1" ] \
             || { echo "npm $v no publica por OIDC: hace falta 11.5.1+"; exit 1; }
+          [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] \
+            || { echo "sin ACTIONS_ID_TOKEN_REQUEST_URL: falta permissions.id-token: write"; exit 1; }
+          [ -z "$NODE_AUTH_TOKEN" ] \
+            || { echo "hay NODE_AUTH_TOKEN en el entorno: npm lo usaría en vez del OIDC"; exit 1; }
+          echo "token configurado para el registro: $(npm config get //registry.npmjs.org/:_authToken)"
       # Cero dependencias: no hay `npm install`.
       - name: Pruebas
         run: npm test
       # La etiqueta y el package.json tienen que decir lo mismo: una etiqueta que no corresponde
       # publica una versión que nadie revisó.
       - name: La etiqueta coincide con package.json
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           etiqueta="${GITHUB_REF_NAME#v}"
           paquete="$(node -p 'require("./package.json").version')"
