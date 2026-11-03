@@ -26,10 +26,79 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 | ☐ | **Al retomar tras el mes de Nicholas (Mac apagado desde el 15-sep)**: leer el buzón de nicholas@ e `GET /ideas` (lo que dejó desde el celular); aprobación de la maqueta v3 y luego la app real (NX-408/409, MINIMAL); decisiones de su Claude del celular pendientes: granularidad de verifica@ en lote, rol del token-wallet, qa@ con memoria por cliente | 14-sep |
 | ☐ | **La carrera en la lectura del historial del asistente** (`test/asistente.test.js:91`). Con dos preguntas seguidas, el turno de la SEGUNDA llevaba el historial viejo pero NO la primera, recién contestada: el agente contesta dos cosas cercanas sin acordarse de la primera. Apareció en el CI de Node 20 el 29-oct. **El 29-oct por la tarde el CI quedó VERDE en Node 20 y 24** — pero no toqué la lectura del historial, así que es UNA muestra y probablemente los tiempos cayeron del otro lado, no un arreglo (`estable-no-es-correcto`). Queda abierto hasta entender la lectura o tener varias muestras | 29-oct |
 | ☐ | Los ~20 hallazgos medios/bajos de la revisión adversarial | 5-sep |
-| ☐ | Ancla DNS TXT `_nyx5.<dominio>` en producción | 5-sep |
+| ☐ | Ancla DNS TXT `_nyx5.b.nyx5.com` **de la casa beta**. La de `nyx5.com` **ya está** y su `sig` coincide con la llave de la tarjeta: comprobado el 3-nov por DNS-over-HTTPS, que es el instrumento correcto porque el resolver de este Mac no sale a UDP/53. La beta responde NODATA y cae al well-known, que es el camino legítimo | 5-sep |
 | ☐ | Reclamar el listado de glama.ai con OAuth de GitHub | 8-sep |
+| ☐ | **Token de automatización de npm** (npmjs.com → Access Tokens → Granular, sólo `@nyx5/nyx5`, permiso de publicación) pegado como secret `NPM_TOKEN` del repo. Sin él la publicación sigue pidiendo su 2FA, que es exactamente la causa de que la puerta sirviera septiembre durante 7 semanas (NX-807) | 3-nov |
 
 ## Hecho
+
+### 3-nov-2026 — la puerta de entrada servía septiembre (NX-807, NX-808)
+
+Nicholas preguntó cómo se hace masivo esto y si valían dos correos que le ofrecían posicionamiento
+(mcprush, get agensi). Fui a ver el terreno antes de opinar, y el terreno dijo otra cosa.
+
+**Adopción externa: cero.** 33 agentes se registraron solos en producción (`via=open`) y los 33
+son nuestros: `prueba-*`, `claude-*` (la CLI autonombra por runtime), `x402*`, `dual-*`,
+`vigia@`, `nico@`. 32 fueron en septiembre. Desde el 15-sep hubo **uno**, el 29-oct
+(`instinct-74ad6780@`, nombre que no sale de `detectarRuntime`, así que puede ser de fuera) y
+no mandó ni un mensaje. De los 8 `first_message` de la historia, ninguno es de un agente llegado
+solo salvo `nico@`, que es él.
+
+**El hallazgo que me corrigió la hipótesis.** Iba a escribir «el embudo se fuga en la activación».
+No se sostiene: no hubo tráfico que fugar. Lo que hay es que **nunca se publicó nada** — ni un
+post, ni un listado enviado más allá de Smithery. Y la puerta, cuando por fin alguien la toque,
+sirve esto:
+
+**npm servía `@nyx5/nyx5` 0.7.0 del 14-sep, 61 commits atrás.** Un desconocido que instalara hoy
+no tenía `attach`, `attachment`, `ejecutor`, `nyx5_attach`, `nyx5_attachment`, `nyx5_hire`,
+`nyx5_payment_confirm`, `nyx5_payment_request`, `nyx5_qa_gate` ni `nyx5_qa_spec`. O sea: el
+dolor con el que se presenta Nyx5 —pasarse archivos entre agentes— no lo podía resolver nadie de
+fuera, ni por el camino fácil ni por el difícil.
+
+**La causa estaba escrita en esta misma bitácora el 14-sep**: *«`npm publish` exige el código 2FA
+de Nicholas»*. La publicación quedó colgada de que él estuviera frente al teclado, él se fue un
+mes, y nada gritó. **Y el número de versión no podía gritar: npm y el repo decían los dos 0.7.0**,
+así que cualquier chequeo que comparara versiones daba verde con la puerta podrida — el mismo
+defecto de «la guardia comprueba el objeto, no el número».
+
+Hecho (commit `794e03d`, en main):
+
+- `scripts/puerta-npm.mjs` compara la **superficie** que ve el desconocido —comandos de la CLI y
+  herramientas MCP, leídos del código, no de una lista a mano— contra el tarball publicado.
+  **Grito**: contra 0.7.0 nombra los 3 comandos y las 7 herramientas que faltan.
+  **Silencio**: con el paquete publicado puesto como repo, sale 0. Las dos pruebas contra objetos
+  reales, ninguna contra un literal que yo inventé.
+- `.github/workflows/puerta.yml`: al entrar algo a main y cada lunes. **No en los PR**, a
+  propósito: un PR no puede cerrar ese rojo y un rojo que nadie puede cerrar se vuelve ruido.
+- `.github/workflows/release.yml`: publica **la casa, no el Mac** — token de automatización (sin
+  2FA), al empujar una etiqueta, sólo si la suite pasa, con procedencia, y abortando si la etiqueta
+  no coincide con `package.json`.
+- Versión 0.8.0. La subí y **la guardia que ya existía me pegó en la mano**:
+  `test/documentacion.test.js:40` exige que `src/version.js` diga lo mismo, porque el edge no
+  puede leer `package.json`. Faltaba ese archivo. Eso es el sistema funcionando.
+
+**Dos sustos que no eran.** (1) `join` contra producción murió con `DNS unavailable ... ETIMEOUT`
+y parecía que la puerta estaba cerrada para todos; es este Mac, que no sale a UDP/53 — ni a
+1.1.1.1. Por DoH el ancla TXT de `nyx5.com` **existe** y su `sig` coincide con la tarjeta, así
+que corregí la fila de arriba que la daba por pendiente desde el 5-sep. (2) Creí que el ancla no
+estaba porque la bitácora lo decía. **Una fila abierta no es una medición**: envejece igual que un
+reporte.
+
+**Lo que el conector fácil no puede hacer (NX-808).** El conector remoto no manda archivos **a
+propósito**: la casa guarda esa llave delegada, así que el adjunto le pasaría en claro por delante
+y caería el invariante 8 (está comentado en `herramientas.js:275`). Correcto, y hoy **no se dice**:
+el agente remoto simplemente no ve las herramientas. Queda como decisión suya porque es texto que
+lee un usuario, y porque arrastra una segunda pregunta que es sólo de él: si se dice en público que
+una llave delegada la puede leer la casa.
+
+**Los dos correos: no.** «mcprush» no aparece en la web ni buscándolo por su nombre — un directorio
+que no se encuentra a sí mismo no manda a nadie. Agensi (agensi.io, Países Bajos, 2026) es un
+mercado de *skills* que le cobra US$9/mes al agente: no es un canal, está en nuestra vereda.
+Listados gratis sí (NX-804, P2); plata por posicionamiento no, y nuestra propia medición del 8-sep
+ya decía que la demanda no vive en los directorios.
+
+Suite: 506, 504 pasan. El único rojo es el de DNS de este Mac (`visibilidad.test.js`, 49 s contra
+su límite), el mismo de siempre.
 
 ### 2-nov-2026 (tarde) — NX-413 DESPLEGADO en las dos casas, y verificado contra el terreno
 
