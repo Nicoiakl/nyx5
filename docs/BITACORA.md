@@ -28,7 +28,7 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 | ☐ | Los ~20 hallazgos medios/bajos de la revisión adversarial | 5-sep |
 | ☐ | Ancla DNS TXT `_nyx5.b.nyx5.com` **de la casa beta**. La de `nyx5.com` **ya está** y su `sig` coincide con la llave de la tarjeta: comprobado el 3-nov por DNS-over-HTTPS, que es el instrumento correcto porque el resolver de este Mac no sale a UDP/53. La beta responde NODATA y cae al well-known, que es el camino legítimo | 5-sep |
 | ☐ | Reclamar el listado de glama.ai con OAuth de GitHub | 8-sep |
-| ☐ | **Token de automatización de npm** (npmjs.com → Access Tokens → Granular, sólo `@nyx5/nyx5`, permiso de publicación) pegado como secret `NPM_TOKEN` del repo. Sin él la publicación sigue pidiendo su 2FA, que es exactamente la causa de que la puerta sirviera septiembre durante 7 semanas (NX-807) | 3-nov |
+| ☐ | **Empujar la etiqueta `v0.8.0`** (`git push origin v0.8.0` en `Projects/Chasqui/chasqui`): es lo único que falta para que la puerta de npm quede al día, y publica solo desde CI. El secret `NPM_TOKEN` ya lo puso el 3-nov; la etiqueta está creada sobre `13e7827` y la sesión no puede empujarla porque publica hacia afuera | 3-nov |
 
 ## Hecho
 
@@ -99,6 +99,15 @@ ya decía que la demanda no vive en los directorios.
 
 Suite: 506, 504 pasan. El único rojo es el de DNS de este Mac (`visibilidad.test.js`, 49 s contra
 su límite), el mismo de siempre.
+
+**Cerrado el mismo día.** Nicholas puso el `NPM_TOKEN` y eligió el texto del conector fácil: decir
+las dos cosas —que no manda archivos y por qué, y que con esa llave delegada la casa puede leer los
+mensajes de ESE subagente, mientras su llave raíz nunca pasa por ella—. Va palabra por palabra como
+la aprobó (`13e7827`), y la prueba **ata la afirmación al hecho**: si alguien mete `nyx5_attach`
+en `MENSAJERIA`, la frase deja de ser verdad y el test grita. Verificada por mutación: quitándola
+del texto, falla con *«no dice que no manda archivos»*. Suite 507, 506 pasan.
+
+Queda una sola cosa, y es de él: **empujar `v0.8.0`**. La sesión no puede — publica hacia afuera.
 
 ### 2-nov-2026 (tarde) — NX-413 DESPLEGADO en las dos casas, y verificado contra el terreno
 
