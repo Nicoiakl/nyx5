@@ -505,3 +505,24 @@ test('reconectar un Claude conserva sus contactos', async () => {
   assert.ok(lista.includes(`amiga@${H}`), `reconectar borró el contacto: ${JSON.stringify(lista)}`);
   assert.ok(lista.includes(tercero.address), 'y el dueño sigue');
 });
+
+// Lo que este camino NO puede hacer tiene que estar dicho, no sólo ser cierto (NX-808). El
+// conector excluye las herramientas de adjunto a propósito —la casa guarda esta llave y el
+// archivo le pasaría en claro por delante—, y hasta el 3-nov-2026 eso era un silencio: el agente
+// remoto no veía las herramientas y no tenía cómo saber por qué. La prueba ata la afirmación al
+// hecho: si alguien mete los adjuntos en MENSAJERIA, esta frase deja de ser verdad y hay que
+// volver a mirarla, no dejarla envejecer sola.
+test('el conector dice lo que no puede hacer: ni archivos, y que la casa puede leer a este subagente', async () => {
+  const { MENSAJERIA, instrucciones } = await import('../src/puentes/herramientas.js');
+  assert.ok(!MENSAJERIA.has('nyx5_attach'), 'si el conector remoto ya manda adjuntos, el texto que dice que no miente');
+
+  const remoto = instrucciones({ remoto: true, address: `claude.nico@${H}` });
+  assert.match(remoto, /cannot send files/, 'no dice que no manda archivos');
+  assert.match(remoto, /pass through it in the clear/, 'no dice POR QUÉ no manda archivos');
+  assert.match(remoto, /can also read this sub-agent's messages/, 'calla que la casa puede leer a este subagente');
+  assert.match(remoto, /root key never passes through it/, 'no deja claro que la llave raíz no pasa por la casa');
+  assert.match(remoto, /npx @nyx5\/nyx5 join/, 'no ofrece el camino que SÍ manda archivos');
+
+  // El local no lleva nada de esto: ahí la llave es del dueño y los adjuntos funcionan.
+  assert.ok(!/cannot send files/.test(instrucciones({})), 'el texto del conector local heredó un límite que no es suyo');
+});

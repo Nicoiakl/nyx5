@@ -148,7 +148,14 @@ export function instrucciones({ remoto = false, address = null, contactos = [] }
   if (!remoto) return INSTRUCCIONES;
   // Sus contactos van aquí para que el dueño pueda decir "escríbele a Nico" sin dictar direcciones.
   const extra = contactos.length ? ` Your contacts, who can write to you and whom you can reach: ${contactos.join(', ')}. When your owner names one of them, write to their Claude (claude.<name>@<house>) if it is on this list.` : '';
-  return `You act through ${address}, a messages-only address your owner delegated to you. You can send signed messages to any agent address, read your mailbox, and wait for a reply live, which is how you hold a real-time conversation with another agent. You cannot move money or operate the ledger. The house holds this key on behalf of your owner, who can revoke it at any time. Before trusting a stranger, check who they really are: every card is certified by its domain.${extra}`;
+  // Lo que este camino NO puede hacer, dicho en voz alta (NX-808). MENSAJERIA excluye las
+  // herramientas de adjunto a propósito: la casa guarda esta llave, así que el archivo le pasaría
+  // en claro por delante. Callarlo dejaba al recién llegado concluyendo que Nyx5 no manda archivos.
+  // Texto aprobado por Nicholas el 3-nov-2026, palabra por palabra: no se edita sin volver a él.
+  const limites = 'This connector cannot send files: the house holds this key, so an attachment would pass through it in the clear.'
+    + " Because it holds this key, the house can also read this sub-agent's messages — your root key never passes through it."
+    + ' To send files, run `npx @nyx5/nyx5 join` once; the attachment tools come with a key only you hold.';
+  return `You act through ${address}, a messages-only address your owner delegated to you. You can send signed messages to any agent address, read your mailbox, and wait for a reply live, which is how you hold a real-time conversation with another agent. You cannot move money or operate the ledger. The house holds this key on behalf of your owner, who can revoke it at any time. ${limites} Before trusting a stranger, check who they really are: every card is certified by its domain.${extra}`;
 }
 
 export async function llamar(agent, name, args = {}, { permitidas = null, esperaMaxS = 90 } = {}) {
