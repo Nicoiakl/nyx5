@@ -4,8 +4,15 @@
 # así que la publicación dejó de ocurrir y se acumularon 61 commits — adjuntos, ejecutor, QA —
 # invisibles para cualquiera de fuera. La puerta de entrada servía septiembre.
 #
-# Ahora publica la casa, no el Mac: un token de automatización de npm (NPM_TOKEN en los secrets
-# del repo) no pide 2FA. Se dispara con una etiqueta, y sólo si la suite pasa.
+# Ahora publica la casa, no el Mac. Y lo hace SIN ningún secreto: GitHub le prueba a npm quién es
+# (OIDC, «trusted publisher»), así que no hay token que robar, que rotar ni que se venza. El primer
+# intento, el 3-nov, fue con un token de automatización y npm lo rechazó con E_STAGE_REQUIRED: los
+# tokens nuevos sólo pueden dejar la versión en una sala de espera, porque npm está retirando los
+# que se saltan el 2FA. Este camino es el que npm quiere y el que sobrevive a ese retiro.
+#
+# Exige, una sola vez, en npmjs.com -> el paquete -> Trusted Publisher: GitHub Actions, repo
+# Nicoiakl/nyx5, workflow `release.yml`, y marcar que se permite `npm publish` DIRECTO — las
+# configuraciones nuevas nacen en «sólo sala de espera» y sin esa marca vuelve a fallar igual.
 #
 #   npm version minor && git push --follow-tags
 name: Release
@@ -19,13 +26,21 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write      # procedencia: npm firma que este tarball salió de ESTE commit
+      id-token: write      # con esto npm sabe que es este repo: autentica la publicación y firma la procedencia
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+      # OIDC necesita npm 11.5.1+. El runner trae uno nuevo, pero que una publicación muera en el
+      # último paso ya pasó una vez: se comprueba antes y se dice en una línea qué falta.
+      - name: npm sabe autenticarse por OIDC
+        run: |
+          v="$(npm -v)"
+          echo "npm $v"
+          [ "$(printf '11.5.1\n%s\n' "$v" | sort -V | head -1)" = "11.5.1" ] \
+            || { echo "npm $v no publica por OIDC: hace falta 11.5.1+"; exit 1; }
       # Cero dependencias: no hay `npm install`.
       - name: Pruebas
         run: npm test
@@ -36,7 +51,7 @@ jobs:
           etiqueta="${GITHUB_REF_NAME#v}"
           paquete="$(node -p 'require("./package.json").version')"
           [ "$etiqueta" = "$paquete" ] || { echo "etiqueta $etiqueta != package.json $paquete"; exit 1; }
+      # Sin NODE_AUTH_TOKEN a propósito: la autenticación es el OIDC de arriba. La procedencia va
+      # igual — npm firma que este tarball salió de ESTE commit y de ESTE workflow.
       - name: Publicar
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
