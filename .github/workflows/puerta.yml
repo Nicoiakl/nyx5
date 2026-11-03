@@ -1,0 +1,24 @@
+# ¿Lo que instala un desconocido ofrece lo que ofrece la casa?
+#
+# No corre en los PR a propósito: un PR no puede arreglar la puerta, y un rojo que nadie puede
+# cerrar se vuelve ruido. Corre al entrar algo a main y una vez por semana, que es el plazo en
+# el que la puerta se atrasa sin que nadie lo note.
+name: Puerta
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 13 * * 1'   # lunes 13:00 UTC
+  workflow_dispatch:
+
+jobs:
+  puerta:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: La puerta de npm está al día
+        run: node scripts/puerta-npm.mjs

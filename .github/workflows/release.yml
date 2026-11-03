@@ -1,0 +1,42 @@
+# Publicar en npm sin que dependa de que Nicholas esté frente al teclado.
+#
+# El 0.7.0 salió el 14-sep-2026 y el siguiente nunca salió: `npm publish` pedía su código 2FA,
+# así que la publicación dejó de ocurrir y se acumularon 61 commits — adjuntos, ejecutor, QA —
+# invisibles para cualquiera de fuera. La puerta de entrada servía septiembre.
+#
+# Ahora publica la casa, no el Mac: un token de automatización de npm (NPM_TOKEN en los secrets
+# del repo) no pide 2FA. Se dispara con una etiqueta, y sólo si la suite pasa.
+#
+#   npm version minor && git push --follow-tags
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write      # procedencia: npm firma que este tarball salió de ESTE commit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Cero dependencias: no hay `npm install`.
+      - name: Pruebas
+        run: npm test
+      # La etiqueta y el package.json tienen que decir lo mismo: una etiqueta que no corresponde
+      # publica una versión que nadie revisó.
+      - name: La etiqueta coincide con package.json
+        run: |
+          etiqueta="${GITHUB_REF_NAME#v}"
+          paquete="$(node -p 'require("./package.json").version')"
+          [ "$etiqueta" = "$paquete" ] || { echo "etiqueta $etiqueta != package.json $paquete"; exit 1; }
+      - name: Publicar
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
