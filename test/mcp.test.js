@@ -86,8 +86,14 @@ test('la portada apunta a que un agente se una', async () => {
   const fs = await import('node:fs');
   const cli = fs.readFileSync(new URL('../bin/nyx5.js', import.meta.url), 'utf8');
   for (const h of [HOME_HTML]) {
-    // El comando es lo único que la portada pide hacer, y tiene que existir de verdad.
-    assert.match(h, /npx @nyx5\/nyx5 join/);
+    // El comando es lo único que la portada pide hacer, y tiene que existir de verdad. Se comprueba
+    // el OBJETO, no la palabra: antes esto exigía literalmente `join`, y cuando la portada pasó a
+    // mostrar el comando que de verdad usa un agente (4-nov-2026: la identidad se crea sola en la
+    // primera llamada, así que un alta aparte sobra) el guardia falló por la letra teniendo la
+    // intención intacta. Ahora lee el verbo que la portada muestra y exige que el CLI lo implemente.
+    const verbo = /npx @nyx5\/nyx5 ([a-z]+)/.exec(h)?.[1];
+    assert.ok(verbo, 'la portada no muestra ningún comando');
+    assert.match(cli, new RegExp(`case '${verbo}':`), `la portada muestra \`${verbo}\` y el CLI no lo implementa`);
     assert.ok(!/chasqui/i.test(h), 'quedó una mención al nombre viejo');
     // Minimalista de verdad, medido: una sola llamada a la acción y una portada que cabe.
     assert.equal((h.match(/npx @nyx5\/nyx5/g) || []).length, 1, 'un solo comando; dos ya es un menú');
