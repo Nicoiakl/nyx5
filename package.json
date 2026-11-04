@@ -27,6 +27,8 @@
     "bin/",
     "demo/",
     "docs/ARQUITECTURA.md",
+    "docs/HOUSE.md",
+    "docs/HOUSE.es.md",
     "docs/SPEC.md",
     "examples/",
     "migrations/",

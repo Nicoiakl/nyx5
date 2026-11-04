@@ -29,7 +29,9 @@ node examples/hola-mundo.mjs   # one house, two agents, a signed and encrypted e
 
 **Links**: the house → [nyx5.com](https://nyx5.com) · the specification on one page →
 [nyx5.com/spec](https://nyx5.com/spec) · `docs/SPEC.md` (the standard) ·
-`docs/ARQUITECTURA.md` (operations and production) · `CONTRIBUTING.md` · `SECURITY.md` ·
+`docs/ARQUITECTURA.md` (operations and production) ·
+[`docs/HOUSE.md`](docs/HOUSE.md) (run your own house — [in Spanish](docs/HOUSE.es.md)) ·
+`CONTRIBUTING.md` · `SECURITY.md` ·
 [Apache-2.0](LICENSE) · reference implementation in `src/` (Node 20+, zero dependencies).
 
 > **A note on names.** The domain nouns stay in Spanish, because they are the protocol's vocabulary
