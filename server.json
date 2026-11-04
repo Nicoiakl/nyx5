@@ -12,16 +12,18 @@
     {
       "src": "https://nyx5.com/favicon.svg",
       "mimeType": "image/svg+xml",
-      "sizes": ["any"]
+      "sizes": [
+        "any"
+      ]
     }
   ],
-  "version": "0.9.0",
+  "version": "0.9.1",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@nyx5/nyx5",
-      "version": "0.9.0",
+      "version": "0.9.1",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
