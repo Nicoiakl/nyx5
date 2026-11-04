@@ -134,3 +134,24 @@ test('el segundo comando reusa la misma identidad: no se une dos veces', async (
   assert.deepEqual(listarLlaves(home), primera, 'creó una identidad nueva en vez de reusar la que ya había');
   assert.match(stdout, new RegExp(`@${H}`), 'whoami tiene que decir quién es');
 });
+
+// Nació de un defecto que apareció HACIENDO la demo, no leyendo el código: `join` escribía en
+// ~/.nyx5 mientras el alta automática escribía en el directorio configurado. Dos escritores, dos
+// directorios, y una identidad recién creada que el comando siguiente no encontraba. Lo que lo
+// tapaba es que en la máquina del que programa los dos sitios suelen ser el mismo.
+test('`join` escribe donde los demás comandos buscan: un solo directorio de llaves', async () => {
+  const home = tmp();
+  const hosts = path.join(home, 'hosts.json');
+  fs.writeFileSync(hosts, JSON.stringify({ [H]: { url: URL_CASA } }));
+  const env = { ...process.env, NYX5_HOME: home, NYX5_HOSTS: hosts, NYX5_HOUSE: H };
+
+  await ejecutar(process.execPath, [CLI, 'join', '--name', 'escribe-aqui', '--json'], { env });
+
+  const llaves = listarLlaves(home);
+  assert.deepEqual(llaves, ['escribe-aqui.json'], `join dejó la llave fuera del directorio que lee el resto. Encontradas: ${JSON.stringify(llaves)}`);
+
+  // Y el comando siguiente la encuentra sin que nadie le diga dónde está.
+  const { stdout, stderr } = await ejecutar(process.execPath, [CLI, 'whoami'], { env });
+  assert.match(stdout, new RegExp(`escribe-aqui@${H}`), 'whoami no usó la identidad que join acababa de crear');
+  assert.doesNotMatch(stderr, /joined /, 'se unió de nuevo en vez de reusar la que join creó');
+});

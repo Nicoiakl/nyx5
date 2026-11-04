@@ -157,7 +157,11 @@ try {
       const capabilities = {};
       if (o.mcp) capabilities.mcp = o.mcp;
       if (o.a2a) capabilities.a2a = o.a2a;
-      const dir = o.out ? path.dirname(path.resolve(o.out)) : path.join(os.homedir(), '.nyx5');
+      // UNA sola definición de dónde viven las llaves (src/correo/identidad.js). Tenerla dos veces
+      // hacía que `join` escribiera en ~/.nyx5 mientras el alta automática escribía en el
+      // directorio configurado: dos escritores, dos directorios, y una identidad que el comando
+      // siguiente no encontraba. Apareció haciendo la demo, no leyendo el código.
+      const dir = o.out ? path.dirname(path.resolve(o.out)) : directorioDeLlaves();
       const r = await join({
         house: casa, name: o.name || null, runtime: o.runtime || detectarRuntime(),
         invite: o.invite || null, listed: !!o.listed, capabilities,
