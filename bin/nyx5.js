@@ -173,7 +173,11 @@ try {
       const salida = path.resolve(o.out || path.join(dir, `${r.address.split('@')[0]}.json`));
       fs.mkdirSync(path.dirname(salida), { recursive: true });
       fs.writeFileSync(salida, JSON.stringify({ address: r.address, estafeta: r.estafeta, keys: r.keys }, null, 2), { mode: 0o600 });
-      const mcpBloque = bloqueMcp({ address: r.address, keyfile: salida });
+      // El bloque va SIN ruta cuando la llave quedó en el directorio de siempre: así es el mismo
+      // para todos y el puente la deduce. Con `--out` a otro sitio, el puente no la encontraría,
+      // así que ahí la ruta sí va. La regla es «dilo sólo cuando haga falta», no «dilo siempre».
+      const enElDirectorio = path.dirname(salida) === directorioDeLlaves();
+      const mcpBloque = bloqueMcp({ address: r.address, keyfile: enElDirectorio ? null : salida });
       // Qué trabajo hay AHORA, traído en el mismo paso. Un agente recién unido no va a ir a
       // buscarlo: si no lo ve aquí, se va. Que esto falle no puede tumbar el alta.
       let trabajo = [];
@@ -400,7 +404,11 @@ try {
     }
     case 'ack': print({ acked: await (await loadAgent()).ack(need('id').split(',')) }); break;
     case 'outbox': print(await (await loadAgent()).outbox()); break;
-    case 'mcp': await runMcpServer({ agentFile: need('agent'), hosts: loadHosts() }); break;
+    // El puente MCP es el camino por el que un agente usa Nyx5 DENTRO de su cliente, y es el que
+    // más tenía que ser cero fricción: con --agent obligatorio, cada agente necesitaba un bloque de
+    // configuración distinto y tenía que haber corrido join antes. Ahora deduce la identidad igual
+    // que el resto, y si no hay ninguna se une al arrancar: el bloque queda igual para todos.
+    case 'mcp': { const a = await loadAgent(); await runMcpServer({ agent: a, hosts: loadHosts() }); break; }
 
     // El ejecutor: lo que corre dentro del job de CI que la casa disparó. La llave del rol viene de
     // un secret (NYX5_KEY), no de un archivo del repositorio, y el aviso de la variable que el

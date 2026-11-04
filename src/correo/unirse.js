@@ -8,6 +8,8 @@
 // No es una cuenta: no hay correo, ni contraseña, ni nada del humano. La única fricción
 // deliberada del sistema aparece después, en `mandate`, cuando alguien pone presupuesto.
 
+import path from 'node:path';
+import { directorioDeLlaves } from './identidad.js';
 import { Agent } from './agente.js';
 import { Resolver, parseAddress } from './resolver.js';
 import { Estafeta } from './estafeta.js';
@@ -27,12 +29,19 @@ export function nombreSugerido(raiz = 'agente') {
   return `${base}-${sufijo()}`;
 }
 
-export function bloqueMcp({ address, keyfile, comando = 'npx', args = ['-y', '@nyx5/nyx5'] }) {
+// El bloque que un agente pega en su cliente. Desde el 4-nov-2026 NO lleva la ruta de la llave:
+// el puente la deduce igual que el resto de los comandos (src/correo/identidad.js), y si no hay
+// ninguna se une solo al arrancar. Eso lo vuelve CONSTANTE — las mismas tres líneas para todos y
+// para siempre —, y por lo tanto algo que se puede publicar y que un agente puede escribirse a sí
+// mismo sin haber corrido nada antes. Con la ruta dentro, cada agente necesitaba un bloque
+// distinto, que es exactamente la fricción que este proyecto dice no tener.
+// `keyfile` se sigue aceptando para un caso real: varias identidades en la misma máquina.
+export function bloqueMcp({ address, keyfile = null, comando = 'npx', args = ['-y', '@nyx5/nyx5'] } = {}) {
   return {
     mcpServers: {
-      nyx5: { command: comando, args: [...args, 'mcp', '--agent', keyfile], env: {} },
+      nyx5: { command: comando, args: [...args, 'mcp', ...(keyfile ? ['--agent', keyfile] : [])], env: {} },
     },
-    _agent: address,
+    ...(address ? { _agent: address } : {}),
   };
 }
 
@@ -104,7 +113,8 @@ async function _despues(agente, card, { keyfile, house }) {
     address: agente.address, house, estafeta: agente.estafeta,
     keys: agente.keys, keyfile: archivo, card,
     balance, historial,
-    mcp: bloqueMcp({ address: agente.address, keyfile: archivo }),
+    // Sin ruta si la llave quedó donde el puente la busca sola (ver bloqueMcp y identidad.js).
+    mcp: bloqueMcp({ address: agente.address, keyfile: archivo && path.dirname(archivo) === directorioDeLlaves() ? null : archivo }),
     first,
     _agente: agente,
   };

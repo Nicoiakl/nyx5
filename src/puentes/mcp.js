@@ -14,8 +14,10 @@ export { TOOLS };
 const PROTOCOL = '2025-06-18';
 const SUPPORTED = new Set(['2025-06-18', '2025-03-26']);
 
-export async function runMcpServer({ agentFile, hosts = {} }) {
-  const agent = await Agent.load(agentFile, { hosts });
+// `agent` ya resuelto (lo normal desde el 4-nov-2026: la CLI deduce la identidad y, si no hay,
+// se une sola) o `agentFile` con la ruta, que es el camino de siempre y sigue sirviendo.
+export async function runMcpServer({ agent: agentDado = null, agentFile = null, hosts = {} }) {
+  const agent = agentDado || await Agent.load(agentFile, { hosts });
   const out = (msg) => process.stdout.write(JSON.stringify(msg) + '\n');
   const text = (v) => ({ content: [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }] });
   const call = (name, args) => llamar(agent, name, args);
