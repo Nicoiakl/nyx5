@@ -28,9 +28,47 @@ Nada de esto lo puede hacer la sesión: exige sus credenciales, su firma o su cr
 | ☐ | Los ~20 hallazgos medios/bajos de la revisión adversarial | 5-sep |
 | ☐ | Ancla DNS TXT `_nyx5.b.nyx5.com` **de la casa beta**. La de `nyx5.com` **ya está** y su `sig` coincide con la llave de la tarjeta: comprobado el 3-nov por DNS-over-HTTPS, que es el instrumento correcto porque el resolver de este Mac no sale a UDP/53. La beta responde NODATA y cae al well-known, que es el camino legítimo | 5-sep |
 | ☐ | Reclamar el listado de glama.ai con OAuth de GitHub | 8-sep |
-| ☐ | **Empujar la etiqueta `v0.8.0`** (`git push origin v0.8.0` en `Projects/Chasqui/chasqui`): es lo único que falta para que la puerta de npm quede al día, y publica solo desde CI. El secret `NPM_TOKEN` ya lo puso el 3-nov; la etiqueta está creada sobre `13e7827` y la sesión no puede empujarla porque publica hacia afuera | 3-nov |
 
 ## Hecho
+
+### 4-nov-2026 — la puerta de npm quedó abierta, y el brief salió (NX-807, NX-808)
+
+**0.8.0 publicado**, y costó tres intentos, cada uno muriendo en el último paso por una razón
+distinta. Vale escribirlas porque las tres son del mismo tipo: **todo verde hasta el final**.
+
+1. **El token no servía.** El de automatización que creó Nicholas es de los nuevos: npm contestó
+   `E_STAGE_REQUIRED` — sólo puede dejar la versión en una sala de espera, porque npm está
+   retirando los tokens que se saltan el 2FA (directo muere en enero de 2027). O sea que el camino
+   del token volvía a dejar la publicación colgada de que él aprobara a mano: justo lo que veníamos
+   a arreglar. Se cambió a **trusted publisher por OIDC**, que no usa ningún secreto.
+2. **`setup-node` tapaba el OIDC.** Con `registry-url`, la acción escribe un .npmrc con un token
+   de RELLENO (`XXXXX-XXXXX-XXXXX-XXXXX`) y lo exporta; npm lo mandó como credencial, nunca le
+   preguntó a GitHub quién era, y el registro contestó **404**. Se quitó `registry-url`: npm apunta
+   al registro público por defecto. Y el paso previo ahora comprueba las tres condiciones ANTES de
+   intentar (npm 11.5.1+, `ACTIONS_ID_TOKEN_REQUEST_URL` presente, cero credenciales en el entorno).
+3. **Faltaba configurar el publisher.** `ENEEDAUTH`. Lo hice yo en su Chrome, con él presente:
+   `Nicoiakl` / `nyx5` / `release.yml`, entorno vacío, y **`Allow npm publish` marcado** — las
+   configuraciones nuevas nacen en «sólo sala de espera» y sin esa marca no publica. Los valores se
+   confirmaron **leyendo el DOM**, no la pantalla, porque el formulario dice «no se puede cambiar
+   después». La llave de seguridad la puso él: eso no lo hace la sesión.
+
+**Y un cuarto susto que no era.** Con el workflow en verde y npm imprimiendo `+ @nyx5/nyx5@0.8.0`,
+`npm view` seguía diciendo 0.7.0 y `time.modified` seguía en septiembre. Parecía que había quedado
+en la sala de espera. No: `GET /@nyx5/nyx5/0.8.0` daba **200** y `dist-tags` ya decía 0.8.0. **El
+packument está cacheado**: el documento agregado del paquete llega viejo mientras la versión ya
+existe. Un `latest` viejo no prueba que no se publicó.
+
+Verificado contra el terreno: el tarball bajado de npm trae `attach`, `nyx5_attach` y la frase del
+conector; `scripts/puerta-npm.mjs` sale **0** por primera vez.
+
+**NX-808 cerrado** (`13e7827`): el conector fácil ya dice que no manda archivos, por qué, y que con
+esa llave delegada la casa puede leer los mensajes de ese subagente. Texto aprobado palabra por
+palabra, prueba atada al hecho, verificada por mutación.
+
+**Y el brief a Felipe Retamal salió**, con el texto que Nicholas aprobó, desde `nicholas@nyx5.com`.
+El .md viajó por archivo, nunca copiado a mano (§6): un script lo lee, sustituye el enlace de
+invitación y falla cerrado si falta el marcador. Confirmado con el proveedor, no con el 202:
+estado **delivered**. La primera dirección que me dio no cuadraba con el nombre y no se mandó nada.
 
 ### 3-nov-2026 — la puerta de entrada servía septiembre (NX-807, NX-808)
 
