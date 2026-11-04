@@ -1,0 +1,6 @@
+{
+  "message": "queryTxt ETIMEOUT _nyx5.nyx5.com",
+  "code": "ETIMEOUT",
+  "syscall": "queryTxt",
+  "hostname": "_nyx5.nyx5.com"
+}

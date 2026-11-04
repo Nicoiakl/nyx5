@@ -61,7 +61,7 @@ src/nucleo/keccak.js     Keccak-256 (el de Ethereum, NO sha3-256) en JS puro; sr
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos · ci · adjuntos · politica -> `npm test` (505)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos · ci · adjuntos · politica · ancla-doh -> `npm test` (533)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 scripts/revision-adversarial.{md,mjs}  el guion adversarial por versión (NX-903) y su parte automatizable
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
@@ -70,7 +70,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 505 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 533 pruebas, todas deben pasar antes de cualquier commit
 npm run revision         # revisión adversarial automatizable contra una casa local (scripts/revision-adversarial.md)
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
@@ -195,6 +195,30 @@ Pero el panel de Cloudflare dice `DNSSEC is pending while we automatically add t
 único botón que ofrece es **Cancel Setup, en rojo**. Quien lea sólo el DNS va a decirle a Nicholas
 que le dé a un botón de encender que ahí no existe, y el único que hay DESHACE lo que está en
 curso. No tocarlo. Hay que mirar las dos superficies antes de pedirle un clic.
+**CERRADO el 4-nov-2026: DNSSEC está ACTIVO.** Cloudflare terminó de poner el DS solo, como decía
+su panel. Medido por DoH: `DS nyx5.com` da `2371 13 2 8eeb2a32…`, hay DNSKEY (ksk 257 y zsk 256,
+algoritmo 13) y las respuestas vuelven con `AD: true`. Esperar era lo correcto; el clic habría
+deshecho lo que estaba en curso.
+
+**El ancla del DNS va por DOS transportes, y el rojo "de esta máquina" era del PRODUCTO**
+(4-nov-2026, `test/ancla-doh.test.js`). En una red sin UDP/53 — un contenedor, un runner de CI,
+una red corporativa, el Mac de Nicholas — `dns.resolveTxt` da ETIMEOUT, y `locate` trataba toda
+falla que no fuera NXDOMAIN como error duro a propósito (que bloquear el DNS no empuje el ancla a
+well-known + TOFU). Correcto en seguridad y fatal en adopción: `npx @nyx5/nyx5 mcp` moría en la
+PRIMERA llamada con el registro TXT perfecto, justo donde viven los agentes. Ahora, si UDP/53 no
+contesta, se pide el MISMO `_nyx5.<dominio>` TXT por HTTPS (`DOH_POR_DEFECTO`, inyectable; `doh:
+null` lo apaga) y sólo entonces se rinde. **No es una degradación**: sigue siendo el registro del
+DNS, y sobre TLS a un resolutor conocido es más difícil de falsear que el UDP sin autenticar que
+ya creíamos; nunca se cae a well-known porque el DNS calló. Tres cosas que no hay que romper:
+- El respaldo es RESPALDO: con el DNS sano no se hace ninguna petición, y un NXDOMAIN por UDP
+  tampoco gasta una (una petición de más es un tercero enterándose sin necesidad).
+- `Status 3` por HTTPS sí deja pasar a well-known (es una afirmación de que no hay registro, y más
+  fuerte que el NXDOMAIN por UDP que ya aceptábamos). `Status 2`, un 500 o una petición que falla
+  son error DURO: ahí está el invariante.
+- **La lección, que es la cara de §1 que no estábamos mirando**: `test/visibilidad.test.js` llevaba
+  semanas en rojo SÓLO en este Mac y lo archivamos como "no tiene DNS". Era el producto hablando.
+  Comprobado por mutación en los dos sentidos: con `doh: null` ese test falla tras 50 s de timeout
+  y con el respaldo pasa. Un rojo que sólo falla en una máquina es una hipótesis, no un descarte.
 
 **DISTRIBUCIÓN EN MARCHA (2026-09-08)** — §7 del spec maestro:
 - **npm @nyx5/nyx5 0.2.4** publicado y verificado: `npx @nyx5/nyx5 join` funciona desde cero contra

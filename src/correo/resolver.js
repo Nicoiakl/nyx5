@@ -3,6 +3,7 @@
 // Orden de resolución del dominio (equivalente al registro MX del correo):
 //   1. Override local (hosts.json / opción hosts)    -> pruebas y redes privadas
 //   2. DNS TXT en _nyx5.<dominio>                  -> ancla pública de confianza
+//   2b. el MISMO TXT por DNS-sobre-HTTPS            -> cuando UDP/53 no contesta
 //   3. https://<dominio>/.well-known/nyx5.json     -> fallback sin DNS
 //
 // Cadena de confianza: clave del dominio (anclada en DNS o pineada) -> certifica la tarjeta
@@ -10,6 +11,16 @@
 
 import dns from 'node:dns/promises';
 import { verifyObject } from '../nucleo/crypto.js';
+
+// El ancla del DNS viaja por DOS transportes. Nace de un defecto medido (4-nov-2026): en una red
+// sin UDP/53 — un contenedor, un runner de CI, una red corporativa, el propio Mac de Nicholas —
+// `dns.resolveTxt` da ETIMEOUT y el agente no podía unirse, aunque el registro TXT estuviera
+// perfecto. Pedir el MISMO `_nyx5.<dominio>` por HTTPS no degrada el ancla: sigue siendo el
+// registro del DNS, y sobre TLS a un resolutor conocido es MÁS difícil de falsear que el UDP
+// sin cifrar ni autenticar que ya creíamos. Lo que NO se hace nunca es caer a well-known
+// porque el DNS no contestó: eso es lo que un atacante conseguiría bloqueándolo.
+const SIN_REGISTRO = Symbol('sin-registro');
+export const DOH_POR_DEFECTO = 'https://cloudflare-dns.com/dns-query';
 
 export function parseAddress(address) {
   const m = /^([a-z0-9][a-z0-9._-]{0,63})@([a-z0-9.-]+)$/i.exec(String(address || ''));
@@ -27,7 +38,7 @@ export function parseTxtRecord(txt) {
 }
 
 export class Resolver {
-  constructor({ hosts = {}, fetchImpl = globalThis.fetch, cacheTtlMs = 5 * 60 * 1000, pins = {}, timeoutMs = 5000, onPin = null, self = null, auth = null } = {}) {
+  constructor({ hosts = {}, fetchImpl = globalThis.fetch, cacheTtlMs = 5 * 60 * 1000, pins = {}, timeoutMs = 5000, onPin = null, self = null, auth = null, dnsImpl = dns, doh = DOH_POR_DEFECTO } = {}) {
     // auth = { domain, header(method, path) }: un CLIENTE (Agent) firma la petición a su propia casa
     // cuando una tarjeta no aparece sin autenticar; así un contacto resuelve a un agente secreto.
     this.auth = auth;
@@ -41,6 +52,10 @@ export class Resolver {
     // (Cloudflare corta la conexión: 522) y en cualquier runtime sería una vuelta inútil.
     // self = { domain, estafeta, domainCard(), agentCard(local) }
     this.self = self;
+    // El ancla del DNS por DOS transportes. `dnsImpl` se inyecta en las pruebas para reproducir
+    // una red sin UDP/53; `doh` es el resolutor por HTTPS (null lo apaga).
+    this.dns = dnsImpl;
+    this.doh = doh;
     this.cache = new Map();
   }
 
@@ -66,20 +81,54 @@ export class Resolver {
     domain = domain.toLowerCase();
     if (this.hosts[domain]) return { source: 'override', ...this.hosts[domain] };
     try {
-      const records = await dns.resolveTxt(`_nyx5.${domain}`);
-      for (const chunks of records) {
-        const rec = parseTxtRecord(chunks.join(''));
-        if (rec.v === 'nyx51' && rec.url) return { source: 'dns', url: rec.url, sig: rec.sig };
-      }
+      const records = await this.dns.resolveTxt(`_nyx5.${domain}`);
+      const ancla = this._anclaEnRegistros(records);
+      if (ancla) return { source: 'dns', ...ancla };
     } catch (e) {
       // "No existe el registro" (NXDOMAIN/sin datos) es el fallback legítimo a well-known.
       // Cualquier OTRA falla de DNS (red, timeout, servfail) NO degrada el ancla en silencio:
       // un atacante que bloquee la respuesta DNS no puede empujarnos a well-known + TOFU.
+      // Antes de rendirse se pide el MISMO registro por HTTPS (ver DOH_POR_DEFECTO): el que está
+      // detrás de una red sin UDP/53 se une, y el que bloquea el DNS sigue sin conseguir nada.
       if (e.code !== 'ENOTFOUND' && e.code !== 'ENODATA') {
-        throw Object.assign(new Error(`DNS unavailable for ${domain}: ${e.message}`), { permanent: false });
+        const porHttps = await this._anclaPorHttps(domain, e);   // lanza si tampoco se pudo
+        if (porHttps !== SIN_REGISTRO) return { source: 'doh', ...porHttps };
       }
     }
     return { source: 'well-known', url: `https://${domain}` };
+  }
+
+  // UNA lectura del registro TXT, la use el transporte que la use.
+  _anclaEnRegistros(records) {
+    for (const chunks of records || []) {
+      const rec = parseTxtRecord(Array.isArray(chunks) ? chunks.join('') : String(chunks));
+      if (rec.v === 'nyx51' && rec.url) return { url: rec.url, sig: rec.sig };
+    }
+    return null;
+  }
+
+  // El mismo `_nyx5.<dominio>` TXT por DNS-sobre-HTTPS. Devuelve el ancla, o SIN_REGISTRO cuando
+  // el resolutor afirma que no existe (y entonces well-known es legítimo, igual que un NXDOMAIN
+  // por UDP). Si NO se pudo preguntar, relanza la falla dura: no inventamos una respuesta.
+  async _anclaPorHttps(domain, causa) {
+    const duro = (msg) => Object.assign(new Error(`DNS unavailable for ${domain}: ${msg}`), { permanent: false });
+    if (!this.doh) throw duro(causa?.message || 'no DNS');
+    let cuerpo;
+    try {
+      const url = `${this.doh}?name=${encodeURIComponent(`_nyx5.${domain}`)}&type=TXT`;
+      const res = await this.fetch(url, { headers: { accept: 'application/dns-json' }, signal: AbortSignal.timeout(this.timeoutMs) });
+      if (!res.ok) throw new Error(`DoH -> ${res.status}`);
+      cuerpo = await res.json();
+    } catch (e) {
+      throw duro(`${causa?.message || 'no DNS'} (y por HTTPS: ${e.message})`);
+    }
+    // Status 3 = NXDOMAIN. Es una afirmación de que no hay registro, no una falla.
+    if (cuerpo?.Status === 3) return SIN_REGISTRO;
+    if (cuerpo?.Status !== 0) throw duro(`${causa?.message || 'no DNS'} (y por HTTPS: status ${cuerpo?.Status})`);
+    // El TXT viene entrecomillado y puede llegar partido en varias cadenas: se unen, como en UDP.
+    const textos = (cuerpo.Answer || []).filter((a) => a.type === 16)
+      .map((a) => String(a.data).replace(/"\s*"/g, '').replace(/^"|"$/g, ''));
+    return this._anclaEnRegistros(textos.map((t) => [t])) || SIN_REGISTRO;
   }
 
   // Tarjeta del dominio, verificada y (si corresponde) contrastada con la clave anclada.
