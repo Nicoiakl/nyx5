@@ -43,6 +43,20 @@ if (!v.ok || v.cuerpo?.valid !== true) {
 }
 console.log(`server.json valida contra el registro (version ${entrada.version})`);
 
+// 1b. npm tiene que servir ya la version que la entrada manda a instalar. Al reves se publica
+// una receta que apunta a algo que no existe, y el que llega se come un 404 de npm. Se comprueba
+// ANTES de pedir token para que un intento temprano no cueste un viaje.
+const npmDeclarada = entrada.packages.find((x) => x.registryType === 'npm')?.version;
+if (npmDeclarada) {
+  const r = await fetch(`https://registry.npmjs.org/${entrada.packages[0].identifier}/${npmDeclarada}`);
+  if (!r.ok) {
+    console.error(`npm todavia no sirve ${entrada.packages[0].identifier}@${npmDeclarada} (HTTP ${r.status}).`);
+    console.error('primero publica el paquete (`git push --follow-tags`, el release corre en CI) y vuelve.');
+    process.exit(1);
+  }
+  console.log(`npm ya sirve ${entrada.packages[0].identifier}@${npmDeclarada}`);
+}
+
 if (seco) { console.log('--dry-run: no se publica'); process.exit(0); }
 
 // 2. Token de GitHub -> JWT del registro.
