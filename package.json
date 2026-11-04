@@ -68,7 +68,8 @@
     "reporte": "node scripts/reporte-libro.mjs",
     "auditar": "bash scripts/auditar-produccion.sh",
     "revision": "node scripts/revision-adversarial.mjs",
-    "build:terms": "node scripts/build-terms.mjs"
+    "build:terms": "node scripts/build-terms.mjs",
+    "version": "node scripts/sincronizar-version.mjs && git add src/version.js server.json"
   },
   "mcpName": "io.github.Nicoiakl/nyx5"
 }
