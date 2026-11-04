@@ -22,3 +22,11 @@ jobs:
           node-version: 24
       - name: La puerta de npm está al día
         run: node scripts/puerta-npm.mjs
+      # El registro oficial de MCP es por donde un agente nos ENCUENTRA, y su entrada es la receta
+      # con la que un cliente arma el comando. Estuvo siete semanas sirviendo la 0.7.0 y pidiendo
+      # `--agent`: el canal de descubrimiento enseñaba la fricción que ya habíamos borrado.
+      # Corre después de la de npm a propósito: si npm está atrasado, el registro también lo está,
+      # y el primer rojo es el que dice por dónde empezar.
+      - name: La puerta del registro MCP está al día
+        if: always()
+        run: node scripts/puerta-registro.mjs

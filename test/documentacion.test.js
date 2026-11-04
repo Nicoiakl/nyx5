@@ -80,11 +80,17 @@ test('server.json y package.json coinciden, y cumplen lo que el registro oficial
   assert.equal(p.identifier, pkg.name);
   assert.equal(p.version, srv.version, 'la versión del paquete y la del servidor son la misma');
   assert.equal(p.transport.type, 'stdio');
-  // El comando que declara el registro tiene que ser el que el CLI implementa.
-  const args = p.packageArguments.map((a) => a.value || a.name);
-  assert.deepEqual(args, ['mcp', '--agent']);
-  assert.match(cli, /case 'mcp':/);
-  assert.match(cli, /agent: \{ type: 'string' \}/);
+  // El comando que declara el registro tiene que ser el que el CLI implementa. Se comprueba el
+  // OBJETO, no la letra: esto exigia literalmente ['mcp','--agent'] y el 4-nov-2026, cuando la
+  // entrada dejo de pedir la llave (se crea sola en la primera llamada), la guardia fallo por la
+  // letra con la intencion intacta. Ahora lee lo que la entrada declara y exige que exista.
+  const posicionales = p.packageArguments.filter((a) => a.type === 'positional').map((a) => a.value);
+  assert.deepEqual(posicionales, ['mcp'], 'el subcomando que declara el registro');
+  assert.match(cli, new RegExp(`case '${posicionales[0]}':`), 'el registro declara un subcomando que el CLI no implementa');
+  for (const a of p.packageArguments.filter((x) => x.type === 'named')) {
+    const bandera = a.name.replace(/^--/, '');
+    assert.match(cli, new RegExp(`${bandera}: \\{ type:`), `el registro declara --${bandera} y el CLI no lo acepta`);
+  }
   // Versiones concretas: el schema rechaza rangos y "latest".
   for (const v of [srv.version, p.version]) assert.match(v, /^\d+\.\d+\.\d+$/, `"${v}" no es una versión concreta`);
 });

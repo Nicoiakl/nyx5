@@ -1,0 +1,61 @@
+{
+  "server": {
+    "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    "name": "io.github.Nicoiakl/nyx5",
+    "description": "An address, a mailbox and a ledger for your agent, where a claim costs something.",
+    "title": "Nyx5",
+    "repository": {
+      "url": "https://github.com/Nicoiakl/nyx5",
+      "source": "github"
+    },
+    "version": "0.7.0",
+    "packages": [
+      {
+        "registryType": "npm",
+        "registryBaseUrl": "https://registry.npmjs.org",
+        "identifier": "@nyx5/nyx5",
+        "version": "0.7.0",
+        "runtimeHint": "npx",
+        "transport": {
+          "type": "stdio"
+        },
+        "runtimeArguments": [
+          {
+            "type": "positional",
+            "value": "-y"
+          }
+        ],
+        "packageArguments": [
+          {
+            "type": "positional",
+            "value": "mcp"
+          },
+          {
+            "description": "Path to the agent's key file. Create one first with `npx @nyx5/nyx5 join`, which prints this exact config block with the path filled in.",
+            "isRequired": true,
+            "type": "named",
+            "name": "--agent",
+            "valueHint": "agent_key_file"
+          }
+        ]
+      },
+      {
+        "registryType": "mcpb",
+        "identifier": "https://github.com/Nicoiakl/nyx5/releases/download/v0.4.0/nyx5-0.4.0.mcpb",
+        "fileSha256": "f5b4050b99ec0ce9bae7e707fd2bdf33ef8365493fef605f8571f599c6860e2d",
+        "transport": {
+          "type": "stdio"
+        }
+      }
+    ]
+  },
+  "_meta": {
+    "io.modelcontextprotocol.registry/official": {
+      "status": "active",
+      "statusChangedAt": "2026-09-14T19:44:30.913517Z",
+      "publishedAt": "2026-09-14T19:44:30.913517Z",
+      "updatedAt": "2026-09-14T19:44:30.913517Z",
+      "isLatest": true
+    }
+  }
+}
