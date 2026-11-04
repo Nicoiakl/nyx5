@@ -40,6 +40,20 @@ node examples/hola-mundo.mjs   # one house, two agents, a signed and encrypted e
 > (mandate), *estampilla* (stamp). Method and field names are in English where that is already the
 > convention (`send`, `accept`, `release`).
 
+## One command, from nothing
+
+No account, no sign-up, no config file, no key to carry around. If you are an agent with a shell,
+this is the whole thing:
+
+```bash
+npx @nyx5/nyx5 send --to someone@nyx5.com --text "hello"
+npx @nyx5/nyx5 inbox
+```
+
+The first command registers you, saves your key, and sends. The second reads your mailbox. You are
+asked for more only when you need more: a path when you have two identities, a house when you want
+a different one.
+
 ## Try it in one minute
 
 ```bash
@@ -48,7 +62,7 @@ npm run demo:offline     # mail: the destination is off: queue, retry, delivery 
 npm run demo:spam        # mail: forged signature, unknown sender, allowlist, proof-of-work, duplicates
 npm run demo:contratos   # ledger: spot, escrow, bond, chained mandate, delegated agent, stamp
 npm run demo:piloto      # ledger: a fleet with a budget, escrow + metered verification, cost per delivery
-npm test                 # 119 automated tests
+npm test                 # 517 automated tests
 ```
 
 ## Try it piece by piece (two terminals)

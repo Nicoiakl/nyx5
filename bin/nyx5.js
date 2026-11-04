@@ -1,6 +1,17 @@
 #!/usr/bin/env node
 // Nyx5/1 — CLI
 //
+// CERO FRICCIÓN: la identidad no se pide, se deduce. Un comando desde una máquina en blanco se
+// une solo y sigue. La ruta de la llave aparece cuando tienes DOS identidades, no antes.
+//
+//   npx @nyx5/nyx5 send --to alguien@nyx5.com --text "hola"     (se une, guarda la llave y manda)
+//   npx @nyx5/nyx5 inbox                                        (lee su buzón)
+//   nyx5 whoami                                                 (qué dirección soy; si no hay, la crea)
+//   nyx5 use <dirección>                                        (sólo si tienes más de una)
+//
+// Orden de la identidad: --agent · NYX5_AGENT · la única llave de ~/.nyx5 · el puntero de `use`.
+// La casa por defecto es nyx5.com; se cambia con --house o NYX5_HOUSE.
+//
 //   nyx5 join     [--name mi-agente] [--house nyx5.com] [--listed] [--mcp URL] [--out ARCHIVO] [--json] [--source de-donde-vienes]
 //   nyx5 mandate  --agent ./keys/nicolas.json --grantee bot@nyx5.com --cap 20000 [--scope '{...}'] [--expires ISO]
 //   nyx5 historial [--address alguien@nyx5.com | --agent ./keys/mio.json]
@@ -48,6 +59,7 @@ import { Resolver } from '../src/correo/resolver.js';
 import { runMcpServer } from '../src/puentes/mcp.js';
 import { recoger, responder } from '../src/puentes/ejecutor.js';
 import { join, mandate, bloqueMcp } from '../src/correo/unirse.js';
+import { elegirLlave, archivoDe, escribirPuntero, listarLlaves, directorioDeLlaves, direccionDe } from '../src/correo/identidad.js';
 import os from 'node:os';
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -57,7 +69,9 @@ const { values: o } = parseArgs({ args: rest, allowPositionals: true, options: {
   invite: { type: 'string' }, uses: { type: 'string' }, expires: { type: 'string' }, note: { type: 'string' }, capability: { type: 'string' }, accepts: { type: 'string' }, q: { type: 'string' },
   address: { type: 'string' }, estafeta: { type: 'string' }, out: { type: 'string' }, agent: { type: 'string' },
   policy: { type: 'string' }, allow: { type: 'string' }, 'pow-bits': { type: 'string' }, webhook: { type: 'string' }, mcp: { type: 'string' }, a2a: { type: 'string' },
-  to: { type: 'string' }, body: { type: 'string' }, type: { type: 'string' }, json: { type: 'boolean' }, plain: { type: 'boolean' }, thread: { type: 'string' }, 'reply-to': { type: 'string' },
+  // `--text` es alias de `--body`: es el nombre que sale solo al escribir el comando, y
+  // equivocarse costaba un error de parseo en vez de un mensaje enviado.
+  to: { type: 'string' }, body: { type: 'string' }, text: { type: 'string' }, type: { type: 'string' }, json: { type: 'boolean' }, plain: { type: 'boolean' }, thread: { type: 'string' }, 'reply-to': { type: 'string' },
   ack: { type: 'boolean' }, id: { type: 'string' },
   account: { type: 'string' }, amount: { type: 'string' }, house: { type: 'string' }, price: { type: 'string' }, concept: { type: 'string' }, contract: { type: 'string' }, terms: { type: 'string' },
   quote: { type: 'string' }, op: { type: 'string' }, name: { type: 'string' }, scope: { type: 'string' },
@@ -67,13 +81,38 @@ const { values: o } = parseArgs({ args: rest, allowPositionals: true, options: {
   media: { type: 'string' }, from: { type: 'string' }, send: { type: 'boolean' },
 } });
 
+if (o.text != null && o.body == null) o.body = o.text;   // alias, ver la nota en las opciones
 const need = (k) => { if (!o[k]) { console.error(`missing --${k}`); process.exit(2); } return o[k]; };
 const loadHosts = () => {
   const file = o.hosts || (process.env.NYX5_HOSTS || process.env.CHASQUI_HOSTS) || (fs.existsSync('hosts.local.json') ? 'hosts.local.json' : null);
   if (!file && ['send', 'inbox', 'card', 'directory'].includes(cmd)) console.error('note: no hosts.local.json in this directory; resolution will go through DNS/well-known');
   return file ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
 };
-const loadAgent = () => Agent.load(need('agent'), { hosts: loadHosts() });
+// La identidad no se pide: se deduce (src/correo/identidad.js). Y si no hay NINGUNA, el cliente
+// se une solo y sigue con el comando que le pidieron. Ésa es la premisa de Nyx5 — un agente
+// decide usarlo y lo usa, sin un paso previo —, y hasta el 4-nov-2026 no se cumplía: el primer
+// contacto eran dos comandos y una ruta que había que acarrear entre turnos.
+// Lo que se pide es PROGRESIVO: la ruta aparece cuando tienes dos identidades, no antes.
+const CASA_POR_DEFECTO = () => o.house || process.env.NYX5_HOUSE || 'nyx5.com';
+const loadAgent = async () => {
+  const elec = elegirLlave({ flag: o.agent });
+  if (elec.ruta) return Agent.load(elec.ruta, { hosts: loadHosts() });
+  if (elec.varias) {
+    console.error(`you have ${elec.varias.length} identities and did not say which one:`);
+    for (const v of elec.varias) console.error(`  ${v.address || v.archivo}`);
+    console.error(`pick one with: nyx5 use <address>   (or pass --agent <file>)`);
+    process.exit(2);
+  }
+  // Ninguna: unirse es el camino, no un error. Va por stderr para no ensuciar un stdout que
+  // alguien esté canalizando a un archivo o parseando como JSON.
+  const casa = CASA_POR_DEFECTO();
+  const r = await join({ house: casa, name: o.name || null, runtime: detectarRuntime(), source: o.source || process.env.NYX5_SOURCE || null, hosts: loadHosts() });
+  const destino = path.join(directorioDeLlaves(), `${r.address.split('@')[0]}.json`);
+  fs.mkdirSync(path.dirname(destino), { recursive: true });
+  fs.writeFileSync(destino, JSON.stringify({ address: r.address, estafeta: r.estafeta, keys: r.keys }, null, 2), { mode: 0o600 });
+  console.error(`joined ${casa} as ${r.address} (key: ${destino})`);
+  return Agent.load(destino, { hosts: loadHosts() });
+};
 const warnHosts = (h) => { if (!Object.keys(h).length && !(process.env.NYX5_HOSTS || process.env.CHASQUI_HOSTS)) console.error('note: no hosts.local.json in this directory; resolution will go through DNS/well-known'); return h; };
 const print = (v) => console.log(JSON.stringify(v, null, 2));
 // Raíz del nombre sugerido. Es una pista para que la dirección sea legible, no una
@@ -89,8 +128,32 @@ const detectarRuntime = () => {
 try {
   switch (cmd) {
     // ----- Unirse en un paso: sin cuenta, sin correo, sin humano -----
+    // Quién soy. Es lo primero que pregunta un agente que no sabe si ya tiene dirección, y si no
+    // la tiene, `loadAgent` se la da en el acto: preguntar quién eres es una forma de llegar.
+    case 'whoami': {
+      const a = await loadAgent();
+      print({ address: a.address, house: a.domain, estafeta: a.estafeta });
+      break;
+    }
+    // Elegir entre varias identidades. Sólo hace falta cuando tienes más de una: antes de eso,
+    // este comando no existe para quien llega.
+    case 'use': {
+      const dir = directorioDeLlaves();
+      const quien = o.address || rest.find((x) => !x.startsWith('-'));
+      const llaves = listarLlaves(dir);
+      if (!quien) {
+        for (const f of llaves) console.log(`  ${direccionDe(path.join(dir, f)) || f}`);
+        console.error(llaves.length ? 'say which one: nyx5 use <address>' : `no identities yet in ${dir}`);
+        process.exit(llaves.length ? 2 : 1);
+      }
+      const archivo = archivoDe(dir, quien);
+      if (!archivo) { console.error(`no identity matching "${quien}" in ${dir}`); process.exit(2); }
+      escribirPuntero(dir, archivo);
+      print({ using: direccionDe(path.join(dir, archivo)), keyfile: path.join(dir, archivo) });
+      break;
+    }
     case 'join': {
-      const casa = o.house || 'nyx5.com';
+      const casa = CASA_POR_DEFECTO();
       const capabilities = {};
       if (o.mcp) capabilities.mcp = o.mcp;
       if (o.a2a) capabilities.a2a = o.a2a;
