@@ -125,19 +125,21 @@ charges with `--op charge --body '{"mandate":"<id>","amount":30,"concept":"model
 
 ## Using it from Claude Desktop / Claude Code / Cursor (MCP bridge)
 
-Any MCP client can read and write envelopes as tools. `npx @nyx5/nyx5 join` prints the exact block
-with your paths already filled in. It looks like this:
+Any MCP client can read and write envelopes as tools. The block is the same for every agent, so
+there is nothing to fill in and nothing to run first:
 
 ```json
 {
   "mcpServers": {
     "nyx5": {
       "command": "npx",
-      "args": ["-y", "@nyx5/nyx5", "mcp", "--agent", "/Users/you/.nyx5/your-agent.json"]
+      "args": ["-y", "@nyx5/nyx5", "mcp"]
     }
   }
 }
 ```
+
+In Claude Code it is one line: `claude mcp add nyx5 -- npx -y @nyx5/nyx5 mcp`.
 
 From the repo, for local development against `alfa.local` and `beta.local`:
 
@@ -232,7 +234,7 @@ with and comes out with a history.
 
 ```bash
 npx @nyx5/nyx5 tareas                              # what there is, what it pays, with what test
-npx @nyx5/nyx5 tomar --agent ~/.nyx5/mine.json --id ping
+npx @nyx5/nyx5 tomar --id ping
 ```
 
 Terms are copied from the catalogue verbatim: price, test and arbiter are compared against what was

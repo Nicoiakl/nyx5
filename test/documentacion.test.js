@@ -138,3 +138,49 @@ test('el paquete no tiene ni una dependencia de npm', () => {
     assert.deepEqual(sueltos, [], `node_modules trae paquetes que package.json no declara: ${sueltos.join(', ')}`);
   }
 });
+
+// El bloque que alguien COPIA tiene que ser el que el registro declara (4-nov-2026). Nació de un
+// defecto medido: Glama servía `--agent` y culpé a su caché; era nuestro README, que en la portada
+// dice «no hay paso de instalación» y veinte líneas más abajo trae un bloque MCP con `--agent` y
+// una ruta que rellenar, más la frase «join imprime el bloque exacto con tus rutas». Tres
+// superficies diciendo tres cosas. El guardia compara contra server.json, que es la receta que un
+// cliente ejecuta de verdad, no contra un literal que yo escriba aquí.
+test('todo bloque mcpServers con npx dice exactamente lo que declara el registro', async () => {
+  const fs = await import('node:fs');
+  const registro = JSON.parse(fs.readFileSync(new URL('../server.json', import.meta.url), 'utf8'));
+  const paquete = registro.packages.find((p) => p.registryType === 'npm');
+  // El nombre del paquete NO está en los argumentos: vive en `identifier`, y `npx` lo necesita en
+  // medio. Olvidarlo hacía que este guardia marcara como malo el bloque correcto de agents.md —
+  // un falso positivo retiene trabajo bueno, que es peor que dejar pasar un caso.
+  const arg = (a) => a.value ?? a.name;
+  const esperado = [...(paquete.runtimeArguments || []).map(arg), paquete.identifier, ...(paquete.packageArguments || []).map(arg)];
+  const malos = [];
+  for (const archivo of ['README.md', 'agents.md']) {
+    const texto = fs.readFileSync(new URL(`../${archivo}`, import.meta.url), 'utf8');
+    for (const m of texto.matchAll(/```json\n([\s\S]*?)```/g)) {
+      let bloque;
+      try { bloque = JSON.parse(m[1]); } catch { continue; }
+      for (const [nombre, cfg] of Object.entries(bloque.mcpServers || {})) {
+        // El bloque de desarrollo local corre el repo con una llave elegida: ahí la ruta es el punto.
+        if (cfg.command !== 'npx') continue;
+        if (JSON.stringify(cfg.args) !== JSON.stringify(esperado)) {
+          malos.push(`${archivo} · ${nombre}: ${JSON.stringify(cfg.args)}\n      el registro declara: ${JSON.stringify(esperado)}`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(malos, [], `un bloque que alguien va a copiar no coincide con la receta publicada:\n    ${malos.join('\n    ')}`);
+});
+
+// La misma trampa en prosa: la portada promete que no hay paso previo, así que ningún comando de
+// ejemplo con `npx` puede pedir la llave a mano. Dentro del repo, con varias identidades en
+// `keys/`, `--agent` sigue siendo necesario y legítimo: por eso se mira sólo lo que empieza con npx.
+test('ningún ejemplo con npx le pide al lector la ruta de su llave', async () => {
+  const fs = await import('node:fs');
+  const malos = [];
+  for (const archivo of ['README.md', 'agents.md']) {
+    const texto = fs.readFileSync(new URL(`../${archivo}`, import.meta.url), 'utf8');
+    for (const m of texto.matchAll(/^.*npx @nyx5\/nyx5 .*--agent.*$/gm)) malos.push(`${archivo}: ${m[0].trim()}`);
+  }
+  assert.deepEqual(malos, [], `la llave se encuentra sola desde 0.9.0; estos ejemplos siguen pidiéndola:\n    ${malos.join('\n    ')}`);
+});
