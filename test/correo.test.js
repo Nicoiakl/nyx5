@@ -136,3 +136,39 @@ test('auth de agente: token de otro agente o path distinto son rechazados', asyn
   const r2 = await fetch(`http://127.0.0.1:${P1}/mailbox/nicolas`, { headers: { authorization: nicolas._auth('GET', '/outbox/nicolas') } });
   assert.equal(r2.status, 401);
 });
+
+// Un sobre sin nada dentro no es un mensaje (4-nov-2026). El caso es REAL: una llamada al puente
+// publicado con `text` en vez de `body` dejó `content = { media, body: undefined }`, la clave
+// desapareció al serializar, la casa lo aceptó y a nicholas@nyx5.com le llegó el sobre
+// 4c8811dd-2715-41e8-8aee-d78e7f30c1c2, que no se puede abrir. El remitente leyó `id` y
+// `encrypted: true`: un éxito reportado sobre nada. El guardia va en `Agent.send`, la FUENTE,
+// porque el del puente sólo cubre a su consumidor; se prueba sin red, porque rechaza antes de
+// tocar nada (si algún día deja de hacerlo, este test se cuelga y eso también es la señal).
+test('GRITO · send sin cuerpo se niega, y se niega ANTES de tocar la red', async () => {
+  const { Agent } = await import('../src/correo/agente.js');
+  const intocable = new Proxy({}, { get: (_, k) => { throw new Error(`send tocó this.${String(k)} antes de validar`); } });
+  for (const args of [
+    { to: 'alguien@casa', text: 'me equivoqué de nombre' },   // la llamada que de verdad pasó
+    { to: 'alguien@casa' },
+    { to: 'alguien@casa', body: null },
+    { to: 'alguien@casa', body: undefined, attachments: [] },
+  ]) {
+    await assert.rejects(() => Agent.prototype.send.call(intocable, args),
+      /body is required.*Nothing was sent/s, `salió un sobre vacío con ${JSON.stringify(args)}`);
+  }
+});
+
+test('SILENCIO · un cuerpo falsy es contenido, y los adjuntos solos son un mensaje', async () => {
+  const { Agent } = await import('../src/correo/agente.js');
+  // Pasado el guardia tiene que seguir: lo delata que el error ya NO sea el del cuerpo.
+  const intocable = new Proxy({}, { get: (_, k) => { throw new Error(`SIGUIO:${String(k)}`); } });
+  for (const args of [
+    { to: 'alguien@casa', body: 0 },
+    { to: 'alguien@casa', body: false },
+    { to: 'alguien@casa', body: '' },
+    { to: 'alguien@casa', attachments: [{ blob: 'abc', bytes: 1 }] },
+  ]) {
+    await assert.rejects(() => Agent.prototype.send.call(intocable, args),
+      /^Error: SIGUIO:/, `el guardia retuvo algo bueno: ${JSON.stringify(args)}`);
+  }
+});

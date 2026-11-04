@@ -161,6 +161,19 @@ export function instrucciones({ remoto = false, address = null, contactos = [] }
 export async function llamar(agent, name, args = {}, { permitidas = null, esperaMaxS = 90 } = {}) {
   const text = (v) => ({ content: [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }] });
   if (permitidas && !permitidas.has(name)) return { ...text(`${name} is not available here: this is a messages-only address (no ledger, no payments)`), isError: true };
+  // Lo que el esquema declara OBLIGATORIO se comprueba aquí, antes de actuar. Nació de un defecto
+  // medido (4-nov-2026): una llamada a nyx5_send con `text` en vez de `body` —el nombre está en el
+  // esquema, no en la memoria de nadie— SALIÓ, y devolvió `id` y `encrypted: true`. O sea un éxito
+  // reportado con un sobre que el destinatario no puede abrir: silencio, no error. 22 de las 31
+  // herramientas declaran campos obligatorios y ninguna los comprobaba. Va en el despachador y no
+  // en cada caso a propósito: un guardia por herramienta cubre la de hoy (memoria del proyecto:
+  // «guardia en el escritor, no en la fuente»). Y dice QUÉ falta y qué sí se recibió, porque el
+  // que se equivoca de nombre no puede adivinar cuál era.
+  const falta = (TOOLS.find((t) => t.name === name)?.inputSchema?.required || []).filter((k) => args[k] === undefined || args[k] === null);
+  if (falta.length) {
+    const sobran = Object.keys(args).filter((k) => k !== 'undefined');
+    return { ...text(`${name}: missing required ${falta.map((k) => `\`${k}\``).join(', ')}. You passed: ${sobran.length ? sobran.join(', ') : '(nothing)'}. Nothing was sent.`), isError: true };
+  }
   switch (name) {
     case 'nyx5_send': { const r = await agent.send({ to: args.to, body: args.body, type: args.type, thread: args.thread, inReplyTo: args.in_reply_to, encrypt: args.encrypt ?? true, project: args.project, role: args.role, summary: args.summary, extensions: args.aval ? { 'urn:nyx5:ext:aval': args.aval } : undefined }); return text({ id: r.id, jobs: r.jobs, encrypted: r.encrypted, summary: r.envelope?.extensions?.['urn:nyx5:ext:resumen']?.text ?? null }); }
     case 'nyx5_inbox': {

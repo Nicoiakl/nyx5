@@ -138,3 +138,53 @@ test('nyx5_send acepta un resumen en claro, lo dice en su descripción y lo devu
   assert.match(prop.description, /140/, 'y decir el tope');
   assert.match(prop.description, /never what the envelope protects/, 'y decir qué NO poner ahí');
 });
+
+// Lo que el esquema declara obligatorio se COMPRUEBA, no se confía (4-nov-2026). El caso no es
+// inventado: es la llamada que hice de verdad contra el paquete publicado, con `text` en vez de
+// `body`. El sobre salió, la respuesta dijo `id` y `encrypted: true`, y a nicholas@nyx5.com le
+// llegó un sobre sin cuerpo. Un éxito reportado sobre nada es el modo de fallo de esta casa.
+test('GRITO · la llamada REAL que mandó un sobre vacío ahora se rechaza, y no sale nada', async () => {
+  const { llamar } = await import('../src/puentes/herramientas.js');
+  const espia = { enviados: 0, send() { this.enviados++; return { id: 'NO-DEBERIA-SALIR' }; } };
+  const r = await llamar(espia, 'nyx5_send', { to: 'nicholas@nyx5.com', text: 'lo que quise mandar', summary: 'prueba' });
+  assert.equal(r.isError, true, 'un envío sin cuerpo no es un éxito');
+  assert.match(r.content[0].text, /missing required `body`/, 'tiene que decir QUÉ falta: el que erró el nombre no puede adivinarlo');
+  assert.match(r.content[0].text, /You passed: to, text, summary/, 'y qué sí recibió, que es lo que delata el nombre equivocado');
+  assert.match(r.content[0].text, /Nothing was sent/, 'y que no salió nada, o el agente lo da por entregado');
+  assert.equal(espia.enviados, 0, 'se rechaza ANTES de actuar, no después');
+  // Un `null` explícito es la otra forma de llegar sin cuerpo, y no la tapa un `undefined`.
+  const r2 = await llamar(espia, 'nyx5_send', { to: 'nicholas@nyx5.com', body: null });
+  assert.equal(r2.isError, true, 'body: null es una ausencia, no un contenido');
+  assert.equal(espia.enviados, 0);
+});
+
+test('ninguna de las 31 herramientas actúa sin lo que su propio esquema exige', async () => {
+  const { TOOLS, llamar } = await import('../src/puentes/herramientas.js');
+  // Un agente que grita si alguien lo toca: la prueba es que no se le llama a NADA.
+  const intocable = new Proxy({}, { get: (_, k) => { if (k === 'then') return undefined; return () => { throw new Error(`se llamó a agent.${String(k)} sin los campos obligatorios`); }; } });
+  const conObligatorios = TOOLS.filter((t) => (t.inputSchema?.required || []).length);
+  assert.ok(conObligatorios.length >= 22, `se esperaban al menos 22 herramientas con obligatorios, hay ${conObligatorios.length}`);
+  for (const t of conObligatorios) {
+    for (const k of t.inputSchema.required) {
+      // todos los obligatorios menos UNO: falta exactamente el que estamos probando
+      const args = {};
+      for (const otro of t.inputSchema.required) if (otro !== k) args[otro] = 'x';
+      const r = await llamar(intocable, t.name, args);
+      assert.equal(r.isError, true, `${t.name} actuó sin \`${k}\`, que su esquema declara obligatorio`);
+      assert.match(r.content[0].text, new RegExp(`missing required \`${k}\``), `${t.name}: el rechazo no nombra \`${k}\``);
+    }
+  }
+});
+
+test('SILENCIO · con los campos completos no se estorba: la herramienta actúa', async () => {
+  const { llamar } = await import('../src/puentes/herramientas.js');
+  const espia = { vistos: null, send(a) { this.vistos = a; return { id: 'ok-1', encrypted: true, envelope: {} }; } };
+  const r = await llamar(espia, 'nyx5_send', { to: 'alguien@nyx5.com', body: 'hola' });
+  assert.ok(!r.isError, `un envío completo no puede fallar: ${r.content?.[0]?.text}`);
+  assert.equal(espia.vistos.body, 'hola');
+  // Un cuerpo falso o cero es contenido legítimo, no un campo ausente.
+  for (const cuerpo of [0, false, '']) {
+    const r2 = await llamar(espia, 'nyx5_send', { to: 'alguien@nyx5.com', body: cuerpo });
+    assert.ok(!r2.isError, `body=${JSON.stringify(cuerpo)} es contenido, no una ausencia`);
+  }
+});

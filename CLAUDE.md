@@ -61,7 +61,7 @@ src/nucleo/keccak.js     Keccak-256 (el de Ethereum, NO sha3-256) en JS puro; sr
 docs/interop/            mapeos contra otros protocolos (ap2.md, x402.md) con la regla de los cuatro veredictos
 test/                    correo · libro · registro · invariantes+D1 · indice · concurrencia · altos ·
                          diferidos · aval · email · mcp · unirse · verifica · tareas · instrumentacion ·
-                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos · ci · adjuntos · politica · ancla-doh -> `npm test` (533)
+                         puertos (guard de colisión) · x402 · interop · custodia · puente-remoto · asistente · app-recibos · grupos · lectura · perfil · tasa · visibilidad · catalogo · estado · busqueda · notaria · hire · historial-lote · revision · qa · x402-pagador · cobro · proyectos · fuente-limpia · terms · ideas · vivos · ci · adjuntos · politica · ancla-doh -> `npm test` (538)
 test/_migraciones.js     todas las migraciones en orden (agregar una .sql no exige tocar cada suite)
 scripts/revision-adversarial.{md,mjs}  el guion adversarial por versión (NX-903) y su parte automatizable
 docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y producción
@@ -70,7 +70,7 @@ docs/SPEC.md             el estándar     docs/ARQUITECTURA.md    operación y p
 ## Comandos
 
 ```
-npm test                 # 533 pruebas, todas deben pasar antes de cualquier commit
+npm test                 # 538 pruebas, todas deben pasar antes de cualquier commit
 npm run revision         # revisión adversarial automatizable contra una casa local (scripts/revision-adversarial.md)
 node demo/edge-local.mjs # el código del edge sobre NODE (CSP, parseo, HEAD). NO es workerd: ver trampas
 npx wrangler dev --port 8790 --local   # el Worker en workerd REAL (.dev.vars + d1 execute --local)
@@ -199,6 +199,22 @@ curso. No tocarlo. Hay que mirar las dos superficies antes de pedirle un clic.
 su panel. Medido por DoH: `DS nyx5.com` da `2371 13 2 8eeb2a32…`, hay DNSKEY (ksk 257 y zsk 256,
 algoritmo 13) y las respuestas vuelven con `AD: true`. Esperar era lo correcto; el clic habría
 deshecho lo que estaba en curso.
+
+**Lo que un esquema declara OBLIGATORIO se comprueba, y un sobre vacío no sale** (4-nov-2026).
+Llamé a `nyx5_send` del paquete publicado con `text` en vez de `body` —el nombre está en el
+esquema, no en la memoria de nadie—. El envío SALIÓ, devolvió `id` y `encrypted: true`, y a
+`nicholas@nyx5.com` le llegó el sobre `4c8811dd…` con `content = { media }` y sin cuerpo: la clave
+desaparece al serializar un `undefined` y la casa lo aceptó. Un éxito reportado sobre nada, que es
+el modo de fallo de §1 en su forma más pura. Dos guardias, en dos capas, porque uno solo no basta:
+- **El puente** (`llamar` en `herramientas.js`) comprueba los `required` del propio esquema de cada
+  herramienta y dice qué falta y qué sí recibió. Va en el DESPACHADOR, no en cada caso: 22 de las
+  31 declaran obligatorios y ninguna los comprobaba.
+- **La fuente** (`Agent.send`) rechaza un sobre sin cuerpo y sin adjuntos. El guardia del puente
+  sólo cubre a su consumidor; esta la usan el CLI, las rutinas y cualquier código
+  (memoria: «guardia en el escritor, no en la fuente»).
+Con **precisión, no cobertura**: un sobre con adjuntos y sin texto SÍ es un mensaje, y un `body` de
+`0`, `false` o `''` es contenido. Nueve mutantes, nueve gritos, cada uno comprobando que la
+mutación entró de verdad al archivo.
 
 **El ancla del DNS va por DOS transportes, y el rojo "de esta máquina" era del PRODUCTO**
 (4-nov-2026, `test/ancla-doh.test.js`). En una red sin UDP/53 — un contenedor, un runner de CI,

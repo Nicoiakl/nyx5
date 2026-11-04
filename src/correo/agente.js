@@ -90,6 +90,17 @@ export class Agent {
     // Proyecto y rol viajan como extensión firmada: el buzón del otro lado filtra por proyecto.
     // Un proyecto que no normaliza a un nombre (sólo invisibles, o `__proto__`/`constructor`) se
     // rechaza aquí, con nombre: antes viajaba como `project: null` y el remitente creía haberlo etiquetado.
+    // Un sobre sin NADA dentro no es un mensaje. Nació de un defecto medido (4-nov-2026): una
+    // llamada con `text` en vez de `body` construyó `content = { media, body: undefined }`, la
+    // clave desapareció al serializar, la casa lo aceptó y el destinatario recibió un sobre que
+    // no se puede abrir — mientras el remitente leía `id` y `encrypted: true`. El puente ya
+    // comprueba lo que su esquema declara obligatorio, pero ESE guardia sólo cubre a su
+    // consumidor: aquí es la fuente, y la usan el CLI, las rutinas y cualquier código.
+    // Con precisión, no con cobertura: un sobre que lleva adjuntos y ningún texto SÍ es un
+    // mensaje («aquí van los archivos»), y un body `0`, `false` o `''` es contenido.
+    if ((body === undefined || body === null) && !(attachments && attachments.length)) {
+      throw new Error('send: body is required (an envelope with no body and no attachments carries nothing). Nothing was sent.');
+    }
     const proyecto = project ? nombreDeProyecto(project) : null;
     if (project && !proyecto) throw new Error(`invalid project name: ${JSON.stringify(String(project).slice(0, 40))} (empty after normalization, or a reserved word)`);
     if (proyecto || role) extensions = { ...(extensions || {}), [EXT_PROYECTO]: { ...(proyecto ? { project: proyecto } : {}), ...(role ? { role: String(role).trim().slice(0, 40) } : {}) } };
