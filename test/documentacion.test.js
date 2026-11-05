@@ -10,6 +10,29 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const raiz = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+// Qué archivos mira un guardia de documentación: TODO lo que viaja en el paquete, leído de la
+// lista `files` de package.json y no de una lista escrita a mano aquí. Nació de un defecto mío:
+// el primer guardia miraba sólo README.md y agents.md —las dos superficies que estaba mirando
+// ese rato— y dejó pasar los cuatro ejemplos de frameworks, donde la misma fricción vieja no era
+// texto sino CÓDIGO que obligaba (`if (!keyfile) throw`). Una lista a mano envejece con el primer
+// archivo nuevo; `files` la mantiene quien publica. Sólo texto: nada de binarios ni migraciones.
+const LEIBLES = /\.(md|mjs|js|py|json|ya?ml|txt|html)$/;
+function publicados() {
+  const entradas = JSON.parse(fs.readFileSync(path.join(raiz, 'package.json'), 'utf8')).files || [];
+  const salida = [];
+  const caminar = (rel) => {
+    const abs = path.join(raiz, rel);
+    if (!fs.existsSync(abs)) return;
+    if (fs.statSync(abs).isDirectory()) {
+      for (const hijo of fs.readdirSync(abs)) caminar(path.join(rel, hijo));
+    } else if (LEIBLES.test(rel)) salida.push(rel);
+  };
+  for (const e of entradas) caminar(e.replace(/\/$/, ''));
+  // Si la lista queda vacía el guardia no mira nada y da verde: falla cerrado.
+  assert.ok(salida.length > 20, `sólo ${salida.length} archivos publicados: la lista no se leyó bien`);
+  return salida;
+}
 const leer = (f) => fs.readFileSync(path.join(raiz, f), 'utf8');
 const cli = leer('bin/nyx5.js');
 // Las herramientas viven en un módulo que sirven los dos puentes (stdio y el remoto por HTTP).
@@ -155,7 +178,7 @@ test('todo bloque mcpServers con npx dice exactamente lo que declara el registro
   const arg = (a) => a.value ?? a.name;
   const esperado = [...(paquete.runtimeArguments || []).map(arg), paquete.identifier, ...(paquete.packageArguments || []).map(arg)];
   const malos = [];
-  for (const archivo of ['README.md', 'agents.md']) {
+  for (const archivo of publicados()) {
     const texto = fs.readFileSync(new URL(`../${archivo}`, import.meta.url), 'utf8');
     for (const m of texto.matchAll(/```json\n([\s\S]*?)```/g)) {
       let bloque;
@@ -178,9 +201,18 @@ test('todo bloque mcpServers con npx dice exactamente lo que declara el registro
 test('ningún ejemplo con npx le pide al lector la ruta de su llave', async () => {
   const fs = await import('node:fs');
   const malos = [];
-  for (const archivo of ['README.md', 'agents.md']) {
+  for (const archivo of publicados()) {
     const texto = fs.readFileSync(new URL(`../${archivo}`, import.meta.url), 'utf8');
-    for (const m of texto.matchAll(/^.*npx @nyx5\/nyx5 .*--agent.*$/gm)) malos.push(`${archivo}: ${m[0].trim()}`);
+    for (const m of texto.matchAll(/^.*npx @nyx5\/nyx5 .*--agent\s+(\S+).*$/gm)) {
+      // UNA excepción, estrecha a propósito: `<their-key>` es la llave de OTRA persona (el
+      // principal que firma un mandato), y ahí nombrarla es lo correcto porque no es la del
+      // lector y no se puede encontrar sola. Cualquier otra cosa —una ruta, `<your-key>`, una
+      // variable con el archivo recién creado— es la llave propia, y pedirla es el paso que ya
+      // no existe. La excepción se escribe por el VALOR, no por archivo ni por línea: exceptuar
+      // `bin/nyx5.js` entero habría tapado las siete que sí sobraban.
+      if (m[1] === '<their-key>') continue;
+      malos.push(`${archivo}: ${m[0].trim()}`);
+    }
   }
   assert.deepEqual(malos, [], `la llave se encuentra sola desde 0.9.0; estos ejemplos siguen pidiéndola:\n    ${malos.join('\n    ')}`);
 });

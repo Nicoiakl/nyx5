@@ -184,7 +184,7 @@ try {
       try {
         const dcw = await new Resolver({ hosts: loadHosts() }).domainCard(casa);
         const jw = await (await fetch(`${dcw._estafeta}/tareas`)).json();
-        trabajo = (jw.tasks || jw.tareas || []).map((t) => ({ id: t.id, pays: t.price, do: t.concept, take: `npx @nyx5/nyx5 tomar --agent ${salida} --id ${t.id}` }));
+        trabajo = (jw.tasks || jw.tareas || []).map((t) => ({ id: t.id, pays: t.price, do: t.concept, take: `npx @nyx5/nyx5 tomar --id ${t.id}` }));
       } catch { trabajo = []; }
       const resumen = {
         nyx5: '1', address: r.address, house: casa, keyfile: salida,
@@ -193,8 +193,8 @@ try {
         paid_work_available_now: trabajo,
         next: {
           take_paid_work: trabajo[0]?.take || `npx @nyx5/nyx5 tareas --house ${casa}`,
-          read_mailbox: `npx @nyx5/nyx5 inbox --agent ${salida}`,
-          my_record: `npx @nyx5/nyx5 historial --agent ${salida}`,
+          read_mailbox: 'npx @nyx5/nyx5 inbox',
+          my_record: 'npx @nyx5/nyx5 historial',
           get_a_budget: `ask your principal to run: npx @nyx5/nyx5 mandate --agent <their-key> --grantee ${r.address} --cap 20000`,
           // Creer que hay que instalar algo y reiniciar el cliente es la fricción que sobra.
           mcp_is_optional: 'every command above runs from the shell; the MCP block only makes these tools appear inside your client',
@@ -241,7 +241,7 @@ try {
       if (o.json) { print(j); break; }
       console.log(`Seeded work at ${casa} (desk ${(j.desk || j.mostrador)}, arbiter ${(j.arbiter || j.arbitro)}):`);
       for (const t of (j.tasks || j.tareas || [])) console.log(`  ${t.id}  ${t.price} tok  ${t.concept}\n      checked with: ${t.verify.map((v) => v.type).join(', ')}`);
-      console.log(`\nTo take one: npx @nyx5/nyx5 tomar --agent <your-key> --id <task>`);
+      console.log('\nTo take one: npx @nyx5/nyx5 tomar --id <task>');
       break;
     }
     case 'tomar': {
@@ -255,8 +255,8 @@ try {
       const enviada = await a.quote({ to: (j.desk || j.mostrador), contract: 'escrow', price: t.price, concept: t.concept, arbiter: (j.arbiter || j.arbitro), terms: t.terms });
       console.log(`Quote sent for "${t.concept}" (${t.price} tok).`);
       console.log('If there is quota left, the house holds the tokens and the contract lands in your mailbox.');
-      console.log(`  read mailbox: npx @nyx5/nyx5 inbox --agent ${o.agent}`);
-      console.log(`  when done:    npx @nyx5/nyx5 libro --agent ${o.agent} --op deliver --args '{"contract":"<id>"}'`);
+      console.log('  read mailbox: npx @nyx5/nyx5 inbox');
+      console.log(`  when done:    npx @nyx5/nyx5 libro --op deliver --args '{"contract":"<id>"}'`);
       if (o.json) print(enviada);
       break;
     }
@@ -273,7 +273,7 @@ try {
       console.log(`  ${m.grantee} may spend up to ${m.cap} tokens from ${m.grantor}'s account.`);
       if (m.expires) console.log(`  Expires: ${m.expires}`);
       if (Object.keys(m.scope || {}).length) console.log(`  Scope: ${JSON.stringify(m.scope)}`);
-      console.log(`  Revoke at any time: npx @nyx5/nyx5 libro --agent <your-key> --op revoke --args '{"mandate":"${m.id}"}'`);
+      console.log(`  Revoke at any time: npx @nyx5/nyx5 libro --op revoke --args '{"mandate":"${m.id}"}'`);
       break;
     }
     // ----- Reputación = una consulta al libro (pública) -----

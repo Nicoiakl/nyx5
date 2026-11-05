@@ -200,6 +200,34 @@ su panel. Medido por DoH: `DS nyx5.com` da `2371 13 2 8eeb2a32…`, hay DNSKEY (
 algoritmo 13) y las respuestas vuelven con `AD: true`. Esperar era lo correcto; el clic habría
 deshecho lo que estaba en curso.
 
+**El guardia de documentación mira TODO lo que se publica, y el `--agent` estaba en el producto**
+(4-nov-2026). Glama servía `--agent` y culpé a su caché; era nuestro README. Lo arreglé, escribí
+un guardia que miraba README.md y agents.md —las dos superficies que estaba mirando ese rato— y
+quedó verde. Al ampliarlo a la lista `files` de package.json aparecieron nueve más, y las peores
+no eran texto:
+- **`bin/nyx5.js`**: el bloque `next` que `join` le devuelve a un agente recién unido le decía
+  `inbox --agent /ruta/absoluta/a/su/llave.json`. Es la superficie que MÁS se obedece —es lo que
+  el agente lee justo después de unirse— y esa ruta sólo sirve en esa máquina: un agente que
+  guarda sus «próximos pasos» y los reusa en otra sesión o contenedor recibe «no such file».
+- **Los cuatro ejemplos de frameworks**, donde dos tenían `if (!keyfile) throw new Error(...)`:
+  nuestro propio ejemplo se NEGABA a arrancar sin una ruta que ya no hace falta. Y
+  `test/plantillas.test.js` exigía ese throw, o sea que una prueba estaba FIJANDO la fricción y
+  dando verde.
+La bandera `--agent` sigue existiendo: lo que se quitó es enseñarla como obligatoria. El guardia
+lleva UNA excepción, escrita por el VALOR y no por archivo: `--agent <their-key>` es la llave de
+otra persona (el principal que firma un mandato) y ahí nombrarla es correcto; exceptuar
+`bin/nyx5.js` entero habría tapado las siete que sí sobraban.
+**La lección**: un guardia nuevo hereda el alcance de lo que estabas mirando cuando lo escribiste.
+La lista de archivos se lee de donde la mantiene quien publica (`files`), nunca a mano.
+
+**`exports` cierra las puertas de atrás** (4-nov-2026). Sin `exports`, npm deja importable TODO el
+árbol: `import '@nyx5/nyx5/src/correo/agente.js'` funcionaba, o sea que cada archivo interno era
+una promesa que nadie hizo y que se rompe al mover una carpeta. Ahora sólo se exporta
+`./package.json`. Comprobado empaquetando e instalando de verdad, no sobre el repo: los tres
+caminos dan `ERR_PACKAGE_PATH_NOT_EXPORTED` y la CLI sigue andando (se invoca por RUTA de archivo,
+que `exports` no toca). No somos una librería y no lo prometemos; el día que se decida ofrecer
+`import { Agent }`, es una línea más.
+
 **Lo que un esquema declara OBLIGATORIO se comprueba, y un sobre vacío no sale** (4-nov-2026).
 Llamé a `nyx5_send` del paquete publicado con `text` en vez de `body` —el nombre está en el
 esquema, no en la memoria de nadie—. El envío SALIÓ, devolvió `id` y `encrypted: true`, y a

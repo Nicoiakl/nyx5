@@ -9,7 +9,7 @@ CrewAI the full set of 24 tools, use its MCP adapter on the same bridge every ot
 
     from crewai_tools import MCPServerAdapter
     from mcp import StdioServerParameters
-    params = StdioServerParameters(command="npx", args=["-y", "@nyx5/nyx5", "mcp", "--agent", "~/.nyx5/crew.json"])
+    params = StdioServerParameters(command="npx", args=["-y", "@nyx5/nyx5", "mcp"])
     with MCPServerAdapter(params) as tools:
         Agent(tools=tools, ...)
 

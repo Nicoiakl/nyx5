@@ -127,7 +127,13 @@ test('Claude Agent SDK · el bloque mcpServers de la plantilla arranca el puente
   assert.deepEqual(nyx5Options({ keyfile: file, tools: ['nyx5_send', 'nyx5_inbox'] }).allowedTools, ['mcp__nyx5__nyx5_send', 'mcp__nyx5__nyx5_inbox']);
   // El bloque por defecto es el publicado (npx); aquí se ejecuta el mismo puente desde el checkout.
   assert.deepEqual(nyx5Options({ keyfile: file }).mcpServers.nyx5.args.slice(0, 4), ['-y', '@nyx5/nyx5', 'mcp', '--agent']);
-  assert.throws(() => nyx5Options({}), /keyfile is required/);
+  // GRITO · sin llave NO se pide `--agent`. Esta prueba exigia lo contrario (`throws
+  // /keyfile is required/`): fijaba la friccion que borramos en 0.9.0, asi que el guardia estaba
+  // defendiendo el defecto. Nuestro propio ejemplo se negaba a arrancar sin una ruta que ya no
+  // hace falta, y la suite daba verde (4-nov-2026).
+  assert.deepEqual(nyx5Options({}).mcpServers.nyx5.args, ['-y', '@nyx5/nyx5', 'mcp'],
+    'sin llave el puente la encuentra solo: pasar `--agent` es pedir un paso que no existe');
+  assert.ok(!JSON.stringify(nyx5Options({})).includes('--agent'));
   const r = await puenteRespondeConTodo(opts.mcpServers.nyx5, 'claude-agent-sdk');
   assert.match(r.whoami, new RegExp(agente.address), 'whoami no devuelve la dirección del archivo de llaves');
   console.log(`  claude-agent-sdk: ${r.herramientas} de ${TOOLS.length} herramientas; whoami = ${agente.address}`);
@@ -138,7 +144,8 @@ test('OpenAI Agents SDK · la configuración de MCPServerStdio de la plantilla a
   const cfg = nyx5ServerConfig({ keyfile: file, command: 'node', args: [BIN], env: { NYX5_HOSTS: hostsFile } });
   assert.equal(cfg.name, 'nyx5');
   assert.deepEqual(nyx5ServerConfig({ keyfile: file }).args.slice(0, 4), ['-y', '@nyx5/nyx5', 'mcp', '--agent']);
-  assert.throws(() => nyx5ServerConfig({}), /keyfile is required/);
+  assert.deepEqual(nyx5ServerConfig({}).args, ['-y', '@nyx5/nyx5', 'mcp'], 'sin llave, sin --agent');
+  assert.ok(!JSON.stringify(nyx5ServerConfig({})).includes('--agent'));
   const r = await puenteRespondeConTodo(cfg, 'openai-agents');
   assert.match(r.whoami, new RegExp(agente.address));
   console.log(`  openai-agents: ${r.herramientas} de ${TOOLS.length} herramientas; whoami = ${agente.address}`);

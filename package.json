@@ -18,6 +18,9 @@
   "bin": {
     "nyx5": "bin/nyx5.js"
   },
+  "exports": {
+    "./package.json": "./package.json"
+  },
   "files": [
     "CONTRIBUTING.md",
     "LICENSE",
