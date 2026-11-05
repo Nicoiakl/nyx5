@@ -200,6 +200,16 @@ su panel. Medido por DoH: `DS nyx5.com` da `2371 13 2 8eeb2a32…`, hay DNSKEY (
 algoritmo 13) y las respuestas vuelven con `AD: true`. Esperar era lo correcto; el clic habría
 deshecho lo que estaba en curso.
 
+**Una etiqueta no es un release** (5-nov-2026). Había **17 etiquetas empujadas y UN solo GitHub
+Release, el v0.4.0 del 8-sep**: dos meses de trabajo invisibles para quien llega. La página de
+Releases es lo primero que mira alguien para saber si un proyecto sigue vivo, y GitHub es la
+superficie por la que de verdad nos encuentran (el dominio no está indexado). Es el mismo error
+que «npm y el repo dicen el mismo número»: parecía al día mirando lo que no era. `release.yml`
+crea ahora el release de cada etiqueta, DESPUÉS de publicar en npm —anunciar una versión que npm
+no sirve es prometer de gratis—, es idempotente (si ya existe, no hace nada) y se comprueba contra
+la API, no contra la salida de `gh`: un release en borrador no lo ve nadie. Necesita
+`permissions: contents: write`.
+
 **El guardia de documentación mira TODO lo que se publica, y el `--agent` estaba en el producto**
 (4-nov-2026). Glama servía `--agent` y culpé a su caché; era nuestro README. Lo arreglé, escribí
 un guardia que miraba README.md y agents.md —las dos superficies que estaba mirando ese rato— y

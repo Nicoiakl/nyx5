@@ -28,7 +28,7 @@ jobs:
   publicar:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write      # para crear el GitHub Release de la etiqueta (ver el último paso)
       id-token: write      # con esto npm sabe que es este repo: autentica la publicación y firma la procedencia
     steps:
       - uses: actions/checkout@v4
@@ -67,3 +67,24 @@ jobs:
       # igual — npm firma que este tarball salió de ESTE commit y de ESTE workflow.
       - name: Publicar
         run: npm publish --provenance --access public
+      # La página de Releases es lo primero que mira quien evalúa si un proyecto sigue vivo, y
+      # GitHub es la superficie por la que de verdad nos encuentran: el dominio no está indexado.
+      # El 5-nov había 17 etiquetas empujadas y UN solo release, el v0.4.0 del 8-sep: dos meses de
+      # trabajo invisibles para quien llega. Una etiqueta no es un release — es el mismo error que
+      # «npm y el repo dicen el mismo número»: parecía al día mirando lo que no era.
+      # Va DESPUÉS de npm a propósito: anunciar una versión que npm no sirve es prometer de gratis.
+      - name: Dejar el release de GitHub al día
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${GITHUB_REF_NAME}"
+          if gh release view "$v" >/dev/null 2>&1; then echo "release $v ya existe"; exit 0; fi
+          gh release create "$v" \
+            --title "Nyx5 ${v#v}" \
+            --generate-notes \
+            --verify-tag
+          echo "release $v creado"
+          # Contra el terreno, no contra la salida de gh (§1): se le pregunta a la API.
+          gh release view "$v" --json tagName,isDraft \
+            --jq 'if .isDraft then error("quedó en borrador: nadie lo ve") else "publicado: " + .tagName end'
