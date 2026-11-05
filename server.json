@@ -17,13 +17,13 @@
       ]
     }
   ],
-  "version": "0.9.4",
+  "version": "0.9.5",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@nyx5/nyx5",
-      "version": "0.9.4",
+      "version": "0.9.5",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
