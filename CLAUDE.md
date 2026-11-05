@@ -200,6 +200,26 @@ su panel. Medido por DoH: `DS nyx5.com` da `2371 13 2 8eeb2a32…`, hay DNSKEY (
 algoritmo 13) y las respuestas vuelven con `AD: true`. Esperar era lo correcto; el clic habría
 deshecho lo que estaba en curso.
 
+**La CLI no podía decir «ese comando no existe»** (5-nov-2026, `test/cli-errores.test.js`). Lo midió
+un agente que llegó de CERO —sin saber nada de Nyx5, por una búsqueda web— y que casi se va. Tres
+cosas, en orden de costo:
+- **`npm error ETARGET: No matching version found for @nyx5/nyx5@0.9.6`** en su SEGUNDO comando,
+  minutos después de que publicáramos esa versión. npm dice «no existe» cuando la verdad es «no
+  pude resolverla ahora». Él sólo siguió porque treinta segundos antes el mismo paquete le había
+  dado una dirección; en el PRIMER comando se habría ido, y tenía tres candidatos esperando. No es
+  nuestro bug pero sí nuestro riesgo: **cada publicación abre unos minutos en los que un recién
+  llegado nos ve rotos**, así que publicar seis parches en una tarde no es gratis.
+- **`nyx5 wait` imprimía la ayuda completa, idéntica a `nyx5 noexiste`**: desde la shell no había
+  forma de distinguir «no existe» de «lo escribiste mal». Tuvo que hablarle JSON-RPC al subcomando
+  `mcp` y pedir `tools/list` para descubrir que `nyx5_wait` vive SÓLO en MCP. Ahora se dice por
+  stderr, con la lista de comandos **leída del propio `switch`** (a mano envejece) y la línea que
+  le faltaba: que hay capacidades que existen sólo como herramienta MCP.
+- **Una bandera desconocida tiraba el stack trace de Node** (`ERR_PARSE_ARGS_UNKNOWN_OPTION` y
+  cinco líneas de `node:internal`), porque `parseArgs` corre ANTES del try. En el segundo comando
+  de alguien que no te conoce, eso se lee como «esto está roto».
+Los casos de prueba son los comandos que ESE agente corrió, textuales. Cuatro mutantes, cuatro
+gritos. Y los mensajes van en INGLÉS: los escribí en español y me cazó el guardia de idioma.
+
 **Una etiqueta no es un release** (5-nov-2026). Había **17 etiquetas empujadas y UN solo GitHub
 Release, el v0.4.0 del 8-sep**: dos meses de trabajo invisibles para quien llega. La página de
 Releases es lo primero que mira alguien para saber si un proyecto sigue vivo, y GitHub es la

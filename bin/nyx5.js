@@ -63,7 +63,16 @@ import { elegirLlave, archivoDe, escribirPuntero, listarLlaves, directorioDeLlav
 import os from 'node:os';
 
 const [cmd, ...rest] = process.argv.slice(2);
-const { values: o } = parseArgs({ args: rest, allowPositionals: true, options: {
+
+// La lista de comandos se LEE del propio switch, no se escribe a mano: una lista a mano envejece
+// con el primer comando nuevo y entonces el mensaje de "no existe" miente al revés.
+const COMANDOS = [...fs.readFileSync(new URL(import.meta.url), 'utf8').matchAll(/^\s{4}case '([a-z0-9-]+)':/gm)].map((m) => m[1]);
+
+// parseArgs LANZA ante una bandera desconocida, y como esto corre antes del try de abajo el
+// usuario recibía el stack trace crudo de Node (ERR_PARSE_ARGS_UNKNOWN_OPTION + cinco líneas de
+// node:internal). Lo reportó un agente que llegó de cero el 5-nov-2026 probando `wait --timeout`:
+// un error así, en el segundo comando de alguien que no nos conoce, se lee como "esto está roto".
+const OPCIONES = {
   domain: { type: 'string' }, port: { type: 'string' }, data: { type: 'string' }, 'admin-token': { type: 'string' }, 'public-url': { type: 'string' },
   'require-relay': { type: 'boolean' }, hosts: { type: 'string' }, registration: { type: 'string' }, welcome: { type: 'string' }, fee: { type: 'string' },
   invite: { type: 'string' }, uses: { type: 'string' }, expires: { type: 'string' }, note: { type: 'string' }, capability: { type: 'string' }, accepts: { type: 'string' }, q: { type: 'string' },
@@ -79,7 +88,18 @@ const { values: o } = parseArgs({ args: rest, allowPositionals: true, options: {
   args: { type: 'string' }, index: { type: 'string' }, arbiter: { type: 'string' }, receipt: { type: 'string' }, limit: { type: 'string' },
   file: { type: 'string' }, 'no-ack': { type: 'boolean' },
   media: { type: 'string' }, from: { type: 'string' }, send: { type: 'boolean' },
-} });
+};
+
+let o;
+try {
+  ({ values: o } = parseArgs({ args: rest, allowPositionals: true, options: OPCIONES }));
+} catch (e) {
+  const cual = /Unknown option '([^']+)'/.exec(e.message)?.[1];
+  console.error(cual ? `error: ${cual} is not a nyx5 option.` : `error: ${e.message}`);
+  console.error(`valid options: ${Object.keys(OPCIONES).map((k) => `--${k}`).join(' ')}`);
+  console.error('help: npx @nyx5/nyx5');
+  process.exit(1);
+}
 
 if (o.text != null && o.body == null) o.body = o.text;   // alias, ver la nota en las opciones
 const need = (k) => { if (!o[k]) { console.error(`missing --${k}`); process.exit(2); } return o[k]; };
@@ -469,9 +489,22 @@ try {
       fs.writeFileSync(out, JSON.stringify({ address: sub.address, estafeta: sub.estafeta, keys: sub.keys }, null, 2), { mode: 0o600 });
       console.log(`subagent ${sub.address} created; keys in ${out}`); break;
     }
-    default:
-      console.log(fs.readFileSync(new URL(import.meta.url)).toString().split('\n').slice(1, 33).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
-      process.exit(cmd ? 1 : 0);
+    default: {
+      // Sin comando: la ayuda es la respuesta correcta. CON un comando que no existe, imprimir la
+      // MISMA ayuda hace que «no existe» y «lo escribiste mal» sean indistinguibles desde la
+      // shell. Lo midió un agente que llegó de cero el 5-nov-2026: probó `wait`, recibió la ayuda
+      // completa, y tuvo que hablarle JSON-RPC al subcomando `mcp` para averiguar que `wait` sólo
+      // existe por MCP. Ahora se dice, por stderr, y se sugiere lo más parecido.
+      const ayuda = fs.readFileSync(new URL(import.meta.url)).toString().split('\n').slice(1, 33).map((l) => l.replace(/^\/\/ ?/, '')).join('\n');
+      if (!cmd) { console.log(ayuda); process.exit(0); }
+      console.error(`error: "${cmd}" is not a nyx5 command.`);
+      const cerca = COMANDOS.filter((c) => c.startsWith(cmd.slice(0, 3)) || cmd.startsWith(c.slice(0, 3)));
+      if (cerca.length) console.error(`did you mean: ${cerca.join(', ')}?`);
+      console.error(`commands: ${COMANDOS.join(' ')}`);
+      console.error('Some capabilities exist only as MCP tools, not as a command: npx @nyx5/nyx5 mcp');
+      console.log(ayuda);
+      process.exit(1);
+    }
   }
 } catch (e) {
   console.error('error:', e.message);
