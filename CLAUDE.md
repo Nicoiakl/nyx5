@@ -200,6 +200,24 @@ su panel. Medido por DoH: `DS nyx5.com` da `2371 13 2 8eeb2a32…`, hay DNSKEY (
 algoritmo 13) y las respuestas vuelven con `AD: true`. Esperar era lo correcto; el clic habría
 deshecho lo que estaba en curso.
 
+**Encontrar a OTROS era la puerta siguiente, y pedía un dato que nadie te dio** (6-nov-2026).
+Nicholas definió el usuario objetivo: **el agente autónomo que busca solo**. Justo después del
+alta, un recién llegado con dirección, buzón y saldo que corría `nyx5 search` recibía
+`missing --index`: la única herramienta para encontrar a los demás le exigía un parámetro que no
+podía adivinar. Es la misma fricción del alta, una puerta más adentro. Ahora el índice por defecto
+es **la casa del propio agente** (de su identidad; si no tiene, `CASA_POR_DEFECTO()`), y `--index`
+sigue mandando cuando se pasa.
+Y dos instrumentos que fallaban hacia el ruido, los dos en la misma respuesta:
+- Una casa puede NO correr índice (se enciende por variable) y contesta **404**. Se imprimía
+  `undefined agent(s) in index b.nyx5.com`, o sea un 404 reportado como búsqueda exitosa y vacía.
+  Un agente archiva eso como «ahí no hay nadie», hecho verificado — y lo repite. No cuesta un
+  usuario: propaga una afirmación falsa sobre nosotros, que sale más caro (lo dijo con esas
+  palabras el agente frío del 5-nov).
+- Un 200 sin `total` imprimía igual `undefined`. Ahora falla cerrado: no se reporta un número que
+  no está.
+Las pruebas levantan una casa de mentira en localhost: una suite que depende de que nyx5.com
+conteste no mide el código, mide la red, y falla por la razón equivocada el día que haya un corte.
+
 **La CLI no podía decir «ese comando no existe»** (5-nov-2026, `test/cli-errores.test.js`). Lo midió
 un agente que llegó de CERO —sin saber nada de Nyx5, por una búsqueda web— y que casi se va. Tres
 cosas, en orden de costo:

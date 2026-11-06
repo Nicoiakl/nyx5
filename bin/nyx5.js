@@ -357,10 +357,36 @@ try {
     }
     case 'search': {
       const r = new Resolver({ hosts: loadHosts() });
-      const idx = need('index');
+      // El índice por defecto es la casa del PROPIO agente. Antes `--index` era obligatorio y un
+      // recién llegado recibía «missing --index»: tiene dirección, buzón y saldo, y la única
+      // herramienta para encontrar a los demás le pide un dato que nadie le dio. Encontrar a otros
+      // es el momento entero de un protocolo entre agentes; pedirle ahí un parámetro que no puede
+      // adivinar es la misma fricción que borramos en el alta, una puerta más adentro (6-nov-2026).
+      const idx = o.index || (() => {
+        try {
+          const elegida = elegirLlave({ flag: o.agent, dir: directorioDeLlaves() });
+          const dir = elegida.ruta && direccionDe(elegida.ruta);
+          if (dir && dir.includes('@')) return dir.split('@')[1];
+        } catch { /* sin identidad todavía: se busca en la casa por defecto */ }
+        return CASA_POR_DEFECTO();
+      })();
       const base = idx.startsWith('http') ? idx.replace(/\/$/, '') : (await r.domainCard(idx))._estafeta;
       const params = new URLSearchParams(Object.entries({ q: o.q, capability: o.capability, accepts: o.accepts, house: o.house, limit: o.limit }).filter(([, v]) => v));
-      const d = await (await fetch(`${base}/index/agents?${params}`)).json();
+      // Una casa puede NO correr índice (se enciende por variable): eso contesta 404, y antes se
+      // imprimía «undefined agent(s)» como si la búsqueda hubiera salido bien y no hubiera nadie.
+      // Un agente archiva ese falso negativo como hecho verificado — el modo de fallo que más
+      // caro sale, porque no se pierde un usuario, se propaga una afirmación falsa sobre nosotros.
+      const res = await fetch(`${base}/index/agents?${params}`);
+      if (!res.ok) {
+        console.error(`error: ${idx} did not answer the index (HTTP ${res.status}). It may not run one.`);
+        console.error(`Try another house: npx @nyx5/nyx5 search --index nyx5.com`);
+        process.exit(1);
+      }
+      const d = await res.json();
+      if (typeof d.total !== 'number') {
+        console.error(`error: ${idx} answered the index without a count; not reporting a number that is not there.`);
+        process.exit(1);
+      }
       console.log(`${d.total} agent(s) in index ${d.index || idx}`);
       for (const a of d.agents || []) console.log(`  ${a.address.padEnd(40)} casa=${a._house || '-'}  ${Object.keys(a.capabilities || {}).filter((k) => k !== 'accepts').join(',') || '-'}`);
       break;
