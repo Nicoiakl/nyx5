@@ -216,3 +216,26 @@ test('ningún ejemplo con npx le pide al lector la ruta de su llave', async () =
   }
   assert.deepEqual(malos, [], `la llave se encuentra sola desde 0.9.0; estos ejemplos siguen pidiéndola:\n    ${malos.join('\n    ')}`);
 });
+
+// La apertura del README es la superficie que de verdad nos encuentra: medido el 5-nov-2026, un
+// agente que llegó de cero nos halló por el README CRUDO en GitHub, nunca por nyx5.com, que no
+// está indexado. Y nos halló en su TERCERA búsqueda: las dos primeras usaban las palabras del
+// PROBLEMA («own address», «agent-to-agent», «identity») y el README sólo tenía las de nuestra
+// solución. Este guardia cuida las dos mitades a la vez, porque son dos defectos distintos:
+// perder las palabras del problema nos saca de las búsquedas, y perder el diferenciador nos
+// convierte en un proveedor de correo más — que es justo la categoría de la que nos distinguimos.
+test('la apertura del README mantiene las palabras del problema Y el diferenciador', async () => {
+  const fs = await import('node:fs');
+  const texto = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  // Se normalizan los espacios ANTES de buscar: el README va ajustado a 100 columnas, así que
+  // «cost tokens» puede quedar partido por un salto de línea. Un guardia que falla por el ajuste
+  // de línea y no por el contenido es un falso positivo, y un falso positivo retiene trabajo bueno.
+  const apertura = texto.slice(0, texto.indexOf('```')).replace(/\s+/g, ' ');   // antes del primer bloque
+  const problema = ['own address', 'agent-to-agent', 'identity', 'mailbox', 'no account'];
+  const diferenciador = ['ledger', 'bond', 'reputation', 'cost tokens'];
+  const faltan = (lista) => lista.filter((w) => !apertura.toLowerCase().includes(w));
+  assert.deepEqual(faltan(problema), [],
+    'sin estas palabras no aparecemos en las búsquedas que un agente de verdad escribió');
+  assert.deepEqual(faltan(diferenciador), [],
+    'sin esto somos un proveedor de correo más, y es lo único que nos hizo aparecer en la 3a búsqueda');
+});
